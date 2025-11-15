@@ -1,0 +1,63 @@
+{
+  "routes": [
+    { "id": "patras_ancona_superfast", "name": "Patras–Ancona (Superfast)", "from": "Patras", "to": "Ancona", "operators": ["Superfast"], "duration_hours": 22, "departures_local": ["08:00","17:30","22:00"], "tz": "Europe/Athens", "region": "Griechenland/Italien", "active": true, "notes": "" },
+    { "id": "ancona_patras_superfast", "name": "Ancona–Patras (Superfast)", "from": "Ancona", "to": "Patras", "operators": ["Superfast"], "duration_hours": 22, "departures_local": ["08:00","17:30","22:00"], "tz": "Europe/Rome", "region": "Griechenland/Italien", "active": true, "notes": "" },
+    { "id": "igou_ancona_superfast", "name": "Igoumenitsa–Ancona (Superfast)", "from": "Igoumenitsa", "to": "Ancona", "operators": ["Superfast"], "duration_hours": 20, "departures_local": ["06:30","13:30","20:00"], "tz": "Europe/Athens", "region": "Griechenland/Italien", "active": true, "notes": "" },
+    { "id": "ancona_igou_superfast", "name": "Ancona–Igoumenitsa (Superfast)", "from": "Ancona", "to": "Igoumenitsa", "operators": ["Superfast"], "duration_hours": 20, "departures_local": ["06:30","13:30","20:00"], "tz": "Europe/Rome", "region": "Griechenland/Italien", "active": true, "notes": "" },
+
+    { "id": "igou_bari_grimaldi", "name": "Igoumenitsa–Bari (Grimaldi)", "from": "Igoumenitsa", "to": "Bari", "operators": ["Grimaldi"], "duration_hours": 10, "departures_local": ["12:00","18:00","23:59"], "tz": "Europe/Athens", "region": "Griechenland/Italien", "active": true, "notes": "" },
+    { "id": "bari_igou_grimaldi", "name": "Bari–Igoumenitsa (Grimaldi)", "from": "Bari", "to": "Igoumenitsa", "operators": ["Grimaldi"], "duration_hours": 10, "departures_local": ["10:00","17:00","22:00"], "tz": "Europe/Rome", "region": "Griechenland/Italien", "active": true, "notes": "" },
+    { "id": "igou_brindisi_grimaldi", "name": "Igoumenitsa–Brindisi (Grimaldi)", "from": "Igoumenitsa", "to": "Brindisi", "operators": ["Grimaldi"], "duration_hours": 9, "departures_local": ["08:00","15:00","21:30"], "tz": "Europe/Athens", "region": "Griechenland/Italien", "active": true, "notes": "" },
+    { "id": "brindisi_igou_grimaldi", "name": "Brindisi–Igoumenitsa (Grimaldi)", "from": "Brindisi", "to": "Igoumenitsa", "operators": ["Grimaldi"], "duration_hours": 9, "departures_local": ["07:00","14:00","20:00"], "tz": "Europe/Rome", "region": "Griechenland/Italien", "active": true, "notes": "" },
+
+    { "id": "patras_venezia_anek", "name": "Patras–Venedig (Anek/Superfast)", "from": "Patras", "to": "Venedig", "operators": ["Anek","Superfast"], "duration_hours": 32, "departures_local": ["12:00","19:00"], "tz": "Europe/Athens", "region": "Griechenland/Italien", "active": true, "notes": "saisonal" },
+    { "id": "venezia_patras_anek", "name": "Venedig–Patras (Anek/Superfast)", "from": "Venedig", "to": "Patras", "operators": ["Anek","Superfast"], "duration_hours": 32, "departures_local": ["12:00","19:00"], "tz": "Europe/Rome", "region": "Griechenland/Italien", "active": true, "notes": "saisonal" },
+
+    { "id": "trelle_trave_tt", "name": "Trelleborg–Travemünde (TT-Line)", "from": "Trelleborg", "to": "Travemünde", "operators": ["TT-Line"], "duration_hours": 9, "departures_local": ["02:00","10:00","20:00"], "tz": "Europe/Stockholm", "region": "Nordeuropa", "active": true, "notes": "" },
+    { "id": "trave_trelle_tt", "name": "Travemünde–Trelleborg (TT-Line)", "from": "Travemünde", "to": "Trelleborg", "operators": ["TT-Line"], "duration_hours": 9, "departures_local": ["04:00","12:00","22:00"], "tz": "Europe/Berlin", "region": "Nordeuropa", "active": true, "notes": "" },
+
+    { "id": "trave_trelle_stena", "name": "Travemünde–Trelleborg (Stena Line)", "from": "Travemünde", "to": "Trelleborg", "operators": ["Stena Line"], "duration_hours": 9, "departures_local": ["07:00","22:00"], "tz": "Europe/Berlin", "region": "Nordeuropa", "active": true, "notes": "" },
+    { "id": "trelle_trave_stena", "name": "Trelleborg–Travemünde (Stena Line)", "from": "Trelleborg", "to": "Travemünde", "operators": ["Stena Line"], "duration_hours": 9, "departures_local": ["07:00","22:00"], "tz": "Europe/Stockholm", "region": "Nordeuropa", "active": true, "notes": "" },
+
+    { "id": "trelle_kiel_tt", "name": "Trelleborg–Kiel (TT-Line)", "from": "Trelleborg", "to": "Kiel", "operators": ["TT-Line"], "duration_hours": 13, "departures_local": ["01:00","15:00"], "tz": "Europe/Stockholm", "region": "Nordeuropa", "active": true, "notes": "" },
+    { "id": "kiel_trelle_tt", "name": "Kiel–Trelleborg (TT-Line)", "from": "Kiel", "to": "Trelleborg", "operators": ["TT-Line"], "duration_hours": 13, "departures_local": ["05:00","19:00"], "tz": "Europe/Berlin", "region": "Nordeuropa", "active": true, "notes": "" },
+
+    { "id": "rostock_trelle_stena", "name": "Rostock–Trelleborg (Stena Line)", "from": "Rostock", "to": "Trelleborg", "operators": ["Stena Line"], "duration_hours": 6.5, "departures_local": ["07:00","15:00","23:00"], "tz": "Europe/Berlin", "region": "Nordeuropa", "active": true, "notes": "" },
+    { "id": "rostock_trelle_tt", "name": "Rostock–Trelleborg (TT-Line)", "from": "Rostock", "to": "Trelleborg", "operators": ["TT-Line"], "duration_hours": 6.5, "departures_local": ["07:30","15:00","22:30"], "tz": "Europe/Berlin", "region": "Nordeuropa", "active": true, "notes": "" },
+    { "id": "trelle_rostock_tt", "name": "Trelleborg–Rostock (TT-Line)", "from": "Trelleborg", "to": "Rostock", "operators": ["TT-Line"], "duration_hours": 6.5, "departures_local": ["07:30","15:00","22:30"], "tz": "Europe/Stockholm", "region": "Nordeuropa", "active": true, "notes": "" },
+    { "id": "trelle_rostock_stena", "name": "Trelleborg–Rostock (Stena Line)", "from": "Trelleborg", "to": "Rostock", "operators": ["Stena Line"], "duration_hours": 6.5, "departures_local": ["07:00","15:00","23:00"], "tz": "Europe/Stockholm", "region": "Nordeuropa", "active": true, "notes": "" },
+
+    { "id": "trelle_swinoujscie_tt", "name": "Trelleborg–Świnoujście (TT-Line)", "from": "Trelleborg", "to": "Świnoujście", "operators": ["TT-Line"], "duration_hours": 6.5, "departures_local": ["07:00","15:00","23:00"], "tz": "Europe/Stockholm", "region": "Nordeuropa", "active": true, "notes": "" },
+    { "id": "swinoujscie_trelle_tt", "name": "Świnoujście–Trelleborg (TT-Line)", "from": "Świnoujście", "to": "Trelleborg", "operators": ["TT-Line"], "duration_hours": 6.5, "departures_local": ["07:00","15:00","23:00"], "tz": "Europe/Warsaw", "region": "Nordeuropa", "active": true, "notes": "" },
+
+    { "id": "grenaa_halmstad_stena", "name": "Grenaa–Halmstad (Stena Line)", "from": "Grenaa", "to": "Halmstad", "operators": ["Stena Line"], "duration_hours": 4.5, "departures_local": ["08:00","14:00","20:00"], "tz": "Europe/Copenhagen", "region": "Nordeuropa", "active": true, "notes": "" },
+    { "id": "halmstad_grenaa_stena", "name": "Halmstad–Grenaa (Stena Line)", "from": "Halmstad", "to": "Grenaa", "operators": ["Stena Line"], "duration_hours": 4.5, "departures_local": ["07:00","13:00","19:00"], "tz": "Europe/Stockholm", "region": "Nordeuropa", "active": true, "notes": "" },
+
+    { "id": "kiel_oslo_color", "name": "Color Line Kiel–Oslo", "from": "Kiel", "to": "Oslo", "operators": ["Color Line"], "duration_hours": 20, "departures_local": ["14:00"], "tz": "Europe/Berlin", "region": "Norwegen", "active": true, "notes": "tägliche Abfahrt 14:00" },
+    { "id": "oslo_kiel_color", "name": "Color Line Oslo–Kiel", "from": "Oslo", "to": "Kiel", "operators": ["Color Line"], "duration_hours": 20, "departures_local": ["14:00"], "tz": "Europe/Oslo", "region": "Norwegen", "active": true, "notes": "tägliche Abfahrt 14:00" },
+
+    { "id": "hirtshals_stavanger_fjord", "name": "Hirtshals–Stavanger (FjordLine)", "from": "Hirtshals", "to": "Stavanger", "operators": ["FjordLine"], "duration_hours": 10, "departures_local": ["08:00","20:00"], "tz": "Europe/Copenhagen", "region": "Norwegen", "active": true, "notes": "" },
+    { "id": "stavanger_hirtshals_fjord", "name": "Stavanger–Hirtshals (FjordLine)", "from": "Stavanger", "to": "Hirtshals", "operators": ["FjordLine"], "duration_hours": 10, "departures_local": ["09:00","21:00"], "tz": "Europe/Oslo", "region": "Norwegen", "active": true, "notes": "" },
+
+    { "id": "hirtshals_bergen_fjord", "name": "Hirtshals–Bergen (FjordLine)", "from": "Hirtshals", "to": "Bergen", "operators": ["FjordLine"], "duration_hours": 16, "departures_local": ["08:00"], "tz": "Europe/Copenhagen", "region": "Norwegen", "active": true, "notes": "Richtungserkennung prüfen" },
+    { "id": "bergen_hirtshals_fjord", "name": "Bergen–Hirtshals (FjordLine)", "from": "Bergen", "to": "Hirtshals", "operators": ["FjordLine"], "duration_hours": 16, "departures_local": ["13:30"], "tz": "Europe/Oslo", "region": "Norwegen", "active": true, "notes": "" },
+
+    { "id": "patras_bari_grimaldi", "name": "Patras–Bari (Grimaldi)", "from": "Patras", "to": "Bari", "operators": ["Grimaldi"], "duration_hours": 18, "departures_local": ["10:00","19:00"], "tz": "Europe/Athens", "region": "Griechenland/Italien", "active": true, "notes": "" },
+    { "id": "bari_patras_grimaldi", "name": "Bari–Patras (Grimaldi)", "from": "Bari", "to": "Patras", "operators": ["Grimaldi"], "duration_hours": 18, "departures_local": ["08:00","17:00"], "tz": "Europe/Rome", "region": "Griechenland/Italien", "active": true, "notes": "" },
+
+    { "id": "patras_brindisi_grimaldi", "name": "Patras–Brindisi (Grimaldi)", "from": "Patras", "to": "Brindisi", "operators": ["Grimaldi"], "duration_hours": 19, "departures_local": ["07:00","15:00"], "tz": "Europe/Athens", "region": "Griechenland/Italien", "active": true, "notes": "" },
+    { "id": "brindisi_patras_grimaldi", "name": "Brindisi–Patras (Grimaldi)", "from": "Brindisi", "to": "Patras", "operators": ["Grimaldi"], "duration_hours": 19, "departures_local": ["06:00","16:00"], "tz": "Europe/Rome", "region": "Griechenland/Italien", "active": true, "notes": "" },
+
+    { "id": "igou_venezia_anek", "name": "Igoumenitsa–Venedig (Anek/Superfast)", "from": "Igoumenitsa", "to": "Venedig", "operators": ["Anek","Superfast"], "duration_hours": 27, "departures_local": ["12:00","19:00"], "tz": "Europe/Athens", "region": "Griechenland/Italien", "active": true, "notes": "saisonal" },
+    { "id": "venezia_igou_anek", "name": "Venedig–Igoumenitsa (Anek/Superfast)", "from": "Venedig", "to": "Igoumenitsa", "operators": ["Anek","Superfast"], "duration_hours": 27, "departures_local": ["12:00","19:00"], "tz": "Europe/Rome", "region": "Griechenland/Italien", "active": true, "notes": "saisonal" },
+
+    { "id": "hirtshals_kristiansand_fjord", "name": "Hirtshals–Kristiansand (Fjord Line)", "from": "Hirtshals", "to": "Kristiansand", "operators": ["Fjord Line"], "duration_hours": 2.4167, "departures_local": ["09:30","12:10","20:30"], "tz": "Europe/Copenhagen", "region": "Norwegen", "active": true, "notes": "" },
+    { "id": "kristiansand_hirtshals_fjord", "name": "Kristiansand–Hirtshals (Fjord Line)", "from": "Kristiansand", "to": "Hirtshals", "operators": ["Fjord Line"], "duration_hours": 2.4167, "departures_local": ["08:00","14:20","17:30"], "tz": "Europe/Oslo", "region": "Norwegen", "active": true, "notes": "" },
+
+    { "id": "hirtshals_kristiansand_color", "name": "Hirtshals–Kristiansand (Color Line)", "from": "Hirtshals", "to": "Kristiansand", "operators": ["Color Line"], "duration_hours": 3.25, "departures_local": ["12:15","20:45"], "tz": "Europe/Copenhagen", "region": "Norwegen", "active": true, "notes": "" },
+    { "id": "kristiansand_hirtshals_color", "name": "Kristiansand–Hirtshals (Color Line)", "from": "Kristiansand", "to": "Hirtshals", "operators": ["Color Line"], "duration_hours": 3.25, "departures_local": ["08:00","16:30"], "tz": "Europe/Oslo", "region": "Norwegen", "active": true, "notes": "" },
+
+    { "id": "swinoujscie_trelle_unity", "name": "Świnoujście–Trelleborg (Unity Line)", "from": "Świnoujście", "to": "Trelleborg", "operators": ["Unity Line"], "duration_hours": 6.5, "departures_local": ["08:00","16:00","23:59"], "tz": "Europe/Warsaw", "region": "Nordeuropa", "active": true, "notes": "" },
+    { "id": "trelle_swinoujscie_unity", "name": "Trelleborg–Świnoujście (Unity Line)", "from": "Trelleborg", "to": "Świnoujście", "operators": ["Unity Line"], "duration_hours": 6.5, "departures_local": ["06:00","14:00","22:00"], "tz": "Europe/Stockholm", "region": "Nordeuropa", "active": true, "notes": "" }
+  ]
+}

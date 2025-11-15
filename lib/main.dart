@@ -891,6 +891,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Expanded(
                         child: PlaceInput(
+                          inlineAutocomplete: true,
                           label: '📍 Startort/PLZ',
                           hint: 'Start eingeben',
                           initialText: _startCtl.text,
@@ -917,6 +918,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: PlaceInput(
+                          inlineAutocomplete: true,
                           label: '🏁 Zielort/PLZ',
                           hint: 'Ziel eingeben',
                           initialText: _destCtl.text,
