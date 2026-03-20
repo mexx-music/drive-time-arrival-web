@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../widgets/places_autocomplete.dart';
 import '../core/feature_flags.dart';
-import '../secrets.dart';
+import 'package:driverroute_eta/secrets.dart';
 
 class PlaceInput extends StatefulWidget {
   final String label;
@@ -103,7 +103,15 @@ class _PlaceInputState extends State<PlaceInput>
 
     if (res != null && res.isNotEmpty) {
       final short = _shorten(res);
-      _ctl.text = short; // show short in the field
+      // debug: suggestion tapped in modal
+      print('modal suggestion selected: $res');
+      // update controller inside setState so UI refreshes immediately
+      setState(() {
+        _ctl.text = short; // show short in the field
+      });
+      print('assigned to controller: $short');
+      // close keyboard after selection
+      FocusScope.of(context).unfocus();
       // call parent with full description for geocoding/timezone etc.
       widget.onConfirmed?.call(res);
     } else {
@@ -125,9 +133,16 @@ class _PlaceInputState extends State<PlaceInput>
         hintText: widget.hint,
         mode: PlacesAutocompleteMode.inline,
         onPlacePicked: (description, placeId, lat, lng) {
+          // debug: suggestion tapped inline
+          print('inline suggestion tapped: $description');
           // show shortened text but inform parent with full description
           final short = _shorten(description);
-          _ctl.text = short;
+          setState(() {
+            _ctl.text = short;
+          });
+          print('assigned to controller: $short');
+          // close keyboard after selection
+          FocusScope.of(context).unfocus();
           widget.onConfirmed?.call(description);
         },
         onSearchPressed: () => widget.onConfirmed?.call(_ctl.text),

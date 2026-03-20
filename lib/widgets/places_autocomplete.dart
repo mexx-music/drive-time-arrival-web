@@ -144,6 +144,9 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
     };
 
     try {
+      if (kDebugMode && (widget.apiKey.isEmpty)) {
+        debugPrint('[PlacesAutocomplete] WARNING: apiKey is empty');
+      }
       final res = await http.post(
         Uri.parse('https://places.googleapis.com/v1/places:autocomplete'),
         headers: {
@@ -168,6 +171,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
       }
 
       final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (kDebugMode) debugPrint('[PlacesAutocomplete] got ${data.keys.length} keys from autocomplete response');
       final list = (data['suggestions'] as List? ?? []);
       final newItems = list.map((s) {
         final pred = (s['placePrediction'] as Map<String, dynamic>?) ?? {};
@@ -235,6 +239,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
 
     if (res != null) {
       // res contains full description
+      if (kDebugMode) debugPrint('[PlacesAutocomplete] bottomSheet selected: ${res}');
       await _handleSelection(res, null, null);
     }
   }
@@ -254,6 +259,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
     double? lat;
     double? lng;
     try {
+      if (kDebugMode) debugPrint('[PlacesAutocomplete] fetch detail for placeId=${p.placeId}');
       final detRes = await http.get(
         Uri.parse(
             'https://places.googleapis.com/v1/places/${Uri.encodeComponent(p.placeId)}'),
@@ -264,14 +270,19 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
       );
 
       if (detRes.statusCode == 200) {
+        if (kDebugMode) debugPrint('[PlacesAutocomplete] detail response length=${detRes.body.length}');
         final body = jsonDecode(detRes.body) as Map<String, dynamic>;
         final loc = body['location'] as Map<String, dynamic>?;
         if (loc != null) {
           lat = (loc['latitude'] as num).toDouble();
           lng = (loc['longitude'] as num).toDouble();
         }
+      } else {
+        if (kDebugMode) debugPrint('[PlacesAutocomplete] detail HTTP ${detRes.statusCode}: ${detRes.body}');
       }
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('[PlacesAutocomplete] detail fetch exception: $e');
+    }
 
     await _handleSelection(p.description, lat, lng);
   }

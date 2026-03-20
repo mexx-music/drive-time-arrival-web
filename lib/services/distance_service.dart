@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
 
-import '../secrets.dart';
+import 'package:driverroute_eta/secrets.dart';
 
 /// Kleiner Service, der Straßenentfernungen via Google Directions API holt.
 class DistanceService {
@@ -13,7 +14,10 @@ class DistanceService {
     required String destination,
     List<String>? waypoints,
   }) async {
-    if (GOOGLE_MAPS_API_KEY.isEmpty) return null;
+    if (GOOGLE_MAPS_API_KEY.isEmpty) {
+      if (kDebugMode) debugPrint('[DistanceService] No Google Maps API key configured');
+      return null;
+    }
 
     String wp = '';
     if (waypoints != null && waypoints.isNotEmpty) {
@@ -37,11 +41,18 @@ class DistanceService {
         'https://maps.googleapis.com/maps/api/directions/json?$params');
 
     try {
+      if (kDebugMode) debugPrint('[DistanceService] GET $uri');
       final res = await http.get(uri);
-      if (res.statusCode != 200) return null;
+      if (res.statusCode != 200) {
+        if (kDebugMode) debugPrint('[DistanceService] HTTP ${res.statusCode}: ${res.body}');
+        return null;
+      }
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       final status = (data['status'] ?? 'UNKNOWN').toString();
-      if (status != 'OK') return null;
+      if (status != 'OK') {
+        if (kDebugMode) debugPrint('[DistanceService] Directions status $status — body: ${res.body}');
+        return null;
+      }
 
       final route = (data['routes'] as List).first as Map<String, dynamic>;
       final legs = (route['legs'] as List).cast<Map<String, dynamic>>();
@@ -52,8 +63,13 @@ class DistanceService {
       final km = meters / 1000.0;
       // runde auf 1 Dezimalstelle
       final rounded = (km * 10).round() / 10.0;
+      if (kDebugMode) debugPrint('[DistanceService] Distance $origin -> $destination: ${rounded} km');
       return rounded;
-    } catch (_) {
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('[DistanceService] Exception fetching directions: $e');
+        debugPrint(st.toString());
+      }
       return null;
     }
   }

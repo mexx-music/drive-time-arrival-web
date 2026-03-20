@@ -13,7 +13,7 @@ import 'services/ferry_schedule_loader.dart';
 import 'logic/eta_calculator.dart';
 import 'logic/ferry_auto.dart';
 import 'logic/port_aliases.dart';
-import 'secrets.dart';
+import 'package:driverroute_eta/secrets.dart';
 import 'ui/map_osm_view.dart';
 import 'widgets/places_autocomplete.dart';
 import 'services/geocoding_service.dart';
@@ -25,6 +25,15 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('de');
   await initializeDateFormatting('en');
+  // Debug: print presence/length of Google Maps API key (never the key itself)
+  // This helps confirm the web build reads the key from lib/secrets.dart
+  // and avoids leaking the key.
+  // ignore: avoid_print
+  if (const bool.fromEnvironment('dart.vm.product') == false) {
+    // not in production
+    // ignore: avoid_print
+    print(googleMapsApiKeyInfo());
+  }
   runApp(const DriverRouteApp());
 }
 
