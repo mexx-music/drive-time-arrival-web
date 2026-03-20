@@ -512,6 +512,11 @@ class _HomeScreenState extends State<HomeScreen> {
     double km = double.tryParse(_kmCtl.text.trim()) ?? 0.0;
     final s = _startCtl.text.trim();
     final d = _destCtl.text.trim();
+    // debug: show start/destination read from controllers before validation
+    // ignore: avoid_print
+    print('[Validation] start="${s}"');
+    // ignore: avoid_print
+    print('[Validation] dest="${d}"');
     final (distKm, matchedFerry, note) =
         await _planDistanceAndFerryAuto(s, d, _stops, _optimizeStops);
 
@@ -812,6 +817,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openMapOsm() async {
     final s = _startCtl.text.trim();
     final d = _destCtl.text.trim();
+    // debug: validate values from controllers before opening external map
+    // ignore: avoid_print
+    print('[openMapOsm] start="${s}" dest="${d}"');
     if (s.isEmpty || d.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

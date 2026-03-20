@@ -102,14 +102,15 @@ class _PlaceInputState extends State<PlaceInput>
     );
 
     if (res != null && res.isNotEmpty) {
-      final short = _shorten(res);
+      // Use full description (no truncation) for the controller and parent callback
+      final full = res;
       // debug: suggestion tapped in modal
-      print('modal suggestion selected: $res');
+      print('modal suggestion selected: $full');
       // update controller inside setState so UI refreshes immediately
       setState(() {
-        _ctl.text = short; // show short in the field
+        _ctl.text = full; // show full description in the field
       });
-      print('assigned to controller: $short');
+      print('controller now: ${_ctl.text}');
       // close keyboard after selection
       FocusScope.of(context).unfocus();
       // call parent with full description for geocoding/timezone etc.
@@ -135,14 +136,14 @@ class _PlaceInputState extends State<PlaceInput>
         onPlacePicked: (description, placeId, lat, lng) {
           // debug: suggestion tapped inline
           print('inline suggestion tapped: $description');
-          // show shortened text but inform parent with full description
-          final short = _shorten(description);
+          // write full selected description into the controller (no shortening)
           setState(() {
-            _ctl.text = short;
+            _ctl.text = description;
           });
-          print('assigned to controller: $short');
+          print('controller now: ${_ctl.text}');
           // close keyboard after selection
           FocusScope.of(context).unfocus();
+          // inform parent with full description
           widget.onConfirmed?.call(description);
         },
         onSearchPressed: () => widget.onConfirmed?.call(_ctl.text),
