@@ -132,5 +132,20 @@ app.post('/api/autocomplete', async (req, res) => {
   }
 });
 
+// replace direct listen with a safe wrapper to avoid crashing if port is in use
+const startServer = (port) => {
+  const server = app.listen(port, () => {
+    console.log(`[proxy] Listening on port ${port}`);
+  });
+  server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+      console.error(`[proxy] Port ${port} already in use; proxy will not start a new process.`);
+    } else {
+      console.error('[proxy] Server error:', err);
+      process.exit(1);
+    }
+  });
+};
+
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Proxy listening on port ${port}`));
+startServer(port);

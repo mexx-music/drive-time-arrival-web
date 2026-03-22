@@ -45,3 +45,18 @@ app.*.map.json
 /android/app/release
 
 lib/secrets.dart
+
+# Local proxy node modules and logs
+/proxy/node_modules/
+/proxy/*.log
+
+# Local env
+.env
+
+# Build & IDE
+/build/
+/.dart_tool/
+/.idea/
+*.iml
+/.vscode/
+.DS_Store

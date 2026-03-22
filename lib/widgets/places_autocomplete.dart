@@ -57,6 +57,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
   List<_Pred> _items = [];
   String _sessionToken = const Uuid().v4();
   bool _showInlineList = false;
+  bool _autoApplied = false; // prevent repeated auto-apply
 
   @override
   void initState() {
@@ -73,7 +74,17 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
   }
 
   void _handleFocus() {
+    // on focus loss, if exactly one suggestion exists and not yet applied, apply it
     if (!_focus.hasFocus) {
+      if (_items.length == 1 && !_autoApplied) {
+        final desc = _items.first.description ?? '';
+        if (desc.isNotEmpty) {
+          // fire-and-forget selection due to focus loss
+          debugPrint('auto-selected suggestion (${widget.hintText ?? 'field'}) (focus loss): $desc');
+          _handleSelection(desc, null, null);
+          _autoApplied = true;
+        }
+      }
       setState(() => _showInlineList = false);
     }
   }
@@ -94,6 +105,8 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
 
   void _onChanged(String s) {
     _debounce?.cancel();
+    // user typed -> clear explicit selection mark for this controller
+    _resetExplicitSelectionForController(widget.controller);
     if (s.trim().length < _kMinChars) {
       setState(() {
         _items = [];
@@ -183,7 +196,11 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
       if (!mounted) return;
       setState(() {
         _items = newItems;
+        // reset auto-apply whenever suggestions change
+        _autoApplied = false;
       });
+      // publish suggestions for external consumers (e.g. main.dart fallback)
+      _registerSuggestionsForController(widget.controller, _items.map((e) => e.description ?? '').where((s) => s.isNotEmpty).toList());
 
       if (widget.mode == PlacesAutocompleteMode.inline) {
         setState(() => _showInlineList = _items.isNotEmpty);
@@ -223,12 +240,19 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
                       final it = itemsSnapshot[i];
                       final desc = it.description ?? '';
                       final short = _short(desc);
-                      return ListTile(
-                        title: Text(short),
-                        subtitle: desc != short ? Text(desc) : null,
-                        onTap: () {
-                          Navigator.of(ctx).pop(it.description);
-                        },
+                      return Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            // debug immediately when tapped in bottom sheet
+                            debugPrint('selected suggestion (bottomSheet): ${it.description}');
+                            Navigator.of(ctx).pop(it.description);
+                          },
+                          child: ListTile(
+                            title: Text(short),
+                            subtitle: desc != short ? Text(desc) : null,
+                          ),
+                        ),
                       );
                     },
                   ),
@@ -246,9 +270,25 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
 
   Future<void> _handleSelection(
       String description, double? lat, double? lng) async {
-    final short = _short(description);
-    widget.controller.text = short;
+    // Debug: selection happened
+    debugPrint('selected suggestion: $description');
+    // Write the FULL selected description into the external controller
+    final full = description;
+    widget.controller.value = TextEditingValue(
+      text: full,
+      selection: TextSelection.collapsed(offset: full.length),
+    );
+    // Notify listeners with full description and coords
     widget.onPlacePicked?.call(description, '', lat, lng);
+    // mark explicit selection for external logic
+    _markExplicitSelection(widget.controller);
+    // Hide inline list and clear items to close suggestions
+    if (mounted) {
+      setState(() {
+        _showInlineList = false;
+        _items = [];
+      });
+    }
     try {
       FocusScope.of(context).unfocus();
     } catch (_) {}
@@ -258,6 +298,8 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
     // fetch details to get lat/lng, then select
     double? lat;
     double? lng;
+    // Immediate debug so we know tapping worked (sync onTap should fire this)
+    debugPrint('pickDetailAndSelect invoked for: ${p.description}');
     try {
       if (kDebugMode) debugPrint('[PlacesAutocomplete] fetch detail for placeId=${p.placeId}');
       final detRes = await http.get(
@@ -311,7 +353,19 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
               ]),
             ),
             onChanged: _onChanged,
-            onSubmitted: (_) => widget.onSearchPressed?.call(),
+            onSubmitted: (_) async {
+              // If exactly one suggestion and user pressed Enter, auto-apply it as fallback
+              if (_items.length == 1 && !_autoApplied) {
+                final desc = _items.first.description ?? '';
+                if (desc.isNotEmpty) {
+                  debugPrint('auto-selected suggestion (${widget.hintText ?? 'field'}): $desc');
+                  await _handleSelection(desc, null, null);
+                  _autoApplied = true;
+                  return;
+                }
+              }
+              widget.onSearchPressed?.call();
+            },
           ),
           if (_showInlineList && _items.isNotEmpty)
             Container(
@@ -330,16 +384,25 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
                   final it = _items[i];
                   final desc = it.description ?? '';
                   final short = _short(desc);
-                  return ListTile(
-                    title: Text(short),
-                    subtitle: desc != short
-                        ? Text(desc,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 12, color: Colors.black54))
-                        : null,
-                    onTap: () async => await _pickDetailAndSelect(it),
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () async {
+                        // debug immediately when tapped inline
+                        debugPrint('selected suggestion (inline): ${it.description}');
+                        await _pickDetailAndSelect(it);
+                      },
+                      child: ListTile(
+                        title: Text(short),
+                        subtitle: desc != short
+                            ? Text(desc,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 12, color: Colors.black54))
+                            : null,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -366,9 +429,48 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
                 onPressed: () => FocusScope.of(context).unfocus()),
           ])),
       onChanged: _onChanged,
-      onSubmitted: (_) => widget.onSearchPressed?.call(),
+      onSubmitted: (_) async {
+        if (_items.length == 1 && !_autoApplied) {
+          final desc = _items.first.description ?? '';
+          if (desc.isNotEmpty) {
+            debugPrint('auto-selected suggestion (${widget.hintText ?? 'field'}): $desc');
+            await _handleSelection(desc, null, null);
+            _autoApplied = true;
+            return;
+          }
+        }
+        widget.onSearchPressed?.call();
+      },
     );
   }
+}
+
+// Registry to expose last suggestions per controller and explicit selection flag.
+final Map<int, List<String>> _placesLastSuggestions = {};
+final Map<int, bool> _placesExplicitSelection = {};
+
+void _registerSuggestionsForController(TextEditingController ctl, List<String> suggestions) {
+  _placesLastSuggestions[ctl.hashCode] = suggestions;
+}
+
+List<String> getSuggestionsForController(TextEditingController ctl) {
+  return _placesLastSuggestions[ctl.hashCode] ?? const [];
+}
+
+void _markExplicitSelection(TextEditingController ctl) {
+  _placesExplicitSelection[ctl.hashCode] = true;
+}
+
+void _resetExplicitSelectionForController(TextEditingController ctl) {
+  _placesExplicitSelection[ctl.hashCode] = false;
+}
+
+bool isExplicitlySelectedForController(TextEditingController ctl) {
+  return _placesExplicitSelection[ctl.hashCode] ?? false;
+}
+
+void markExplicitSelection(TextEditingController ctl) {
+  _markExplicitSelection(ctl);
 }
 
 class _Pred {

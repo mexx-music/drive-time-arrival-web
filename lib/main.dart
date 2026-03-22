@@ -17,11 +17,12 @@ import 'logic/ferry_auto.dart';
 import 'logic/port_aliases.dart';
 import 'package:driverroute_eta/secrets.dart';
 import 'ui/map_osm_view.dart';
-import 'widgets/places_autocomplete.dart';
+import 'widgets/places_autocomplete.dart' as places_auto;
 import 'services/geocoding_service.dart';
 import 'widgets/place_input.dart';
 import 'widgets/route_input_widget.dart';
 import 'widgets/ferry_selection_dialog.dart';
+import 'utils/open_in_tab.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -113,6 +114,10 @@ class _HomeScreenState extends State<HomeScreen> {
   int _manualDepartureMinute = DateTime.now().minute;
   bool _manualDepartureActive = false;
 
+  // Visible resolved previews provided by PlaceInput via onConfirmed
+  String? _resolvedStart;
+  String? _resolvedDestination;
+
   @override
   void initState() {
     super.initState();
@@ -197,6 +202,21 @@ class _HomeScreenState extends State<HomeScreen> {
     // Block direct Google Directions REST calls from web—CORS prevents them.
     if (!mapsDirectCallsAllowed()) {
       _log.add('⚠️ Web routing via direct Google REST request is blocked in browser');
+      final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route='
+          '${Uri.encodeComponent(origin)};${Uri.encodeComponent(destination)}';
+      // debug: final map URL
+      // ignore: avoid_print
+      print('[openMapOsm] final map URL (names): $mapUrl');
+      try {
+        openInNewTabWithName(mapUrl, 'driverroute_map');
+      } catch (e) {
+        // ignore, will show snack instead
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Öffne Karte in neuem Tab...'),
+        ));
+      }
       setState(() {});
       return null;
     }
@@ -527,13 +547,100 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // km bevorzugt via Directions
     double km = double.tryParse(_kmCtl.text.trim()) ?? 0.0;
-    final s = _startCtl.text.trim();
-    final d = _destCtl.text.trim();
+    final s = (_resolvedStart != null && _resolvedStart!.trim().isNotEmpty)
+        ? _resolvedStart!.trim()
+        : _startCtl.text.trim();
+    final d = (_resolvedDestination != null && _resolvedDestination!.trim().isNotEmpty)
+        ? _resolvedDestination!.trim()
+        : _destCtl.text.trim();
+
+    // Try to finalize autocomplete suggestions for start/destination if user didn't explicitly pick one
+    try {
+      if (!places_auto.isExplicitlySelectedForController(_startCtl)) {
+        final typed = s;
+        bool finalized = false;
+        try {
+          if (typed.isNotEmpty) {
+            final geores = await GeocodingService.resolve(typed);
+            if (geores != null && geores.description.isNotEmpty) {
+              _startCtl.text = geores.description;
+              debugPrint('finalizing start via geocoding: ${geores.description}');
+              places_auto.markExplicitSelection(_startCtl);
+              finalized = true;
+            }
+          }
+        } catch (e) {
+          debugPrint('geocoding start failed: $e');
+        }
+        if (!finalized) {
+          final sug = places_auto.getSuggestionsForController(_startCtl);
+          if (sug.isNotEmpty) {
+            final low = s.toLowerCase();
+            String chosen = sug.first;
+            final idxExact = sug.indexWhere((x) => x.toLowerCase() == low);
+            if (idxExact != -1) {
+              chosen = sug[idxExact];
+            } else {
+              final idxStarts =
+                  sug.indexWhere((x) => x.toLowerCase().startsWith(low) && low.isNotEmpty);
+              if (idxStarts != -1) chosen = sug[idxStarts];
+            }
+            _startCtl.text = chosen;
+            debugPrint('fallback to autocomplete suggestion: $chosen');
+            places_auto.markExplicitSelection(_startCtl);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('finalize start suggestion error: $e');
+    }
+
+    try {
+      if (!places_auto.isExplicitlySelectedForController(_destCtl)) {
+        final typed = d;
+        bool finalized = false;
+        try {
+          if (typed.isNotEmpty) {
+            final geores = await GeocodingService.resolve(typed);
+            if (geores != null && geores.description.isNotEmpty) {
+              _destCtl.text = geores.description;
+              debugPrint('finalizing destination via geocoding: ${geores.description}');
+              places_auto.markExplicitSelection(_destCtl);
+              finalized = true;
+            }
+          }
+        } catch (e) {
+          debugPrint('geocoding dest failed: $e');
+        }
+        if (!finalized) {
+          final sug = places_auto.getSuggestionsForController(_destCtl);
+          if (sug.isNotEmpty) {
+            final low = d.toLowerCase();
+            String chosen = sug.first;
+            final idxExact = sug.indexWhere((x) => x.toLowerCase() == low);
+            if (idxExact != -1) {
+              chosen = sug[idxExact];
+            } else {
+              final idxStarts =
+                  sug.indexWhere((x) => x.toLowerCase().startsWith(low) && low.isNotEmpty);
+              if (idxStarts != -1) chosen = sug[idxStarts];
+            }
+            _destCtl.text = chosen;
+            debugPrint('fallback to autocomplete suggestion: $chosen');
+            places_auto.markExplicitSelection(_destCtl);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('finalize dest suggestion error: $e');
+    }
+
     // debug: show start/destination read from controllers before validation
     // ignore: avoid_print
-    print('[Validation] start="${s}"');
+    print('[Validation] start="${_startCtl.text.trim()}"');
     // ignore: avoid_print
-    print('[Validation] dest="${d}"');
+    print('[Validation] dest="${_destCtl.text.trim()}"');
+
     final (distKm, matchedFerry, note) =
         await _planDistanceAndFerryAuto(s, d, _stops, _optimizeStops);
 
@@ -860,12 +967,24 @@ class _HomeScreenState extends State<HomeScreen> {
       '&key=$GOOGLE_MAPS_API_KEY$wp',
     );
 
-    // On web this direct REST call is blocked by CORS. Surface a clear message instead.
+    // On web this direct REST call is blocked by CORS. Instead, open OpenStreetMap
+    // directions using the start/destination strings (names) so the pre-opened tab
+    // is navigated to a useful page (avoids blank tab).
     if (!mapsDirectCallsAllowed()) {
       _log.add('⚠️ Web routing via direct Google REST request is blocked in browser');
+      final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route='
+          '${Uri.encodeComponent(s)};${Uri.encodeComponent(d)}';
+      // debug: final map URL
+      // ignore: avoid_print
+      print('[openMapOsm] final map URL (names): $mapUrl');
+      try {
+        openInNewTabWithName(mapUrl, 'driverroute_map');
+      } catch (e) {
+        // ignore, will show snack instead
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Web routing via direct Google REST request is blocked in browser'),
+          content: Text('Öffne Karte in neuem Tab...'),
         ));
       }
       setState(() {});
@@ -885,14 +1004,37 @@ class _HomeScreenState extends State<HomeScreen> {
       final lastLeg = legs.last;
       final sl = firstLeg['start_location'] as Map<String, dynamic>;
       final dl = lastLeg['end_location'] as Map<String, dynamic>;
-      final poly = (route['overview_polyline']
-          as Map<String, dynamic>)['points'] as String;
+      final poly = (route['overview_polyline'] as Map<String, dynamic>)['points'] as String;
 
-      final start =
-          LatLng((sl['lat'] as num).toDouble(), (sl['lng'] as num).toDouble());
-      final dest =
-          LatLng((dl['lat'] as num).toDouble(), (dl['lng'] as num).toDouble());
+      final start = LatLng((sl['lat'] as num).toDouble(), (sl['lng'] as num).toDouble());
+      final dest = LatLng((dl['lat'] as num).toDouble(), (dl['lng'] as num).toDouble());
       final coords = _decodePolyline(poly);
+
+      // Build a map URL for sharing/opening externally (OSM or Google Maps)
+      final mapUrl = Uri.encodeFull('https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${start.latitude},${start.longitude};${dest.latitude},${dest.longitude}');
+      // debug print of final URL (temporary)
+      // ignore: avoid_print
+      print('[openMapOsm] Opening map URL: $mapUrl');
+
+      // On web, open in a new browser tab. On mobile/desktop use existing in-app MapOsmView navigation.
+      if (kIsWeb) {
+        // Debug print URL before navigating the pre-opened window (temporary)
+        // ignore: avoid_print
+        print('[openMapOsm] final map URL: $mapUrl');
+        try {
+          openInNewTabWithName(mapUrl, 'driverroute_map');
+        } catch (e) {
+          if (mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => MapOsmView(start: start, dest: dest, route: coords),
+              ),
+            );
+          }
+        }
+        return;
+      }
 
       if (!mounted) return;
       Navigator.push(
@@ -946,13 +1088,17 @@ class _HomeScreenState extends State<HomeScreen> {
                           onConfirmed: (v) async {
                             final txt = v.trim();
                             if (txt.isEmpty) return;
-                            _startCtl.text = txt;
+                            // store resolved preview (do not overwrite controller)
+                            setState(() => _resolvedStart = txt);
+                            // attempt to resolve coordinates for routing, but keep controller as-is
                             try {
                               final r = await GeocodingService.resolve(txt);
                               setState(() {
                                 _startLat = r.lat;
                                 _startLng = r.lng;
                               });
+                              // debug
+                              print('preview resolved start: $txt');
                             } catch (e) {
                               if (mounted)
                                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -974,13 +1120,16 @@ class _HomeScreenState extends State<HomeScreen> {
                           onConfirmed: (v) async {
                             final txt = v.trim();
                             if (txt.isEmpty) return;
-                            _destCtl.text = txt;
+                            // store resolved preview (do not overwrite controller)
+                            setState(() => _resolvedDestination = txt);
                             try {
                               final r = await GeocodingService.resolve(txt);
                               setState(() {
                                 _destLat = r.lat;
                                 _destLng = r.lng;
                               });
+                              // debug
+                              print('preview resolved destination: $txt');
                             } catch (e) {
                               if (mounted)
                                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -1720,7 +1869,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.map),
                     label: const Text('🗺️ Karte (macOS) anzeigen'),
-                    onPressed: _openMapOsm,
+                    onPressed: () {
+                      // Ensure window.open is triggered synchronously from user gesture to avoid popup blocking on web
+                      if (kIsWeb) {
+                        // ignore: avoid_print
+                        print('[openMapOsm] pre-opening named blank tab');
+                        openInNewTabWithName('about:blank', 'driverroute_map');
+                      }
+                      _openMapOsm();
+                    },
                   ),
                 ),
                 Padding(
