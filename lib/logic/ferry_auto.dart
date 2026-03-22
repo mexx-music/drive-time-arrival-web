@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../logic/eta_calculator.dart';
 import '../models/ferry_route.dart';
 import '../services/distance_service.dart';
+import '../services/maps_proxy.dart';
 
 class DirectionsFetchResult {
   final bool ok;
@@ -46,6 +48,70 @@ class FerryAutoDetect {
     bool optimize = false,
     bool avoidFerries = false,
   }) async {
+    // In browsers, direct calls to Google Directions REST endpoints are blocked by CORS.
+    // Surface a clear error and avoid making the request; future work should proxy these requests via a backend.
+    if (!mapsDirectCallsAllowed()) {
+      if (mapsProxyConfigured()) {
+        try {
+          final data = await proxyDirections(origin: origin, destination: destination, waypoints: waypoints, mode: 'driving', departureTime: 'now');
+          final status = (data['status'] ?? 'UNKNOWN').toString();
+          if (status != 'OK') {
+            if (kDebugMode) {
+              print('[FerryAutoDetect] Proxy Directions status: $status');
+              if (data.containsKey('error_message')) print('[FerryAutoDetect] proxy error_message: ${data['error_message']}');
+            }
+            return DirectionsFetchResult(
+              ok: false,
+              status: status,
+              km: 0,
+              sec: 0,
+              steps: const [],
+              warnings: _extractWarnings(data),
+              raw: data,
+            );
+          }
+          final route = (data['routes'] as List).first as Map<String, dynamic>;
+          final legs = (route['legs'] as List).cast<Map<String, dynamic>>();
+
+          double meters = 0;
+          double seconds = 0;
+          final List<Map<String, dynamic>> steps = [];
+          for (final l in legs) {
+            meters += (l['distance']['value'] as num).toDouble();
+            seconds += (l['duration']['value'] as num).toDouble();
+            final s = (l['steps'] as List).cast<Map<String, dynamic>>();
+            steps.addAll(s);
+          }
+          final warnings = _extractWarnings(data);
+          return DirectionsFetchResult(
+            ok: true,
+            status: status,
+            km: meters / 1000.0,
+            sec: seconds,
+            steps: steps,
+            warnings: warnings,
+            raw: data,
+          );
+        } catch (e, st) {
+          if (kDebugMode) {
+            print('[FerryAutoDetect] Proxy exception: $e');
+            print(st.toString());
+          }
+          return DirectionsFetchResult.error('PROXY_ERROR');
+        }
+      }
+
+      return DirectionsFetchResult(
+        ok: false,
+        status: 'WEB_BLOCKED',
+        km: 0,
+        sec: 0,
+        steps: const [],
+        warnings: const [],
+        raw: {'error_message': webBlockedMessage},
+      );
+    }
+
     if (apiKey.isEmpty) return DirectionsFetchResult.error('NO_KEY');
 
     String wp = '';
@@ -73,14 +139,17 @@ class FerryAutoDetect {
 
     // debug
     // ignore: avoid_print
-    print('[FerryAutoDetect] GET $uri');
+    // print('[FerryAutoDetect] GET $uri');
+    // print masked URL (do not print API key)
+    // ignore: avoid_print
+    print('[FerryAutoDetect] GET ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
 
     final res = await http.get(uri);
 
     // log HTTP problems to help diagnose API key restrictions on Android
     if (res.statusCode != 200) {
       // ignore: avoid_print
-      print('[FerryAutoDetect] HTTP ${res.statusCode}');
+      print('[FerryAutoDetect] HTTP ${res.statusCode} for ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
       // ignore: avoid_print
       print('[FerryAutoDetect] Response body: ${res.body}');
       return DirectionsFetchResult.error('HTTP_${res.statusCode}');
@@ -92,9 +161,13 @@ class FerryAutoDetect {
     // log non-OK status
     if (status != 'OK') {
       // ignore: avoid_print
-      print('[FerryAutoDetect] Directions status: $status');
+      print('[FerryAutoDetect] Directions status: $status for ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
       // ignore: avoid_print
       print('[FerryAutoDetect] Response body: ${res.body}');
+      if (data.containsKey('error_message')) {
+        // ignore: avoid_print
+        print('[FerryAutoDetect] error_message: ${data['error_message']}');
+      }
       return DirectionsFetchResult(
         ok: false,
         status: status,

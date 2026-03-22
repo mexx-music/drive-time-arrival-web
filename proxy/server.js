@@ -28,15 +28,33 @@ const allowedOrigins = new Set([
   'http://127.0.0.1:5000',
   'https://mexx-music.github.io'
 ]);
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    // allow exact host matches (ignores ports in allowedOrigins entries above)
-    const host = origin.replace(/:\d+$/, '');
-    if (allowedOrigins.has(origin) || allowedOrigins.has(host)) return callback(null, true);
-    return callback(new Error('Not allowed by CORS'));
+
+// origin checker reused for both normal requests and preflight
+const originChecker = (origin, callback) => {
+  if (!origin) return callback(null, true);
+  const low = origin.toLowerCase();
+  // Allow any localhost or 127.0.0.1 origin (with arbitrary port)
+  if (low.startsWith('http://localhost') || low.startsWith('http://127.0.0.1')) {
+    return callback(null, true);
   }
-}));
+  // Allow other explicitly listed origins
+  if (allowedOrigins.has(origin) || allowedOrigins.has(origin.replace(/:\d+$/, ''))) {
+    return callback(null, true);
+  }
+  return callback(new Error('Not allowed by CORS'));
+};
+
+const corsOptions = {
+  origin: originChecker,
+  methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+// Handle preflight requests for all routes
+app.options('*', cors(corsOptions));
 
 const GOOGLE_KEY = process.env.GOOGLE_MAPS_API_KEY;
 if (!GOOGLE_KEY) {
@@ -67,18 +85,36 @@ app.post('/api/geocode', async (req, res) => {
 
 app.post('/api/directions', async (req, res) => {
   try {
+    // Debug: log received JSON body (do not log API keys)
+    if (process.env.NODE_ENV !== 'production') {
+      try { console.log('[proxy] /api/directions body:', JSON.stringify(req.body)); } catch (e) { console.log('[proxy] /api/directions body (could not stringify)'); }
+    }
+
     const { origin, destination, waypoints = [], mode = 'driving', departure_time = 'now' } = req.body || {};
-    if (!origin || !destination) return res.status(400).json({ error: 'missing_origin_or_destination' });
+    if (!origin || !destination) {
+      return res.status(400).json({ error: 'missing_origin_or_destination', received: req.body });
+    }
+
     let url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=${mode}&departure_time=${departure_time}&key=${GOOGLE_KEY}&units=metric`;
     if (Array.isArray(waypoints) && waypoints.length) {
       const wp = waypoints.map(w => encodeURIComponent(w)).join('|');
       url += `&waypoints=${wp}`;
     }
+
     const r = await forwardGet(url);
+    // Ensure we always return a JSON response to the caller
     res.status(r.status).type('application/json').send(r.body);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'proxy_error', message: err.message });
+    console.error('[proxy] /api/directions error:', err && err.message ? err.message : err);
+    // Always respond with JSON error
+    try {
+      return res.status(500).json({ error: 'proxy_error', message: (err && err.message) ? err.message : String(err) });
+    } catch (e) {
+      // In case of double-fault, ensure connection is closed gracefully
+      console.error('[proxy] Failed to send JSON error response:', e);
+      res.status(500).send('proxy_error');
+      return;
+    }
   }
 });
 

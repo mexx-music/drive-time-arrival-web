@@ -7,6 +7,7 @@ class PlaceInput extends StatefulWidget {
   final String label;
   final String hint;
   final String initialText;
+  final TextEditingController controller;
   final ValueChanged<String>? onConfirmed;
   final ValueChanged<String>? onChanged;
   final bool inlineAutocomplete; // if true show inline suggestions (no modal)
@@ -16,6 +17,7 @@ class PlaceInput extends StatefulWidget {
     required this.label,
     required this.hint,
     this.initialText = '',
+    required this.controller,
     this.onConfirmed,
     this.onChanged,
     this.inlineAutocomplete = false,
@@ -41,13 +43,15 @@ class _PlaceInputState extends State<PlaceInput>
   @override
   void initState() {
     super.initState();
-    _ctl = TextEditingController(text: widget.initialText);
+    // Always use the external controller passed by the parent.
+    _ctl = widget.controller;
+    if (_ctl.text.isEmpty && widget.initialText.isNotEmpty) _ctl.text = widget.initialText;
     _focus = FocusNode();
   }
 
   @override
   void dispose() {
-    _ctl.dispose();
+    // Do not dispose external controller owned by parent
     _focus.dispose();
     super.dispose();
   }
@@ -107,9 +111,9 @@ class _PlaceInputState extends State<PlaceInput>
       // debug: suggestion tapped in modal
       print('modal suggestion selected: $full');
       // update controller inside setState so UI refreshes immediately
-      setState(() {
-        _ctl.text = full; // show full description in the field
-      });
+      setState(() { _ctl.text = full; });
+      // inform any external listener about the new value
+      widget.onChanged?.call(full);
       print('controller now: ${_ctl.text}');
       // close keyboard after selection
       FocusScope.of(context).unfocus();
@@ -137,9 +141,9 @@ class _PlaceInputState extends State<PlaceInput>
           // debug: suggestion tapped inline
           print('inline suggestion tapped: $description');
           // write full selected description into the controller (no shortening)
-          setState(() {
-            _ctl.text = description;
-          });
+          setState(() { _ctl.text = description; });
+          // notify external onChanged so external controllers are updated
+          widget.onChanged?.call(description);
           print('controller now: ${_ctl.text}');
           // close keyboard after selection
           FocusScope.of(context).unfocus();

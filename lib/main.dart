@@ -1,6 +1,8 @@
 // lib/main.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'services/maps_proxy.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -33,6 +35,8 @@ Future<void> main() async {
     // not in production
     // ignore: avoid_print
     print(googleMapsApiKeyInfo());
+    // show proxy config in debug
+    if (kDebugMode) logMapsProxyConfig();
   }
   runApp(const DriverRouteApp());
 }
@@ -190,6 +194,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ---- Google Directions: Distanz in km holen ----
   Future<double?> _getDistanceKm(String origin, String destination) async {
+    // Block direct Google Directions REST calls from web—CORS prevents them.
+    if (!mapsDirectCallsAllowed()) {
+      _log.add('⚠️ Web routing via direct Google REST request is blocked in browser');
+      setState(() {});
+      return null;
+    }
     if (GOOGLE_MAPS_API_KEY.isEmpty ||
         GOOGLE_MAPS_API_KEY == 'DEIN_API_KEY_HIER') {
       _log.add('⚠️ Kein API-Key hinterlegt (lib/secrets.dart).');
@@ -403,10 +413,17 @@ class _HomeScreenState extends State<HomeScreen> {
       optimize: optimize,
     );
     if (!normal.ok) {
+      final errMsg = (normal.raw['error_message'] ?? '').toString();
+      final note = errMsg.isNotEmpty
+          ? '⚠️ Directions(${normal.status}): ${errMsg}; nutze manuelle km'
+          : '⚠️ Directions(${normal.status}); nutze manuelle km';
+      // debug
+      // ignore: avoid_print
+      print('[planDistanceAndFerryAuto] Directions failed: ${normal.status} ${errMsg}');
       return (
         double.tryParse(_kmCtl.text.trim()) ?? 0.0,
         null,
-        '⚠️ Directions(${normal.status}); nutze manuelle km'
+        note,
       );
     }
 
@@ -843,6 +860,18 @@ class _HomeScreenState extends State<HomeScreen> {
       '&key=$GOOGLE_MAPS_API_KEY$wp',
     );
 
+    // On web this direct REST call is blocked by CORS. Surface a clear message instead.
+    if (!mapsDirectCallsAllowed()) {
+      _log.add('⚠️ Web routing via direct Google REST request is blocked in browser');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Web routing via direct Google REST request is blocked in browser'),
+        ));
+      }
+      setState(() {});
+      return;
+    }
+
     try {
       final res = await http.get(uri);
       if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
@@ -911,6 +940,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           inlineAutocomplete: true,
                           label: '📍 Startort/PLZ',
                           hint: 'Start eingeben',
+                          controller: _startCtl,
                           initialText: _startCtl.text,
                           onChanged: (v) => _startCtl.text = v,
                           onConfirmed: (v) async {
@@ -938,6 +968,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           inlineAutocomplete: true,
                           label: '🏁 Zielort/PLZ',
                           hint: 'Ziel eingeben',
+                          controller: _destCtl,
                           initialText: _destCtl.text,
                           onChanged: (v) => _destCtl.text = v,
                           onConfirmed: (v) async {
@@ -1264,6 +1295,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       PlaceInput(
                                         label: 'Zwischenziel',
                                         hint: 'Adresse/Ort für Zwischenziel',
+                                        controller: _stopCtl,
                                         initialText: _stopCtl.text,
                                         onChanged: (v) => _stopCtl.text = v,
                                         onConfirmed: (txt) async {
@@ -1325,6 +1357,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       child: PlaceInput(
                                         label: 'Zwischenziel',
                                         hint: 'Adresse/Ort für Zwischenziel',
+                                        controller: _stopCtl,
                                         initialText: _stopCtl.text,
                                         onChanged: (v) => _stopCtl.text = v,
                                         onConfirmed: (txt) async {
