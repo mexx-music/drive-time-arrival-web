@@ -33,8 +33,8 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
-      - name: Build web
-        run: flutter build web --release --base-href "/drive-time-arrival-web/"
+      - name: Build Flutter web
+        run: flutter build web --release --base-href "/drive-time-arrival/" --dart-define=MAPS_PROXY_BASE=${{ secrets.PROXY_BASE_URL }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

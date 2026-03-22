@@ -70,6 +70,11 @@ function forwardGet(url) {
 
 app.get('/health', (_, res) => res.json({ ok: true, proxy: true }));
 
+// Minimal GET check for directions endpoint for simple liveness testing
+app.get('/api/directions', (req, res) => {
+  res.json({ ok: true, message: 'Proxy alive (GET)' });
+});
+
 app.post('/api/geocode', async (req, res) => {
   try {
     const address = (req.body && req.body.address) || '';
