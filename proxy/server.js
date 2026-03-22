@@ -70,10 +70,45 @@ function forwardGet(url) {
 
 app.get('/health', (_, res) => res.json({ ok: true, proxy: true }));
 
-// Minimal GET check for directions endpoint for simple liveness testing
-app.get('/api/directions', (req, res) => {
-  res.json({ ok: true, message: 'Proxy alive (GET)' });
-});
+const handleDirections = async (req, res) => {
+  try {
+    const params = req.method === 'GET' ? req.query : req.body;
+
+    const { origin, destination, waypoints, mode, departure_time } = params;
+
+    if (!origin || !destination) {
+      return res.status(400).json({ error: 'Missing origin or destination' });
+    }
+
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+
+    const url = new URL('https://maps.googleapis.com/maps/api/directions/json');
+
+    url.searchParams.append('origin', origin);
+    url.searchParams.append('destination', destination);
+    url.searchParams.append('mode', mode || 'driving');
+    url.searchParams.append('departure_time', departure_time || 'now');
+    url.searchParams.append('key', apiKey);
+
+    if (waypoints && waypoints.length > 0) {
+      // support both array and single-string waypoint formats
+      const wpValue = Array.isArray(waypoints) ? waypoints.join('|') : waypoints;
+      url.searchParams.append('waypoints', wpValue);
+    }
+
+    const response = await fetch(url.toString());
+    const data = await response.json();
+
+    res.json(data);
+
+  } catch (err) {
+    console.error('Directions proxy error:', err);
+    res.status(500).json({ error: 'Proxy failed' });
+  }
+};
+
+app.get('/api/directions', handleDirections);
+app.post('/api/directions', handleDirections);
 
 app.post('/api/geocode', async (req, res) => {
   try {
@@ -88,40 +123,6 @@ app.post('/api/geocode', async (req, res) => {
   }
 });
 
-app.post('/api/directions', async (req, res) => {
-  try {
-    // Debug: log received JSON body (do not log API keys)
-    if (process.env.NODE_ENV !== 'production') {
-      try { console.log('[proxy] /api/directions body:', JSON.stringify(req.body)); } catch (e) { console.log('[proxy] /api/directions body (could not stringify)'); }
-    }
-
-    const { origin, destination, waypoints = [], mode = 'driving', departure_time = 'now' } = req.body || {};
-    if (!origin || !destination) {
-      return res.status(400).json({ error: 'missing_origin_or_destination', received: req.body });
-    }
-
-    let url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=${mode}&departure_time=${departure_time}&key=${GOOGLE_KEY}&units=metric`;
-    if (Array.isArray(waypoints) && waypoints.length) {
-      const wp = waypoints.map(w => encodeURIComponent(w)).join('|');
-      url += `&waypoints=${wp}`;
-    }
-
-    const r = await forwardGet(url);
-    // Ensure we always return a JSON response to the caller
-    res.status(r.status).type('application/json').send(r.body);
-  } catch (err) {
-    console.error('[proxy] /api/directions error:', err && err.message ? err.message : err);
-    // Always respond with JSON error
-    try {
-      return res.status(500).json({ error: 'proxy_error', message: (err && err.message) ? err.message : String(err) });
-    } catch (e) {
-      // In case of double-fault, ensure connection is closed gracefully
-      console.error('[proxy] Failed to send JSON error response:', e);
-      res.status(500).send('proxy_error');
-      return;
-    }
-  }
-});
 
 app.post('/api/autocomplete', async (req, res) => {
   try {
