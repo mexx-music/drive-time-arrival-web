@@ -73,19 +73,11 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
     super.dispose();
   }
 
-  void _handleFocus() {
-    // on focus loss, if exactly one suggestion exists and not yet applied, apply it
+  void _handleFocus() async {
+    // on focus loss, we deliberately DO NOT auto-apply suggestions.
     if (!_focus.hasFocus) {
-      if (_items.length == 1 && !_autoApplied) {
-        final desc = _items.first.description ?? '';
-        if (desc.isNotEmpty) {
-          // fire-and-forget selection due to focus loss
-          debugPrint('auto-selected suggestion (${widget.hintText ?? 'field'}) (focus loss): $desc');
-          _handleSelection(desc, null, null);
-          _autoApplied = true;
-        }
-      }
-      setState(() => _showInlineList = false);
+      // Debug: notify that no auto-apply will happen on blur
+      debugPrint('focus loss: no suggestion auto-applied for ${widget.hintText ?? 'field'}');
     }
   }
 
@@ -354,16 +346,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
             ),
             onChanged: _onChanged,
             onSubmitted: (_) async {
-              // If exactly one suggestion and user pressed Enter, auto-apply it as fallback
-              if (_items.length == 1 && !_autoApplied) {
-                final desc = _items.first.description ?? '';
-                if (desc.isNotEmpty) {
-                  debugPrint('auto-selected suggestion (${widget.hintText ?? 'field'}): $desc');
-                  await _handleSelection(desc, null, null);
-                  _autoApplied = true;
-                  return;
-                }
-              }
+              // Do not auto-apply suggestions on Enter/Submit; delegate to parent search action.
               widget.onSearchPressed?.call();
             },
           ),
@@ -430,15 +413,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
           ])),
       onChanged: _onChanged,
       onSubmitted: (_) async {
-        if (_items.length == 1 && !_autoApplied) {
-          final desc = _items.first.description ?? '';
-          if (desc.isNotEmpty) {
-            debugPrint('auto-selected suggestion (${widget.hintText ?? 'field'}): $desc');
-            await _handleSelection(desc, null, null);
-            _autoApplied = true;
-            return;
-          }
-        }
+        // Always delegate Enter/Search to the parent's onSearchPressed; do not auto-apply suggestions.
         widget.onSearchPressed?.call();
       },
     );
