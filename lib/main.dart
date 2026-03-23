@@ -79,8 +79,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // Waypoints
   final _stopCtl = TextEditingController();
   final List<String> _stops = [];
-  final List<LatLng?> _stopCoords =
-      []; // parallel storage for resolved stop coordinates
+  final List<LatLng?> _stopCoords = []; // parallel storage for resolved stop coordinates
   bool _optimizeStops = true;
 
   double _avgKmh = 80;
@@ -640,6 +639,9 @@ class _HomeScreenState extends State<HomeScreen> {
     print('[Validation] start="${_startCtl.text.trim()}"');
     // ignore: avoid_print
     print('[Validation] dest="${_destCtl.text.trim()}"');
+    // debug: show waypoints that will be passed to directions
+    // ignore: avoid_print
+    print('[Validation] waypoints=${_stops}');
 
     final (distKm, matchedFerry, note) =
         await _planDistanceAndFerryAuto(s, d, _stops, _optimizeStops);
@@ -694,6 +696,7 @@ class _HomeScreenState extends State<HomeScreen> {
       endAddress: d,
       autoOrManualFerry: ferryCandidate,
       manualDeparture: _manualFerryDeparture,
+      waypoints: _stops,
     );
     res = etaRes;
     _log.addAll(res.steps.map((e) => e.text));
@@ -972,11 +975,55 @@ class _HomeScreenState extends State<HomeScreen> {
     // is navigated to a useful page (avoids blank tab).
     if (!mapsDirectCallsAllowed()) {
       _log.add('⚠️ Web routing via direct Google REST request is blocked in browser');
-      final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route='
-          '${Uri.encodeComponent(s)};${Uri.encodeComponent(d)}';
-      // debug: final map URL
+      // debug: show waypoints
       // ignore: avoid_print
-      print('[openMapOsm] final map URL (names): $mapUrl');
+      print('[openMapOsm] waypoints=${_stops}');
+
+      // Prefer coordinate-based routing in web fallback when coordinates are available
+      if (_startLat != null && _startLng != null && _destLat != null && _destLng != null) {
+        // ignore: avoid_print
+        print('[openMapOsm] using coordinate route for web fallback');
+        final coordParts = <String>[];
+        coordParts.add('${_startLat},${_startLng}');
+        if (_stopCoords.isNotEmpty) {
+          for (final c in _stopCoords) {
+            if (c == null) continue;
+            coordParts.add('${c.latitude},${c.longitude}');
+          }
+        }
+        coordParts.add('${_destLat},${_destLng}');
+        final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' + coordParts.join(';');
+        // debug final URL
+        // ignore: avoid_print
+        print('[openMapOsm] final coordinate map URL: $mapUrl');
+        try {
+          openInNewTabWithName(mapUrl, 'driverroute_map');
+        } catch (e) {
+          // ignore, will show snack instead
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Öffne Karte in neuem Tab...'),
+          ));
+        }
+        setState(() {});
+        return;
+      }
+
+      // fallback: build names-based route including intermediate stops
+      final parts = <String>[];
+      parts.add('${Uri.encodeComponent(s)}');
+      if (_stops.isNotEmpty) {
+        for (final w in _stops) {
+          if (w.trim().isEmpty) continue;
+          parts.add(Uri.encodeComponent(w));
+        }
+      }
+      parts.add('${Uri.encodeComponent(d)}');
+      final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' + parts.join(';');
+      // debug final URL
+      // ignore: avoid_print
+      print('[openMapOsm] final map URL with waypoints: $mapUrl');
       try {
         openInNewTabWithName(mapUrl, 'driverroute_map');
       } catch (e) {
@@ -1011,10 +1058,22 @@ class _HomeScreenState extends State<HomeScreen> {
       final coords = _decodePolyline(poly);
 
       // Build a map URL for sharing/opening externally (OSM or Google Maps)
-      final mapUrl = Uri.encodeFull('https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${start.latitude},${start.longitude};${dest.latitude},${dest.longitude}');
-      // debug print of final URL (temporary)
+      // Include waypoint coordinates when available
+      final coordParts = <String>[];
+      coordParts.add('${start.latitude},${start.longitude}');
+      if (_stopCoords.isNotEmpty) {
+        for (final c in _stopCoords) {
+          if (c == null) continue;
+          coordParts.add('${c.latitude},${c.longitude}');
+        }
+      }
+      coordParts.add('${dest.latitude},${dest.longitude}');
+      final mapUrl = Uri.encodeFull('https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${coordParts.join(';')}');
+      // debug: show waypoints and final URL
       // ignore: avoid_print
-      print('[openMapOsm] Opening map URL: $mapUrl');
+      print('[openMapOsm] waypoints=${_stops}');
+      // ignore: avoid_print
+      print('[openMapOsm] final map URL with waypoints: $mapUrl');
 
       // On web, open in a new browser tab. On mobile/desktop use existing in-app MapOsmView navigation.
       if (kIsWeb) {
@@ -1135,6 +1194,74 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                                     content: Text(
                                         'Ziel konnte nicht aufgelöst werden: $e')));
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: pad,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: PlaceInput(
+                          inlineAutocomplete: true,
+                          label: '📍 Zwischenziel',
+                          hint: 'Adresse/Ort für Zwischenziel',
+                          controller: _stopCtl,
+                          initialText: _stopCtl.text,
+                          onChanged: (v) => _stopCtl.text = v,
+                          onConfirmed: (txt) async {
+                            final t = txt.trim();
+                            if (t.isEmpty) return;
+
+                            try {
+                              final res = await GeocodingService.resolve(t);
+                              setState(() {
+                                _stopCtl.text = res.description;
+
+                                if (_stops.isEmpty) {
+                                  _stops.add(res.description);
+                                } else {
+                                  _stops[0] = res.description;
+                                }
+
+                                final coord = LatLng(res.lat, res.lng);
+                                if (_stopCoords.isEmpty) {
+                                  _stopCoords.add(coord);
+                                } else {
+                                  _stopCoords[0] = coord;
+                                }
+                              });
+
+                              debugPrint('intermediate stop resolved: ${res.description}');
+                              debugPrint('intermediate stop applied to field: ${res.description}');
+                            } catch (e) {
+                              setState(() {
+                                _stopCtl.text = t;
+
+                                if (_stops.isEmpty) {
+                                  _stops.add(t);
+                                } else {
+                                  _stops[0] = t;
+                                }
+
+                                if (_stopCoords.isEmpty) {
+                                  _stopCoords.add(null);
+                                } else {
+                                  _stopCoords[0] = null;
+                                }
+                              });
+
+                              debugPrint('intermediate stop applied to field (raw): $t');
+
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Zwischenziel konnte nicht aufgelöst werden: $e')),
+                                );
+                              }
                             }
                           },
                         ),
@@ -1426,158 +1553,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           );
                         },
                       ),
-
-                      // Centered stop input row spanning both columns
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16.0, vertical: 6.0),
-                        child: Center(
-                          child: FractionallySizedBox(
-                            widthFactor: 0.75,
-                            child: LayoutBuilder(
-                              builder: (ctx, constraints) {
-                                if (constraints.maxWidth < 400) {
-                                  return Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      PlaceInput(
-                                        label: 'Zwischenziel',
-                                        hint: 'Adresse/Ort für Zwischenziel',
-                                        controller: _stopCtl,
-                                        initialText: _stopCtl.text,
-                                        onChanged: (v) => _stopCtl.text = v,
-                                        onConfirmed: (txt) async {
-                                          final t = txt.trim();
-                                          if (t.isEmpty) return;
-                                          try {
-                                            final res =
-                                                await GeocodingService.resolve(
-                                                    t);
-                                            setState(() {
-                                              _stops.add(res.description);
-                                              _stopCoords.add(
-                                                  LatLng(res.lat, res.lng));
-                                            });
-                                            _stopCtl.clear();
-                                          } catch (e) {
-                                            // fallback: add raw text
-                                            setState(() {
-                                              _stops.add(t);
-                                              _stopCoords.add(null);
-                                            });
-                                            _stopCtl.clear();
-                                            if (mounted)
-                                              ScaffoldMessenger.of(context)
-                                                  .showSnackBar(SnackBar(
-                                                      content: Text(
-                                                          'Zwischenziel konnte nicht aufgelöst werden: $e')));
-                                          }
-                                        },
-                                      ),
-                                      const SizedBox(height: 8),
-                                      SizedBox(
-                                        height: 48,
-                                        child: FilledButton(
-                                          style: FilledButton.styleFrom(
-                                            minimumSize:
-                                                const Size.fromHeight(48),
-                                          ),
-                                          onPressed: () {
-                                            final t = _stopCtl.text.trim();
-                                            if (t.isNotEmpty) {
-                                              setState(() => _stops.add(t));
-                                              _stopCtl.clear();
-                                            }
-                                          },
-                                          child: const Text('Hinzufügen'),
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                }
-
-                                return Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    Expanded(
-                                      flex: 3,
-                                      child: PlaceInput(
-                                        label: 'Zwischenziel',
-                                        hint: 'Adresse/Ort für Zwischenziel',
-                                        controller: _stopCtl,
-                                        initialText: _stopCtl.text,
-                                        onChanged: (v) => _stopCtl.text = v,
-                                        onConfirmed: (txt) async {
-                                          final t = txt.trim();
-                                          if (t.isEmpty) return;
-                                          try {
-                                            final res =
-                                                await GeocodingService.resolve(
-                                                    t);
-                                            setState(() {
-                                              _stops.add(res.description);
-                                              _stopCoords.add(
-                                                  LatLng(res.lat, res.lng));
-                                            });
-                                            _stopCtl.clear();
-                                          } catch (e) {
-                                            setState(() {
-                                              _stops.add(t);
-                                              _stopCoords.add(null);
-                                            });
-                                            _stopCtl.clear();
-                                            if (mounted)
-                                              ScaffoldMessenger.of(context)
-                                                  .showSnackBar(SnackBar(
-                                                      content: Text(
-                                                          'Zwischenziel konnte nicht aufgelöst werden: $e')));
-                                          }
-                                        },
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    SizedBox(
-                                      width: 120,
-                                      height: 48,
-                                      child: FilledButton(
-                                        style: FilledButton.styleFrom(
-                                            minimumSize: const Size(120, 48)),
-                                        onPressed: () {
-                                          final t = _stopCtl.text.trim();
-                                          if (t.isNotEmpty) {
-                                            setState(() => _stops.add(t));
-                                            _stopCtl.clear();
-                                          }
-                                        },
-                                        child: const Text('Hinzufügen'),
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              },
-                            ),
-                          ),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                        child: _stops.isEmpty
-                            ? const Text('Noch keine Zwischenziele.')
-                            : Wrap(
-                                spacing: 8,
-                                runSpacing: 6,
-                                children: [
-                                  for (int i = 0; i < _stops.length; i++)
-                                    InputChip(
-                                      label: Text('#${i + 1}  ${_stops[i]}'),
-                                      onDeleted: () =>
-                                          setState(() => _stops.removeAt(i)),
-                                    )
-                                ],
-                              ),
-                      ),
+                      const SizedBox(height: 8),
                     ],
                   ),
                 ),

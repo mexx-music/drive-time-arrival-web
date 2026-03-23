@@ -248,17 +248,17 @@ extension FerryAutoEta on FerryAutoDetect {
     required String endAddress,
     FerryRoute? autoOrManualFerry,
     DateTime? manualDeparture,
+    List<String> waypoints = const [],
     // Optional context-sensitive guard callbacks. If provided, use these instead of a global guard.
     bool Function()? ferryPlannedGet,
     void Function(bool)? ferryPlannedSet,
   }) async {
+    if (kDebugMode) debugPrint('[ETA] waypoints passed: $waypoints');
     // If another computation already planned a ferry during this UI flow, avoid re-planning.
     final bool alreadyPlanned =
         ferryPlannedGet != null ? ferryPlannedGet() : false;
     if (alreadyPlanned) {
-      final km = await _distanceSingle(
-              origin: startAddress, destination: endAddress) ??
-          0.0;
+      final km = await _distanceSingle(origin: startAddress, destination: endAddress, waypoints: waypoints) ?? 0.0;
       final single = EtaCalculator.compute(
         start: startTime,
         alreadyDrivenMin: alreadyDrivenMin,
@@ -276,11 +276,13 @@ extension FerryAutoEta on FerryAutoDetect {
 
     // If no ferry is requested, do the normal single-segment computation (do NOT set the guard)
     if (autoOrManualFerry == null) {
+      final fullKm = await _approxKm(startAddress, endAddress, waypoints: waypoints) ?? 0.0;
+      if (kDebugMode) debugPrint('[ETA] full route distance with waypoints: ${fullKm} km');
       return EtaCalculator.compute(
         start: startTime,
         alreadyDrivenMin: alreadyDrivenMin,
         dutyTimeOffsetMin: dutyOffsetMin,
-        km: await _approxKm(startAddress, endAddress) ?? 0.0,
+        km: fullKm,
         avgKmh: avgKmh,
         rules: rules,
       );
@@ -380,15 +382,14 @@ extension FerryAutoEta on FerryAutoDetect {
   }
 
   // Kleine Hilfsfunktion: wenn Directions nicht verfügbar, schätze Strecke aus Namen (0.0 fallback)
-  Future<double?> _approxKm(String origin, String destination) async {
+  Future<double?> _approxKm(String origin, String destination, {List<String> waypoints = const []}) async {
     const d = DistanceService();
-    return await d.fetchKmDistance(origin: origin, destination: destination);
+    return await d.fetchKmDistance(origin: origin, destination: destination, waypoints: waypoints);
   }
 
   // helper to obtain a single-segment distance via DistanceService
-  Future<double?> _distanceSingle(
-      {required String origin, required String destination}) async {
+  Future<double?> _distanceSingle({required String origin, required String destination, List<String> waypoints = const []}) async {
     const d = DistanceService();
-    return await d.fetchKmDistance(origin: origin, destination: destination);
+    return await d.fetchKmDistance(origin: origin, destination: destination, waypoints: waypoints);
   }
 }
