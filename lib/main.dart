@@ -23,6 +23,7 @@ import 'widgets/place_input.dart';
 import 'widgets/route_input_widget.dart';
 import 'widgets/ferry_selection_dialog.dart';
 import 'utils/open_in_tab.dart';
+import 'services/map_launcher.dart' as map_launcher;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -910,205 +911,28 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // Google encoded polyline -> List<LatLng>
-  List<LatLng> _decodePolyline(String encoded) {
-    final points = <LatLng>[];
-    int index = 0, len = encoded.length;
-    int lat = 0, lng = 0;
+    // Google encoded polyline -> List<LatLng>
+    List<LatLng> _decodePolyline(String encoded) => map_launcher.decodePolyline(encoded);
 
-    while (index < len) {
-      int b, shift = 0, result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      final dlat = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
-      lat += dlat;
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      final dlng = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
-      lng += dlng;
-
-      points.add(LatLng(lat / 1e5, lng / 1e5));
-    }
-    return points;
-  }
-
-  Future<void> _openMapOsm() async {
-    final s = _startCtl.text.trim();
-    final d = _destCtl.text.trim();
-    // debug: validate values from controllers before opening external map
-    // ignore: avoid_print
-    print('[openMapOsm] start="${s}" dest="${d}"');
-    if (s.isEmpty || d.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Bitte Start & Ziel eingeben.')),
-        );
-      }
-      return;
-    }
-
-    String wp = '';
-    if (_stops.isNotEmpty) {
-      final parts = _stops.map((w) => Uri.encodeComponent(w)).join('|');
-      final head = _optimizeStops ? 'optimize:true|' : '';
-      wp = '&waypoints=$head$parts';
-    }
-    final uri = Uri.parse(
-      'https://maps.googleapis.com/maps/api/directions/json'
-      '?origin=${Uri.encodeComponent(s)}'
-      '&destination=${Uri.encodeComponent(d)}'
-      '&mode=driving&units=metric&language=en'
-      '&key=$GOOGLE_MAPS_API_KEY$wp',
+    Future<void> _openMapOsm() async {
+    await map_launcher.openMapOsm(
+      context,
+      s: _startCtl.text.trim(),
+      d: _destCtl.text.trim(),
+      stops: _stops,
+      stopCoords: _stopCoords,
+      startLat: _startLat,
+      startLng: _startLng,
+      destLat: _destLat,
+      destLng: _destLng,
+      optimizeStops: _optimizeStops,
+      googleMapsApiKey: GOOGLE_MAPS_API_KEY,
+      mapsDirectCallsAllowed: mapsDirectCallsAllowed,
+      addLog: (m) => setState(() => _log.add(m)),
+      showDetails: () => _showDetails,
+      mounted: mounted,
     );
-
-    // On web this direct REST call is blocked by CORS. Instead, open OpenStreetMap
-    // directions using the start/destination strings (names) so the pre-opened tab
-    // is navigated to a useful page (avoids blank tab).
-    if (!mapsDirectCallsAllowed()) {
-      _log.add('⚠️ Web routing via direct Google REST request is blocked in browser');
-      // debug: show waypoints
-      // ignore: avoid_print
-      print('[openMapOsm] waypoints=${_stops}');
-
-      // Prefer coordinate-based routing in web fallback when coordinates are available
-      if (_startLat != null && _startLng != null && _destLat != null && _destLng != null) {
-        // ignore: avoid_print
-        print('[openMapOsm] using coordinate route for web fallback');
-        final coordParts = <String>[];
-        coordParts.add('${_startLat},${_startLng}');
-        if (_stopCoords.isNotEmpty) {
-          for (final c in _stopCoords) {
-            if (c == null) continue;
-            coordParts.add('${c.latitude},${c.longitude}');
-          }
-        }
-        coordParts.add('${_destLat},${_destLng}');
-        final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' + coordParts.join(';');
-        // debug final URL
-        // ignore: avoid_print
-        print('[openMapOsm] final coordinate map URL: $mapUrl');
-        try {
-          openInNewTabWithName(mapUrl, 'driverroute_map');
-        } catch (e) {
-          // ignore, will show snack instead
-        }
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Öffne Karte in neuem Tab...'),
-          ));
-        }
-        setState(() {});
-        return;
-      }
-
-      // fallback: build names-based route including intermediate stops
-      final parts = <String>[];
-      parts.add('${Uri.encodeComponent(s)}');
-      if (_stops.isNotEmpty) {
-        for (final w in _stops) {
-          if (w.trim().isEmpty) continue;
-          parts.add(Uri.encodeComponent(w));
-        }
-      }
-      parts.add('${Uri.encodeComponent(d)}');
-      final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' + parts.join(';');
-      // debug final URL
-      // ignore: avoid_print
-      print('[openMapOsm] final map URL with waypoints: $mapUrl');
-      try {
-        openInNewTabWithName(mapUrl, 'driverroute_map');
-      } catch (e) {
-        // ignore, will show snack instead
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Öffne Karte in neuem Tab...'),
-        ));
-      }
-      setState(() {});
-      return;
     }
-
-    try {
-      final res = await http.get(uri);
-      if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      if (data['status'] != 'OK')
-        throw Exception('Directions ${data['status']}');
-
-      final route = (data['routes'] as List).first as Map<String, dynamic>;
-      final legs = (route['legs'] as List).cast<Map<String, dynamic>>();
-      final firstLeg = legs.first;
-      final lastLeg = legs.last;
-      final sl = firstLeg['start_location'] as Map<String, dynamic>;
-      final dl = lastLeg['end_location'] as Map<String, dynamic>;
-      final poly = (route['overview_polyline'] as Map<String, dynamic>)['points'] as String;
-
-      final start = LatLng((sl['lat'] as num).toDouble(), (sl['lng'] as num).toDouble());
-      final dest = LatLng((dl['lat'] as num).toDouble(), (dl['lng'] as num).toDouble());
-      final coords = _decodePolyline(poly);
-
-      // Build a map URL for sharing/opening externally (OSM or Google Maps)
-      // Include waypoint coordinates when available
-      final coordParts = <String>[];
-      coordParts.add('${start.latitude},${start.longitude}');
-      if (_stopCoords.isNotEmpty) {
-        for (final c in _stopCoords) {
-          if (c == null) continue;
-          coordParts.add('${c.latitude},${c.longitude}');
-        }
-      }
-      coordParts.add('${dest.latitude},${dest.longitude}');
-      final mapUrl = Uri.encodeFull('https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${coordParts.join(';')}');
-      // debug: show waypoints and final URL
-      // ignore: avoid_print
-      print('[openMapOsm] waypoints=${_stops}');
-      // ignore: avoid_print
-      print('[openMapOsm] final map URL with waypoints: $mapUrl');
-
-      // On web, open in a new browser tab. On mobile/desktop use existing in-app MapOsmView navigation.
-      if (kIsWeb) {
-        // Debug print URL before navigating the pre-opened window (temporary)
-        // ignore: avoid_print
-        print('[openMapOsm] final map URL: $mapUrl');
-        try {
-          openInNewTabWithName(mapUrl, 'driverroute_map');
-        } catch (e) {
-          if (mounted) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => MapOsmView(start: start, dest: dest, route: coords),
-              ),
-            );
-          }
-        }
-        return;
-      }
-
-      if (!mounted) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => MapOsmView(start: start, dest: dest, route: coords),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Karte fehlgeschlagen: $e')));
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1848,9 +1672,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     onPressed: () {
                       // Ensure window.open is triggered synchronously from user gesture to avoid popup blocking on web
                       if (kIsWeb) {
-                        // ignore: avoid_print
-                        print('[openMapOsm] pre-opening named blank tab');
-                        openInNewTabWithName('about:blank', 'driverroute_map');
+                        if (_stops.isEmpty) {
+                          // ignore: avoid_print
+                          print('[MapButton] using external web tab');
+                          openInNewTabWithName('about:blank', 'driverroute_map');
+                        } else {
+                          // ignore: avoid_print
+                          print('[MapButton] using in-app map because waypoints are present');
+                        }
                       }
                       _openMapOsm();
                     },
