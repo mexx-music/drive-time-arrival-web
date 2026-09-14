@@ -1,19 +1,35 @@
-# drivetimearrival
+# DriverRoute ETA
 
-A new Flutter project.
+Flutter-Web/PWA zur verständlichen Tour- und ETA-Planung für LKW-Fahrer. Die
+Ergebnisansicht zeigt Distanz, reine Fahrzeit, Pausen/Ruhe, Ankunft sowie den
+kompletten Ablauf als Timeline.
 
-## Getting Started
+Der Planungsschnitt kann automatisch aus Distanz und Routendauer ermittelt
+oder als Profil gewählt werden: 80 km/h Standard, 70 km/h bei viel
+Bundes-/Landstraße und 60 km/h für Norwegen bzw. langsame Strecken.
 
-This project is a starting point for a Flutter application.
+Die aktuelle technische und fachliche Bestandsaufnahme steht in
+[`docs/PROJECT_AUDIT.md`](docs/PROJECT_AUDIT.md).
 
-A few resources to get you started if this is your first Flutter project:
+## Entwicklung
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+```sh
+flutter pub get
+flutter test
+flutter run -d chrome \
+  --dart-define=MAPS_PROXY_BASE=http://localhost:3000 \
+  --dart-define=GOOGLE_MAPS_API_KEY=YOUR_RESTRICTED_CLIENT_KEY
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Der Schlüssel im Web-Build muss in Google Cloud auf die erlaubten HTTP-Referrer
+und ausschließlich benötigte APIs eingeschränkt sein. Der Proxy verwendet den
+serverseitigen Schlüssel aus seiner eigenen Umgebungsvariable.
+
+Für Android wird `GOOGLE_MAPS_API_KEY=...` in `android/local.properties`
+eingetragen oder als Umgebungsvariable gesetzt. Für iOS wird
+`ios/Flutter/GoogleMaps.xcconfig.example` nach `GoogleMaps.xcconfig` kopiert und
+mit einem auf die iOS-App eingeschränkten Schlüssel befüllt. Diese lokalen
+Dateien werden nicht eingecheckt.
 
 ## Quick start script
 

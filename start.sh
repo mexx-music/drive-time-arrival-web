@@ -60,7 +60,9 @@ else
   fi
 fi
 
-# Start Flutter web with MAPS_PROXY_BASE pointing to local proxy
+# Start Flutter web with the local proxy and a separately restricted client key.
 echo "Starting Flutter (web) with MAPS_PROXY_BASE=http://localhost:$PROXY_PORT"
 cd "$REPO_ROOT"
-flutter run -d chrome --dart-define=MAPS_PROXY_BASE="http://localhost:$PROXY_PORT"
+flutter run -d chrome \
+  --dart-define=MAPS_PROXY_BASE="http://localhost:$PROXY_PORT" \
+  --dart-define=GOOGLE_MAPS_API_KEY="$GOOGLE_MAPS_API_KEY"

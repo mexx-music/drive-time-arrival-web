@@ -15,13 +15,13 @@ import 'services/ferry_schedule_loader.dart';
 import 'logic/eta_calculator.dart';
 import 'logic/ferry_auto.dart';
 import 'logic/port_aliases.dart';
+import 'logic/speed_profile.dart';
 import 'package:driverroute_eta/secrets.dart';
-import 'ui/map_osm_view.dart';
 import 'widgets/places_autocomplete.dart' as places_auto;
 import 'services/geocoding_service.dart';
 import 'widgets/place_input.dart';
 import 'widgets/route_input_widget.dart';
-import 'widgets/ferry_selection_dialog.dart';
+import 'widgets/tour_result_view.dart';
 import 'utils/open_in_tab.dart';
 import 'services/map_launcher.dart' as map_launcher;
 
@@ -51,7 +51,19 @@ class DriverRouteApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'DriverRoute ETA',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0A84FF)),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0A6EBD),
+          brightness: Brightness.light,
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF6F8FB),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide.none,
+          ),
+        ),
         useMaterial3: true,
       ),
       locale: const Locale('de'),
@@ -80,11 +92,14 @@ class _HomeScreenState extends State<HomeScreen> {
   // Waypoints
   final _stopCtl = TextEditingController();
   final List<String> _stops = [];
-  final List<LatLng?> _stopCoords = []; // parallel storage for resolved stop coordinates
+  final List<LatLng?> _stopCoords =
+      []; // parallel storage for resolved stop coordinates
   bool _optimizeStops = true;
 
   double _avgKmh = 80;
+  SpeedProfile _speedProfile = SpeedProfile.automatic;
   int _drivenMin = 0;
+  int _continuousDrivenMin = 0;
   int _dutyOffsetMin = 0;
 
   // Lenk-/Ruhezeit & Tankpause
@@ -94,17 +109,24 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _nine2 = true; // 9h-Ruheverkürzung #2 verfügbar?
   bool _nine3 = true; // 9h-Ruheverkürzung #3 verfügbar?
   bool _tankpause = false; // ⛽ +30 min
+  bool _splitBreak = false;
+  bool _weeklyRestDue = false;
 
   bool _autoFerry = false;
   bool _showDetails = false;
   FerryRoute? _manualFerry;
   DateTime? _manualFerryDeparture;
+  bool _ferryRestEligible = false;
 
   List<FerryRoute> _routes = [];
   String _source = '…';
 
   List<String> _log = [];
-  DateTime? _arrival;
+  EtaResult? _etaResult;
+  String _resultOrigin = '';
+  String _resultDestination = '';
+  RoadMixAnalysis? _resultRoadMix;
+  bool _calculating = false;
 
   double? _startLat, _startLng, _destLat, _destLng;
 
@@ -201,8 +223,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<double?> _getDistanceKm(String origin, String destination) async {
     // Block direct Google Directions REST calls from web—CORS prevents them.
     if (!mapsDirectCallsAllowed()) {
-      _log.add('⚠️ Web routing via direct Google REST request is blocked in browser');
-      final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route='
+      _log.add(
+          '⚠️ Web routing via direct Google REST request is blocked in browser');
+      final mapUrl =
+          'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route='
           '${Uri.encodeComponent(origin)};${Uri.encodeComponent(destination)}';
       // debug: final map URL
       // ignore: avoid_print
@@ -418,7 +442,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return matched;
   }
 
-  Future<(double km, FerryRoute? ferry, String note)> _planDistanceAndFerryAuto(
+  Future<(double km, RoadMixAnalysis? roadMix, FerryRoute? ferry, String note)>
+      _planDistanceAndFerryAuto(
     String origin,
     String destination,
     List<String> wps,
@@ -439,9 +464,11 @@ class _HomeScreenState extends State<HomeScreen> {
           : '⚠️ Directions(${normal.status}); nutze manuelle km';
       // debug
       // ignore: avoid_print
-      print('[planDistanceAndFerryAuto] Directions failed: ${normal.status} ${errMsg}');
+      print(
+          '[planDistanceAndFerryAuto] Directions failed: ${normal.status} ${errMsg}');
       return (
         double.tryParse(_kmCtl.text.trim()) ?? 0.0,
+        null,
         null,
         note,
       );
@@ -518,264 +545,292 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    return (km, matched, hasFerry ? '🛳️ Fähre erkannt ($why)' : '');
+    // Distanzgewichtete Auswertung der einzelnen Straßenabschnitte. Fähren
+    // werden entfernt, weil ihre Dauer separat in der ETA geplant wird.
+    var roadMix = RoadMixAnalysis.fromDirectionsSteps(normal.steps);
+    if (roadMix == null && !hasFerry && normal.sec > 0) {
+      roadMix = RoadMixAnalysis(
+        roadKm: normal.km,
+        averageKmh: normal.km / (normal.sec / 3600),
+        fastShare: 0,
+        mainRoadShare: 0,
+        slowShare: 0,
+      );
+    }
+    return (
+      km,
+      roadMix,
+      matched,
+      hasFerry ? '🛳️ Fähre erkannt ($why)' : '',
+    );
   }
 
   Future<void> _compute() async {
-    _log.clear();
-    setState(() {});
+    if (_calculating) return;
+    if (_startCtl.text.trim().isEmpty || _destCtl.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Bitte Startort und Zielort vollständig eingeben.'),
+        ),
+      );
+      return;
+    }
+    if (_avgKmh <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Bitte eine gültige Geschwindigkeit wählen.')),
+      );
+      return;
+    }
+    if (_drivenMin > 600 ||
+        _continuousDrivenMin > 270 ||
+        _continuousDrivenMin > _drivenMin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Bitte Lenkzeiten prüfen: heute höchstens 10 h, seit der letzten Pause höchstens 4 h 30 min.',
+          ),
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _calculating = true;
+      _log.clear();
+      _etaResult = null;
+    });
 
-    final now = DateTime.now();
-    DateTime start = now;
+    try {
+      final now = DateTime.now();
+      DateTime start = now;
 
-    // Manuelle Abfahrt verwenden?
-    if (_manualDepartureActive) {
+      // Manuelle Abfahrt verwenden?
+      if (_manualDepartureActive) {
+        try {
+          start = DateTime(
+            _manualDepartureDate.year,
+            _manualDepartureDate.month,
+            _manualDepartureDate.day,
+            _manualDepartureHour,
+            _manualDepartureMinute,
+          );
+          _log.add(
+              '🕓 Manuelle Abfahrt gesetzt: ${DateFormat('yyyy-MM-dd HH:mm').format(start)}');
+        } catch (e) {
+          _dbg('Fehler beim Zusammensetzen der manuellen Abfahrtszeit: $e');
+        }
+      }
+
+      // km bevorzugt via Directions
+      double km = double.tryParse(_kmCtl.text.trim()) ?? 0.0;
+      var s = (_resolvedStart != null && _resolvedStart!.trim().isNotEmpty)
+          ? _resolvedStart!.trim()
+          : _startCtl.text.trim();
+      var d = (_resolvedDestination != null &&
+              _resolvedDestination!.trim().isNotEmpty)
+          ? _resolvedDestination!.trim()
+          : _destCtl.text.trim();
+
+      // Try to finalize autocomplete suggestions for start/destination if user didn't explicitly pick one
       try {
-        start = DateTime(
-          _manualDepartureDate.year,
-          _manualDepartureDate.month,
-          _manualDepartureDate.day,
-          _manualDepartureHour,
-          _manualDepartureMinute,
-        );
-        _log.add(
-            '🕓 Manuelle Abfahrt gesetzt: ${DateFormat('yyyy-MM-dd HH:mm').format(start)}');
-      } catch (e) {
-        _dbg('Fehler beim Zusammensetzen der manuellen Abfahrtszeit: $e');
-      }
-    }
-
-    // km bevorzugt via Directions
-    double km = double.tryParse(_kmCtl.text.trim()) ?? 0.0;
-    final s = (_resolvedStart != null && _resolvedStart!.trim().isNotEmpty)
-        ? _resolvedStart!.trim()
-        : _startCtl.text.trim();
-    final d = (_resolvedDestination != null && _resolvedDestination!.trim().isNotEmpty)
-        ? _resolvedDestination!.trim()
-        : _destCtl.text.trim();
-
-    // Try to finalize autocomplete suggestions for start/destination if user didn't explicitly pick one
-    try {
-      if (!places_auto.isExplicitlySelectedForController(_startCtl)) {
-        final typed = s;
-        bool finalized = false;
-        try {
-          if (typed.isNotEmpty) {
-            final geores = await GeocodingService.resolve(typed);
-            if (geores != null && geores.description.isNotEmpty) {
-              _startCtl.text = geores.description;
-              debugPrint('finalizing start via geocoding: ${geores.description}');
+        if (!places_auto.isExplicitlySelectedForController(_startCtl)) {
+          final typed = s;
+          bool finalized = false;
+          try {
+            if (typed.isNotEmpty) {
+              final geores = await GeocodingService.resolve(typed);
+              if (geores != null && geores.description.isNotEmpty) {
+                _startCtl.text = geores.description;
+                debugPrint(
+                    'finalizing start via geocoding: ${geores.description}');
+                places_auto.markExplicitSelection(_startCtl);
+                finalized = true;
+              }
+            }
+          } catch (e) {
+            debugPrint('geocoding start failed: $e');
+          }
+          if (!finalized) {
+            final sug = places_auto.getSuggestionsForController(_startCtl);
+            if (sug.isNotEmpty) {
+              final low = s.toLowerCase();
+              String chosen = sug.first;
+              final idxExact = sug.indexWhere((x) => x.toLowerCase() == low);
+              if (idxExact != -1) {
+                chosen = sug[idxExact];
+              } else {
+                final idxStarts = sug.indexWhere(
+                    (x) => x.toLowerCase().startsWith(low) && low.isNotEmpty);
+                if (idxStarts != -1) chosen = sug[idxStarts];
+              }
+              _startCtl.text = chosen;
+              debugPrint('fallback to autocomplete suggestion: $chosen');
               places_auto.markExplicitSelection(_startCtl);
-              finalized = true;
             }
           }
-        } catch (e) {
-          debugPrint('geocoding start failed: $e');
         }
-        if (!finalized) {
-          final sug = places_auto.getSuggestionsForController(_startCtl);
-          if (sug.isNotEmpty) {
-            final low = s.toLowerCase();
-            String chosen = sug.first;
-            final idxExact = sug.indexWhere((x) => x.toLowerCase() == low);
-            if (idxExact != -1) {
-              chosen = sug[idxExact];
-            } else {
-              final idxStarts =
-                  sug.indexWhere((x) => x.toLowerCase().startsWith(low) && low.isNotEmpty);
-              if (idxStarts != -1) chosen = sug[idxStarts];
-            }
-            _startCtl.text = chosen;
-            debugPrint('fallback to autocomplete suggestion: $chosen');
-            places_auto.markExplicitSelection(_startCtl);
-          }
-        }
+      } catch (e) {
+        debugPrint('finalize start suggestion error: $e');
       }
-    } catch (e) {
-      debugPrint('finalize start suggestion error: $e');
-    }
 
-    try {
-      if (!places_auto.isExplicitlySelectedForController(_destCtl)) {
-        final typed = d;
-        bool finalized = false;
-        try {
-          if (typed.isNotEmpty) {
-            final geores = await GeocodingService.resolve(typed);
-            if (geores != null && geores.description.isNotEmpty) {
-              _destCtl.text = geores.description;
-              debugPrint('finalizing destination via geocoding: ${geores.description}');
+      try {
+        if (!places_auto.isExplicitlySelectedForController(_destCtl)) {
+          final typed = d;
+          bool finalized = false;
+          try {
+            if (typed.isNotEmpty) {
+              final geores = await GeocodingService.resolve(typed);
+              if (geores != null && geores.description.isNotEmpty) {
+                _destCtl.text = geores.description;
+                debugPrint(
+                    'finalizing destination via geocoding: ${geores.description}');
+                places_auto.markExplicitSelection(_destCtl);
+                finalized = true;
+              }
+            }
+          } catch (e) {
+            debugPrint('geocoding dest failed: $e');
+          }
+          if (!finalized) {
+            final sug = places_auto.getSuggestionsForController(_destCtl);
+            if (sug.isNotEmpty) {
+              final low = d.toLowerCase();
+              String chosen = sug.first;
+              final idxExact = sug.indexWhere((x) => x.toLowerCase() == low);
+              if (idxExact != -1) {
+                chosen = sug[idxExact];
+              } else {
+                final idxStarts = sug.indexWhere(
+                    (x) => x.toLowerCase().startsWith(low) && low.isNotEmpty);
+                if (idxStarts != -1) chosen = sug[idxStarts];
+              }
+              _destCtl.text = chosen;
+              debugPrint('fallback to autocomplete suggestion: $chosen');
               places_auto.markExplicitSelection(_destCtl);
-              finalized = true;
             }
           }
-        } catch (e) {
-          debugPrint('geocoding dest failed: $e');
         }
-        if (!finalized) {
-          final sug = places_auto.getSuggestionsForController(_destCtl);
-          if (sug.isNotEmpty) {
-            final low = d.toLowerCase();
-            String chosen = sug.first;
-            final idxExact = sug.indexWhere((x) => x.toLowerCase() == low);
-            if (idxExact != -1) {
-              chosen = sug[idxExact];
-            } else {
-              final idxStarts =
-                  sug.indexWhere((x) => x.toLowerCase().startsWith(low) && low.isNotEmpty);
-              if (idxStarts != -1) chosen = sug[idxStarts];
-            }
-            _destCtl.text = chosen;
-            debugPrint('fallback to autocomplete suggestion: $chosen');
-            places_auto.markExplicitSelection(_destCtl);
-          }
-        }
+      } catch (e) {
+        debugPrint('finalize dest suggestion error: $e');
       }
-    } catch (e) {
-      debugPrint('finalize dest suggestion error: $e');
-    }
 
-    // debug: show start/destination read from controllers before validation
-    // ignore: avoid_print
-    print('[Validation] start="${_startCtl.text.trim()}"');
-    // ignore: avoid_print
-    print('[Validation] dest="${_destCtl.text.trim()}"');
-    // debug: show waypoints that will be passed to directions
-    // ignore: avoid_print
-    print('[Validation] waypoints=${_stops}');
+      // Die Autovervollständigung kann inzwischen präzisere Orts- und
+      // Landesnamen geliefert haben. Diese Werte steuern auch das Norwegenprofil.
+      s = (_resolvedStart != null && _resolvedStart!.trim().isNotEmpty)
+          ? _resolvedStart!.trim()
+          : _startCtl.text.trim();
+      d = (_resolvedDestination != null &&
+              _resolvedDestination!.trim().isNotEmpty)
+          ? _resolvedDestination!.trim()
+          : _destCtl.text.trim();
 
-    final (distKm, matchedFerry, note) =
-        await _planDistanceAndFerryAuto(s, d, _stops, _optimizeStops);
+      // debug: show start/destination read from controllers before validation
+      // ignore: avoid_print
+      print('[Validation] start="${_startCtl.text.trim()}"');
+      // ignore: avoid_print
+      print('[Validation] dest="${_destCtl.text.trim()}"');
+      // debug: show waypoints that will be passed to directions
+      // ignore: avoid_print
+      print('[Validation] waypoints=${_stops}');
 
-    // debug
-    // ignore: avoid_print
-    print(
-        '[Compute] planDistanceAndFerryAuto -> distKm=$distKm note=$note matchedFerry=${matchedFerry?.name}');
+      final (distKm, roadMix, matchedFerry, note) =
+          await _planDistanceAndFerryAuto(s, d, _stops, _optimizeStops);
 
-    if (distKm > 0) {
-      km = distKm;
+      final speedPlan = SpeedProfileResolver.resolve(
+        profile: _speedProfile,
+        customKmh: _avgKmh,
+        routedKmh: roadMix?.averageKmh,
+        routeLabels: [s, d, ..._stops],
+      );
+
+      // debug
+      // ignore: avoid_print
+      print(
+          '[Compute] planDistanceAndFerryAuto -> distKm=$distKm routedKmh=${roadMix?.averageKmh} note=$note matchedFerry=${matchedFerry?.name}');
+
       if (_showDetails) {
         _log.add(
-            '🗺️ Distanz (Google Directions): ${distKm.toStringAsFixed(1)} km');
+          '🚛 Planungsschnitt: ${speedPlan.kmh.toStringAsFixed(1)} km/h '
+          '(${speedPlan.reason})',
+        );
       }
-    } else {
-      _log.add('⚠️ Directions nicht verfügbar – nutze manuelle km.');
-      if (note.isNotEmpty) {
-        final msg = 'Directions-Fehler: $note';
-        if (mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(msg)));
+
+      if (distKm > 0) {
+        km = distKm;
+        if (_showDetails) {
+          _log.add(
+              '🗺️ Distanz (Google Directions): ${distKm.toStringAsFixed(1)} km');
+        }
+      } else {
+        _log.add('⚠️ Directions nicht verfügbar – nutze manuelle km.');
+        if (note.isNotEmpty) {
+          final msg = 'Directions-Fehler: $note';
+          if (mounted) {
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text(msg)));
+          }
         }
       }
-    }
 
-    // Regeln einmal bauen
-    final driveRules = DriveRulesConfig(
-      tenHourDay1: _ten1,
-      tenHourDay2: _ten2,
-      nineHourRest1: _nine1,
-      nineHourRest2: _nine2,
-      nineHourRest3: _nine3,
-      tankPause: _tankpause,
-    );
-
-    bool usedTwoLegs = false;
-    EtaResult res;
-    DateTime? current;
-
-    // Erzeuge FerryAutoDetect und delegiere ETA-Berechnung (Wrapper entscheidet, ob Fähre benutzt wird)
-    final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
-    final FerryRoute? ferryCandidate =
-        _manualFerry ?? (_autoFerry ? matchedFerry : null);
-    final etaRes = await det.computeEtaWithOptionalFerry(
-      startTime: start,
-      alreadyDrivenMin: _drivenMin,
-      dutyOffsetMin: _dutyOffsetMin,
-      avgKmh: _avgKmh,
-      rules: driveRules,
-      startAddress: s,
-      endAddress: d,
-      autoOrManualFerry: ferryCandidate,
-      manualDeparture: _manualFerryDeparture,
-      waypoints: _stops,
-    );
-    res = etaRes;
-    _log.addAll(res.steps.map((e) => e.text));
-    current = res.arrival;
-    usedTwoLegs = ferryCandidate != null;
-
-    // Fähre einplanen (manuell hat Vorrang)
-    FerryRoute? ferry = _manualFerry;
-    if (ferry == null && _autoFerry && matchedFerry != null && !usedTwoLegs) {
-      // Use the richer selection dialog so the user can pick direction + departure
-      final result = await showDialog<Map<String, String>?>(
-        context: context,
-        builder: (_) => FerrySelectionDialog(route: matchedFerry),
+      // Regeln einmal bauen
+      final driveRules = DriveRulesConfig(
+        tenHourDay1: _ten1,
+        tenHourDay2: _ten2,
+        nineHourRest1: _nine1,
+        nineHourRest2: _nine2,
+        nineHourRest3: _nine3,
+        tankPause: _tankpause,
+        splitBreak: _splitBreak,
+        weeklyRestDue: _weeklyRestDue,
       );
-      if (result != null) {
-        // Apply user's selection: mark manual ferry and set a concrete departure DateTime
-        setState(() {
-          _manualFerry = matchedFerry;
-          final depStr = result['departure'] ?? '';
-          DateTime? parsed;
-          try {
-            final parts = depStr.split(':');
-            final hh = int.tryParse(parts.isNotEmpty ? parts[0] : '0') ?? 0;
-            final mm = int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0;
-            // Use current arrival day as base if available
-            final base = current ?? DateTime.now();
-            var cand = DateTime(base.year, base.month, base.day, hh, mm);
-            if (cand.isBefore(base)) cand = cand.add(const Duration(days: 1));
-            parsed = cand;
-          } catch (_) {
-            parsed = null;
-          }
-          _manualFerryDeparture = parsed;
-        });
-        ferry = matchedFerry;
-      }
-    }
 
-    if (!usedTwoLegs && ferry != null && current != null) {
-      _log.add(
-          '📍 Ankunft Hafen ${ferry.from} um ${DateFormat('yyyy-MM-dd HH:mm').format(current)}');
-      DateTime? nextDep;
-      if (_manualFerryDeparture != null) {
-        nextDep = _manualFerryDeparture;
-        _log.add(
-            '🕓 Manuelle Abfahrt Fähre: ${DateFormat('yyyy-MM-dd HH:mm').format(nextDep!)}');
-      } else if (ferry.departuresLocal.isNotEmpty) {
-        for (final hhmm in ferry.departuresLocal) {
-          final p = hhmm.split(':');
-          final cand = DateTime(current.year, current.month, current.day,
-              int.parse(p[0]), int.parse(p[1]));
-          if (!cand.isBefore(current)) {
-            nextDep = cand;
-            break;
-          }
-        }
-        nextDep ??= DateTime(current.year, current.month, current.day)
-            .add(const Duration(days: 1));
-        _log.add(
-            '⏱ Wartezeit bis Fähre: ${_fmtHm(nextDep!.difference(current))} → Abfahrt: ${DateFormat('HH:mm').format(nextDep!)}');
-      }
-      if (nextDep != null) {
-        current =
-            nextDep.add(Duration(minutes: (ferry.durationHours * 60).round()));
-        _log.add(
-            '🚢 Fähre ${ferry.name} ${ferry.durationHours.toStringAsFixed(1)}h → Ankunft: ${DateFormat('yyyy-MM-dd HH:mm').format(current)}');
-        if (ferry.durationHours * 60 >= 540) {
-          _log.add('✅ Pause vollständig während Fähre erfüllt');
-          _log.add('Zahler werden zurückgesetzt.');
-        }
-      }
-    }
-    setState(() => _arrival = current);
-  }
+      EtaResult res;
 
-  String _fmtHm(Duration d) {
-    final h = d.inHours, m = d.inMinutes % 60;
-    return '${h}h${m.toString().padLeft(2, '0')}';
+      // Erzeuge FerryAutoDetect und delegiere ETA-Berechnung (Wrapper entscheidet, ob Fähre benutzt wird)
+      final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
+      final FerryRoute? ferryCandidate =
+          _manualFerry ?? (_autoFerry ? matchedFerry : null);
+      final etaRes = await det.computeEtaWithOptionalFerry(
+        startTime: start,
+        alreadyDrivenMin: _drivenMin,
+        alreadyDrivenSinceBreakMin: _continuousDrivenMin,
+        dutyOffsetMin: _dutyOffsetMin,
+        avgKmh: speedPlan.kmh,
+        rules: driveRules,
+        startAddress: s,
+        endAddress: d,
+        autoOrManualFerry: ferryCandidate,
+        manualDeparture: _manualFerryDeparture,
+        waypoints: _stops,
+        fallbackKm: km,
+        ferryRestEligible: _ferryRestEligible,
+      );
+      res = etaRes;
+      _log.addAll(res.steps.map((e) => e.text));
+      if (res.summary == null || res.summary!.distanceKm <= 0) {
+        throw StateError('Keine verwertbare Routendistanz vorhanden');
+      }
+      if (!mounted) return;
+      setState(() {
+        _etaResult = res;
+        _resultOrigin = s;
+        _resultDestination = d;
+        _resultRoadMix = roadMix;
+      });
+    } catch (error, stackTrace) {
+      debugPrint('ETA-Berechnung fehlgeschlagen: $error\n$stackTrace');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Route konnte nicht berechnet werden. Bitte Adressen, Distanz und Verbindung prüfen.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _calculating = false);
+    }
   }
 
   void _dbg(String msg) {
@@ -911,10 +966,11 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-    // Google encoded polyline -> List<LatLng>
-    List<LatLng> _decodePolyline(String encoded) => map_launcher.decodePolyline(encoded);
+  // Google encoded polyline -> List<LatLng>
+  List<LatLng> _decodePolyline(String encoded) =>
+      map_launcher.decodePolyline(encoded);
 
-    Future<void> _openMapOsm() async {
+  Future<void> _openMapOsm() async {
     await map_launcher.openMapOsm(
       context,
       s: _startCtl.text.trim(),
@@ -932,104 +988,121 @@ class _HomeScreenState extends State<HomeScreen> {
       showDetails: () => _showDetails,
       mounted: mounted,
     );
-    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final pad = const EdgeInsets.symmetric(horizontal: 16, vertical: 8);
     return Scaffold(
-      appBar: AppBar(title: const Text('🚛 DriverRoute ETA – MVP')),
+      appBar: AppBar(
+        title: const Text('DriverRoute ETA'),
+        centerTitle: false,
+      ),
       body: Column(
         children: [
           Expanded(
             child: ListView(
               children: [
+                if (_showDetails)
+                  Padding(
+                    padding: pad,
+                    child: Text(
+                      'Fahrplan-Quelle: $_source · ${_routes.length} Routen',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
                 Padding(
                   padding: pad,
-                  child: Row(
-                    children: [
-                      const Text('Fahrplan-Quelle: ',
-                          style: TextStyle(fontWeight: FontWeight.w600)),
-                      Text(_source),
-                      const SizedBox(width: 12),
-                      Text('Routen: ${_routes.length}'),
-                    ],
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final stacked = constraints.maxWidth < 680;
+                      final fieldWidth = stacked
+                          ? constraints.maxWidth
+                          : (constraints.maxWidth - 12) / 2;
+                      return Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          SizedBox(
+                            width: fieldWidth,
+                            child: PlaceInput(
+                              inlineAutocomplete: true,
+                              label: '📍 Startort/PLZ',
+                              hint: 'Start eingeben',
+                              controller: _startCtl,
+                              initialText: _startCtl.text,
+                              onChanged: (v) => _startCtl.text = v,
+                              onConfirmed: (v) async {
+                                final txt = v.trim();
+                                if (txt.isEmpty) return;
+                                // store resolved preview (do not overwrite controller)
+                                setState(() => _resolvedStart = txt);
+                                // attempt to resolve coordinates for routing, but keep controller as-is
+                                try {
+                                  final r = await GeocodingService.resolve(txt);
+                                  setState(() {
+                                    _startLat = r.lat;
+                                    _startLng = r.lng;
+                                  });
+                                  // debug
+                                  print('preview resolved start: $txt');
+                                } catch (e) {
+                                  if (mounted)
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                            content: Text(
+                                                'Start konnte nicht aufgelöst werden: $e')));
+                                }
+                              },
+                            ),
+                          ),
+                          SizedBox(
+                            width: fieldWidth,
+                            child: PlaceInput(
+                              inlineAutocomplete: true,
+                              label: '🏁 Zielort/PLZ',
+                              hint: 'Ziel eingeben',
+                              controller: _destCtl,
+                              initialText: _destCtl.text,
+                              onChanged: (v) => _destCtl.text = v,
+                              onConfirmed: (v) async {
+                                final txt = v.trim();
+                                if (txt.isEmpty) return;
+                                // store resolved preview (do not overwrite controller)
+                                setState(() => _resolvedDestination = txt);
+                                try {
+                                  final r = await GeocodingService.resolve(txt);
+                                  setState(() {
+                                    _destLat = r.lat;
+                                    _destLng = r.lng;
+                                  });
+                                  // debug
+                                  print('preview resolved destination: $txt');
+                                } catch (e) {
+                                  if (mounted)
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                            content: Text(
+                                                'Ziel konnte nicht aufgelöst werden: $e')));
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
                 Padding(
                   padding: pad,
-                  child: Row(
+                  child: ExpansionTile(
+                    title: const Text('Weitere Einstellungen'),
+                    subtitle: const Text(
+                      'Zwischenstopp, Lenkzeiten, Fähre und Geschwindigkeit',
+                    ),
                     children: [
-                      Expanded(
-                        child: PlaceInput(
-                          inlineAutocomplete: true,
-                          label: '📍 Startort/PLZ',
-                          hint: 'Start eingeben',
-                          controller: _startCtl,
-                          initialText: _startCtl.text,
-                          onChanged: (v) => _startCtl.text = v,
-                          onConfirmed: (v) async {
-                            final txt = v.trim();
-                            if (txt.isEmpty) return;
-                            // store resolved preview (do not overwrite controller)
-                            setState(() => _resolvedStart = txt);
-                            // attempt to resolve coordinates for routing, but keep controller as-is
-                            try {
-                              final r = await GeocodingService.resolve(txt);
-                              setState(() {
-                                _startLat = r.lat;
-                                _startLng = r.lng;
-                              });
-                              // debug
-                              print('preview resolved start: $txt');
-                            } catch (e) {
-                              if (mounted)
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                    content: Text(
-                                        'Start konnte nicht aufgelöst werden: $e')));
-                            }
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: PlaceInput(
-                          inlineAutocomplete: true,
-                          label: '🏁 Zielort/PLZ',
-                          hint: 'Ziel eingeben',
-                          controller: _destCtl,
-                          initialText: _destCtl.text,
-                          onChanged: (v) => _destCtl.text = v,
-                          onConfirmed: (v) async {
-                            final txt = v.trim();
-                            if (txt.isEmpty) return;
-                            // store resolved preview (do not overwrite controller)
-                            setState(() => _resolvedDestination = txt);
-                            try {
-                              final r = await GeocodingService.resolve(txt);
-                              setState(() {
-                                _destLat = r.lat;
-                                _destLng = r.lng;
-                              });
-                              // debug
-                              print('preview resolved destination: $txt');
-                            } catch (e) {
-                              if (mounted)
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                    content: Text(
-                                        'Ziel konnte nicht aufgelöst werden: $e')));
-                            }
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: pad,
-                  child: Row(
-                    children: [
-                      Expanded(
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
                         child: PlaceInput(
                           inlineAutocomplete: true,
                           label: '📍 Zwischenziel',
@@ -1060,8 +1133,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 }
                               });
 
-                              debugPrint('intermediate stop resolved: ${res.description}');
-                              debugPrint('intermediate stop applied to field: ${res.description}');
+                              debugPrint(
+                                  'intermediate stop resolved: ${res.description}');
+                              debugPrint(
+                                  'intermediate stop applied to field: ${res.description}');
                             } catch (e) {
                               setState(() {
                                 _stopCtl.text = t;
@@ -1079,11 +1154,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                 }
                               });
 
-                              debugPrint('intermediate stop applied to field (raw): $t');
+                              debugPrint(
+                                  'intermediate stop applied to field (raw): $t');
 
                               if (mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Zwischenziel konnte nicht aufgelöst werden: $e')),
+                                  SnackBar(
+                                      content: Text(
+                                          'Zwischenziel konnte nicht aufgelöst werden: $e')),
                                 );
                               }
                             }
@@ -1096,8 +1174,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Padding(
                   padding: pad,
                   child: ExpansionTile(
-                    title: const Text(
-                        '⏳ Abfahrt & Zwischeneinstieg + 🕓 Manuelle Abfahrt (einblenden)'),
+                    title: const Text('Abfahrt und bisherige Lenkzeit'),
                     children: [
                       LayoutBuilder(
                         builder: (ctx, box) {
@@ -1133,15 +1210,56 @@ class _HomeScreenState extends State<HomeScreen> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      Text('Bereits gefahren',
+                                      Text('Heute bereits gefahren',
                                           style: Theme.of(context)
                                               .textTheme
                                               .titleSmall),
                                       const SizedBox(height: 8),
                                       _durationField(
-                                        'Bereits gefahren',
+                                        'Heute bereits gefahren',
                                         _drivenMin,
                                         (v) => setState(() => _drivenMin = v),
+                                        showLabel: false,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Theme.of(context)
+                                          .dividerColor
+                                          .withValues(alpha: 0.6),
+                                    ),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 8),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Seit der letzten Lenkpause',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleSmall),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Zeit seit der letzten vollständigen 45-Minuten-Pause',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall,
+                                      ),
+                                      const SizedBox(height: 8),
+                                      _durationField(
+                                        'Seit der letzten Lenkpause',
+                                        _continuousDrivenMin,
+                                        (v) => setState(
+                                            () => _continuousDrivenMin = v),
                                         showLabel: false,
                                       ),
                                     ],
@@ -1183,24 +1301,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 8),
-                                // Geschwindigkeit
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 4.0, vertical: 6.0),
-                                  child: Row(
-                                    children: [
-                                      Expanded(
-                                        child: _slider(
-                                          'Ø-Geschwindigkeit (km/h)',
-                                          _avgKmh,
-                                          60,
-                                          120,
-                                          (v) => setState(() => _avgKmh = v),
-                                        ),
-                                      )
-                                    ],
-                                  ),
-                                ),
+                                const SizedBox(height: 8),
+                                _speedProfileInput(),
                               ],
                             ),
                           );
@@ -1386,7 +1488,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Padding(
                   padding: pad,
                   child: ExpansionTile(
-                    title: const Text('🛌 Lenk-/Ruhezeit & Tankpause'),
+                    title: const Text('Lenk- und Ruhezeiten'),
                     children: [
                       const Padding(
                         padding: EdgeInsets.only(bottom: 6),
@@ -1429,6 +1531,17 @@ class _HomeScreenState extends State<HomeScreen> {
                             selected: _tankpause,
                             onSelected: (v) => setState(() => _tankpause = v),
                           ),
+                          FilterChip(
+                            label: const Text('Geteilte Pause 15 + 30 min'),
+                            selected: _splitBreak,
+                            onSelected: (v) => setState(() => _splitBreak = v),
+                          ),
+                          FilterChip(
+                            label: const Text('Wochenruhe vor Abfahrt fällig'),
+                            selected: _weeklyRestDue,
+                            onSelected: (v) =>
+                                setState(() => _weeklyRestDue = v),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 8),
@@ -1440,13 +1553,22 @@ class _HomeScreenState extends State<HomeScreen> {
                 Padding(
                   padding: pad,
                   child: ExpansionTile(
-                    title: const Text('🛳️ Fähre (einblenden)'),
+                    title: const Text('Fähre'),
                     children: [
                       SwitchListTile(
                         title: const Text(
                             '🚢 Automatische Erkennung aktivieren (MVP Anzeige)'),
                         value: _autoFerry,
                         onChanged: (v) => setState(() => _autoFerry = v),
+                      ),
+                      SwitchListTile(
+                        title: const Text('Schlafkabine/Liegeplatz verfügbar'),
+                        subtitle: const Text(
+                          'Nur dann kann die Zeit an Bord als Ruhezeit gewertet werden.',
+                        ),
+                        value: _ferryRestEligible,
+                        onChanged: (value) =>
+                            setState(() => _ferryRestEligible = value),
                       ),
                       // WICHTIG: Kein "null"-DropdownItem, stattdessen hint verwenden
                       // --- Fähre Auswahl (mit robustem initialValue + Reset) ---
@@ -1658,27 +1780,49 @@ class _HomeScreenState extends State<HomeScreen> {
                 Padding(
                   padding: pad,
                   child: FilledButton.icon(
-                    icon: const Icon(Icons.route),
-                    label: const Text('📦 Berechnen & ETA anzeigen'),
-                    onPressed: _compute,
+                    icon: _calculating
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.route),
+                    label: Text(_calculating
+                        ? 'Route wird berechnet …'
+                        : 'Route berechnen'),
+                    onPressed: _calculating ? null : _compute,
                   ),
                 ),
+                if (_etaResult != null)
+                  Padding(
+                    padding: pad,
+                    child: TourResultView(
+                      result: _etaResult!,
+                      origin: _resultOrigin,
+                      destination: _resultDestination,
+                      roadMix: _resultRoadMix,
+                    ),
+                  ),
                 const SizedBox(height: 8),
                 Padding(
                   padding: pad,
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.map),
-                    label: const Text('🗺️ Karte (macOS) anzeigen'),
+                    label: const Text('Karte anzeigen'),
                     onPressed: () {
                       // Ensure window.open is triggered synchronously from user gesture to avoid popup blocking on web
                       if (kIsWeb) {
                         if (_stops.isEmpty) {
                           // ignore: avoid_print
                           print('[MapButton] using external web tab');
-                          openInNewTabWithName('about:blank', 'driverroute_map');
+                          openInNewTabWithName(
+                              'about:blank', 'driverroute_map');
                         } else {
                           // ignore: avoid_print
-                          print('[MapButton] using in-app map because waypoints are present');
+                          print(
+                              '[MapButton] using in-app map because waypoints are present');
                         }
                       }
                       _openMapOsm();
@@ -1694,7 +1838,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     subtitle: const Text('Technische Hinweise ein-/ausblenden'),
                   ),
                 ),
-                if (_log.isNotEmpty)
+                if (_showDetails && _log.isNotEmpty)
                   Padding(
                     padding: pad,
                     child: Column(
@@ -1710,32 +1854,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             child: Text(l),
                           ),
                       ],
-                    ),
-                  ),
-                if (_arrival != null)
-                  Padding(
-                    padding: pad,
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.green.shade200),
-                        ),
-                        child: Column(
-                          children: [
-                            const Text('✅ Ankunftszeit',
-                                style: TextStyle(
-                                    color: Colors.green,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w800)),
-                            const SizedBox(height: 8),
-                            Text(DateFormat('EEEE, dd.MM.yyyy – HH:mm', 'de')
-                                .format(_arrival!)),
-                          ],
-                        ),
-                      ),
                     ),
                   ),
                 const SizedBox(height: 24),
@@ -1786,6 +1904,56 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ],
+    );
+  }
+
+  Widget _speedProfileInput() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.6),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Geschwindigkeitsprofil',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              for (final profile in SpeedProfile.values)
+                ChoiceChip(
+                  label: Text(profile.label),
+                  selected: _speedProfile == profile,
+                  onSelected: (_) => setState(() => _speedProfile = profile),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _speedProfile.description,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (_speedProfile == SpeedProfile.custom) ...[
+            const SizedBox(height: 6),
+            _slider(
+              'Eigener Planungsschnitt',
+              _avgKmh,
+              40,
+              90,
+              (v) => setState(() => _avgKmh = v),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

@@ -1,6 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:intl/intl.dart';
 
-/// Fahrregeln / Optionen
+/// Verfügbare Ausnahmen und optionale Stopps für die Planung.
+///
+/// Die Schalter beschreiben noch verfügbare Kontingente innerhalb der
+/// aktuellen Woche. Eine tägliche Ruhezeit setzt diese Kontingente nicht
+/// zurück.
 class DriveRulesConfig {
   final bool tenHourDay1;
   final bool tenHourDay2;
@@ -8,6 +14,8 @@ class DriveRulesConfig {
   final bool nineHourRest2;
   final bool nineHourRest3;
   final bool tankPause;
+  final bool splitBreak;
+  final bool weeklyRestDue;
 
   const DriveRulesConfig({
     required this.tenHourDay1,
@@ -16,264 +24,620 @@ class DriveRulesConfig {
     required this.nineHourRest2,
     required this.nineHourRest3,
     required this.tankPause,
+    this.splitBreak = false,
+    this.weeklyRestDue = false,
   });
 }
 
+enum EtaEventType {
+  start,
+  drive,
+  breakTime,
+  dailyRest,
+  weeklyRest,
+  tank,
+  wait,
+  ferry,
+  stop,
+  destination,
+  notice,
+}
+
+/// Ein strukturiertes Ereignis im Tourablauf.
+///
+/// [text] bleibt aus Kompatibilitätsgründen erhalten und wird ausschließlich
+/// in der optionalen Debugansicht angezeigt. Die Fahreransicht verwendet die
+/// übrigen Felder direkt.
 class EtaStep {
   final String text;
-  EtaStep(this.text);
+  final EtaEventType type;
+  final String? title;
+  final String? detail;
+  final DateTime? start;
+  final DateTime? end;
+  final double? distanceKm;
+  final bool? restSatisfied;
+  final bool technical;
+
+  const EtaStep(
+    this.text, {
+    this.type = EtaEventType.notice,
+    this.title,
+    this.detail,
+    this.start,
+    this.end,
+    this.distanceKm,
+    this.restSatisfied,
+    this.technical = false,
+  });
+
+  Duration get duration =>
+      start != null && end != null ? end!.difference(start!) : Duration.zero;
+}
+
+class EtaSummary {
+  final double distanceKm;
+  final double averageKmh;
+  final int drivingMinutes;
+  final int breakMinutes;
+  final int restMinutes;
+  final int waitingMinutes;
+  final int ferryMinutes;
+  final int tankMinutes;
+  final int tenHourDaysUsed;
+  final int reducedDailyRestsUsed;
+
+  const EtaSummary({
+    required this.distanceKm,
+    required this.averageKmh,
+    required this.drivingMinutes,
+    required this.breakMinutes,
+    required this.restMinutes,
+    required this.waitingMinutes,
+    required this.ferryMinutes,
+    required this.tankMinutes,
+    required this.tenHourDaysUsed,
+    required this.reducedDailyRestsUsed,
+  });
+
+  int get nonDrivingMinutes =>
+      breakMinutes + restMinutes + waitingMinutes + ferryMinutes + tankMinutes;
 }
 
 class EtaResult {
   final List<EtaStep> steps;
   final DateTime? arrival;
-  const EtaResult(this.steps, this.arrival);
+  final EtaSummary? summary;
+
+  const EtaResult(this.steps, this.arrival, {this.summary});
 }
 
-/// Interner Fahrzustand, damit wir über Segmente hinweg korrekt weiterrechnen
 class _DriveState {
   DateTime current;
-  int tenUsed;
-  int nineUsed;
-  bool tankUsed;
+  int continuousDriveMin;
+  int dailyDriveMin;
+  int dutyElapsedMin;
+  int tenHourDaysRemaining;
+  int reducedRestsRemaining;
+  int tenHourDaysUsed = 0;
+  int reducedRestsUsed = 0;
+  bool tankUsed = false;
+  bool splitFirstPartTaken = false;
 
   _DriveState({
     required this.current,
-    this.tenUsed = 0,
-    this.nineUsed = 0,
-    this.tankUsed = false,
+    required this.continuousDriveMin,
+    required this.dailyDriveMin,
+    required this.dutyElapsedMin,
+    required this.tenHourDaysRemaining,
+    required this.reducedRestsRemaining,
   });
 }
 
+class _Planner {
+  final DriveRulesConfig rules;
+  final double avgKmh;
+  final List<EtaStep> steps = [];
+  final _DriveState state;
+
+  _Planner({
+    required DateTime start,
+    required int alreadyDrivenMin,
+    required int continuousDrivenMin,
+    required int dutyTimeOffsetMin,
+    required this.avgKmh,
+    required this.rules,
+  }) : state = _DriveState(
+          current: start,
+          continuousDriveMin: math.max(0, continuousDrivenMin),
+          dailyDriveMin: math.max(0, alreadyDrivenMin),
+          dutyElapsedMin: math.max(
+            math.max(0, dutyTimeOffsetMin),
+            math.max(0, alreadyDrivenMin),
+          ),
+          tenHourDaysRemaining:
+              (rules.tenHourDay1 ? 1 : 0) + (rules.tenHourDay2 ? 1 : 0),
+          reducedRestsRemaining: (rules.nineHourRest1 ? 1 : 0) +
+              (rules.nineHourRest2 ? 1 : 0) +
+              (rules.nineHourRest3 ? 1 : 0),
+        ) {
+    if (state.dailyDriveMin > 540 && state.tenHourDaysRemaining > 0) {
+      state.tenHourDaysRemaining -= 1;
+      state.tenHourDaysUsed += 1;
+    }
+  }
+
+  int get _dailyDriveLimit => state.tenHourDaysRemaining > 0 ? 600 : 540;
+
+  int get _dailyDutyLimit => state.reducedRestsRemaining > 0 ? 900 : 780;
+
+  void addStart(String location) {
+    final details = <String>[];
+    if (state.dailyDriveMin > 0) {
+      details.add('${_fmtHm(state.dailyDriveMin)} heute bereits gefahren');
+    }
+    if (state.continuousDriveMin > 0 &&
+        state.continuousDriveMin != state.dailyDriveMin) {
+      details.add(
+          '${_fmtHm(state.continuousDriveMin)} seit der letzten Lenkpause');
+    }
+    if (state.dutyElapsedMin > 0) {
+      details.add('${_fmtHm(state.dutyElapsedMin)} bisherige Einsatzzeit');
+    }
+    steps.add(EtaStep(
+      '🚛 Start ${_fmt(state.current)}${location.isEmpty ? '' : ' – $location'}',
+      type: EtaEventType.start,
+      title: 'Start',
+      detail: details.isEmpty ? location : '$location\n${details.join(' · ')}',
+      start: state.current,
+      end: state.current,
+    ));
+
+    if (rules.weeklyRestDue) {
+      _addWeeklyRest();
+    } else if (state.dailyDriveMin >= _dailyDriveLimit ||
+        state.dutyElapsedMin >= _dailyDutyLimit) {
+      _addDailyRest();
+    } else if (state.continuousDriveMin >= 270) {
+      _addBreak(45, title: 'Lenkpause vor Weiterfahrt');
+    }
+  }
+
+  void planLeg({required int driveMinutes, required double km}) {
+    if (driveMinutes <= 0 || km <= 0) return;
+
+    var remaining = driveMinutes;
+    final kmPerMinute = km / driveMinutes;
+    final tankTrigger = math.min(120, math.max(30, driveMinutes ~/ 2));
+    var legDriven = 0;
+
+    while (remaining > 0) {
+      if (state.dailyDriveMin >= _dailyDriveLimit ||
+          state.dutyElapsedMin >= _dailyDutyLimit) {
+        _addDailyRest();
+        continue;
+      }
+
+      if (state.continuousDriveMin >= 270) {
+        _addBreak(state.splitFirstPartTaken ? 30 : 45);
+        continue;
+      }
+
+      var chunk = math.min(remaining, 270 - state.continuousDriveMin);
+      chunk = math.min(chunk, _dailyDriveLimit - state.dailyDriveMin);
+      chunk = math.min(chunk, _dailyDutyLimit - state.dutyElapsedMin);
+
+      if (rules.splitBreak &&
+          !state.splitFirstPartTaken &&
+          state.continuousDriveMin < 150 &&
+          remaining > 270 - state.continuousDriveMin) {
+        chunk = math.min(chunk, 150 - state.continuousDriveMin);
+      }
+
+      if (rules.tankPause && !state.tankUsed && legDriven < tankTrigger) {
+        chunk = math.min(chunk, tankTrigger - legDriven);
+      }
+
+      if (chunk <= 0) {
+        if (rules.tankPause && !state.tankUsed && legDriven >= tankTrigger) {
+          _addTankPause();
+        } else {
+          _addDailyRest();
+        }
+        continue;
+      }
+
+      final eventStart = state.current;
+      state.current = state.current.add(Duration(minutes: chunk));
+      state.continuousDriveMin += chunk;
+      state.dailyDriveMin += chunk;
+      state.dutyElapsedMin += chunk;
+      legDriven += chunk;
+      remaining -= chunk;
+
+      if (state.dailyDriveMin > 540 && state.tenHourDaysRemaining > 0) {
+        state.tenHourDaysRemaining -= 1;
+        state.tenHourDaysUsed += 1;
+      }
+
+      final eventKm = chunk * kmPerMinute;
+      steps.add(EtaStep(
+        '🛣 Fahrt ${_fmtHm(chunk)} · ${eventKm.toStringAsFixed(0)} km '
+        '(${DateFormat('HH:mm').format(eventStart)}–${DateFormat('HH:mm').format(state.current)})',
+        type: EtaEventType.drive,
+        title: 'Fahrt · ${_fmtHm(chunk)}',
+        detail: 'ca. ${eventKm.toStringAsFixed(0)} km',
+        start: eventStart,
+        end: state.current,
+        distanceKm: eventKm,
+      ));
+
+      if (remaining <= 0) break;
+
+      if (rules.tankPause && !state.tankUsed && legDriven >= tankTrigger) {
+        _addTankPause();
+      }
+
+      final dailyLimitReached = state.dailyDriveMin >= _dailyDriveLimit ||
+          state.dutyElapsedMin >= _dailyDutyLimit;
+      if (dailyLimitReached) {
+        _addDailyRest();
+      } else if (rules.splitBreak &&
+          !state.splitFirstPartTaken &&
+          state.continuousDriveMin == 150) {
+        _addBreak(15, title: 'Geteilte Lenkpause · Teil 1');
+        state.splitFirstPartTaken = true;
+      } else if (state.continuousDriveMin >= 270) {
+        _addBreak(
+          state.splitFirstPartTaken ? 30 : 45,
+          title: state.splitFirstPartTaken
+              ? 'Geteilte Lenkpause · Teil 2'
+              : 'Lenkpause',
+        );
+      }
+    }
+  }
+
+  void addPortArrival(String port) {
+    steps.add(EtaStep(
+      '⚓ Ankunft Hafen $port: ${_fmt(state.current)}',
+      type: EtaEventType.stop,
+      title: 'Ankunft Hafen',
+      detail: port,
+      start: state.current,
+      end: state.current,
+    ));
+  }
+
+  void addWait(DateTime departure) {
+    if (!departure.isAfter(state.current)) return;
+    final eventStart = state.current;
+    state.current = departure;
+    final minutes = departure.difference(eventStart).inMinutes;
+    state.dutyElapsedMin += minutes;
+    steps.add(EtaStep(
+      '⏱ Wartezeit ${_fmtHm(minutes)} · Abfahrt ${_fmt(departure)}',
+      type: EtaEventType.wait,
+      title: 'Wartezeit am Hafen',
+      detail:
+          'Abfahrt der Fähre: ${DateFormat('EEE HH:mm', 'de').format(departure)}',
+      start: eventStart,
+      end: departure,
+    ));
+  }
+
+  void addFerry({
+    required String label,
+    required int durationMinutes,
+    required bool restEligible,
+  }) {
+    final eventStart = state.current;
+    state.current = state.current.add(Duration(minutes: durationMinutes));
+    final requiredRest = state.reducedRestsRemaining > 0 ? 540 : 660;
+    final restSatisfied = restEligible && durationMinutes >= requiredRest;
+
+    steps.add(EtaStep(
+      '⛴ Fähre $label · ${_fmtHm(durationMinutes)} · Ankunft ${_fmt(state.current)}',
+      type: EtaEventType.ferry,
+      title: 'Fähre $label',
+      detail: restSatisfied
+          ? 'Tägliche Ruhezeit mit Schlafkabine/Liegeplatz erfüllt'
+          : restEligible
+              ? 'Noch keine vollständige tägliche Ruhezeit'
+              : 'Nicht als Ruhezeit gewertet: Schlafkabine/Liegeplatz nicht bestätigt',
+      start: eventStart,
+      end: state.current,
+      restSatisfied: restSatisfied,
+    ));
+
+    if (restSatisfied) {
+      if (requiredRest == 540) {
+        state.reducedRestsRemaining -= 1;
+        state.reducedRestsUsed += 1;
+      }
+      _resetDailyState();
+    } else {
+      state.dutyElapsedMin += durationMinutes;
+    }
+  }
+
+  void addDestination(String location) {
+    steps.add(EtaStep(
+      '🏁 Ziel ${_fmt(state.current)}${location.isEmpty ? '' : ' – $location'}',
+      type: EtaEventType.destination,
+      title: 'Ziel',
+      detail: location,
+      start: state.current,
+      end: state.current,
+    ));
+  }
+
+  void addNotice(String text) {
+    steps.add(EtaStep(text, technical: true));
+  }
+
+  void _addBreak(int minutes, {String title = 'Lenkpause'}) {
+    final eventStart = state.current;
+    state.current = state.current.add(Duration(minutes: minutes));
+    state.dutyElapsedMin += minutes;
+    steps.add(EtaStep(
+      '☕ $title ${_fmtHm(minutes)} '
+      '(${DateFormat('HH:mm').format(eventStart)}–${DateFormat('HH:mm').format(state.current)})',
+      type: EtaEventType.breakTime,
+      title: '$title · ${_fmtHm(minutes)}',
+      start: eventStart,
+      end: state.current,
+    ));
+    if ((minutes >= 30 && state.splitFirstPartTaken) || minutes >= 45) {
+      state.continuousDriveMin = 0;
+      state.splitFirstPartTaken = false;
+    }
+  }
+
+  void _addTankPause() {
+    final eventStart = state.current;
+    state.current = state.current.add(const Duration(minutes: 30));
+    state.dutyElapsedMin += 30;
+    state.tankUsed = true;
+    steps.add(EtaStep(
+      '⛽ Tankstopp 30 min '
+      '(${DateFormat('HH:mm').format(eventStart)}–${DateFormat('HH:mm').format(state.current)})',
+      type: EtaEventType.tank,
+      title: 'Tankstopp · 30 min',
+      detail: 'Zählt als sonstige Arbeit, nicht als Lenkpause',
+      start: eventStart,
+      end: state.current,
+    ));
+  }
+
+  void _addDailyRest() {
+    final reduced = state.reducedRestsRemaining > 0;
+    final minutes = reduced ? 540 : 660;
+    final eventStart = state.current;
+    state.current = state.current.add(Duration(minutes: minutes));
+    if (reduced) {
+      state.reducedRestsRemaining -= 1;
+      state.reducedRestsUsed += 1;
+    }
+    steps.add(EtaStep(
+      '🌙 ${reduced ? 'Verkürzte' : 'Reguläre'} Tagesruhe ${_fmtHm(minutes)} '
+      '(${DateFormat('EEE HH:mm', 'de').format(eventStart)}–${DateFormat('EEE HH:mm', 'de').format(state.current)})',
+      type: EtaEventType.dailyRest,
+      title:
+          '${reduced ? 'Verkürzte' : 'Reguläre'} Tagesruhe · ${_fmtHm(minutes)}',
+      detail: 'Neue tägliche Lenkzeit beginnt danach',
+      start: eventStart,
+      end: state.current,
+      restSatisfied: true,
+    ));
+    _resetDailyState();
+  }
+
+  void _addWeeklyRest() {
+    const minutes = 45 * 60;
+    final eventStart = state.current;
+    state.current = state.current.add(const Duration(minutes: minutes));
+    steps.add(EtaStep(
+      '🛏 Wochenruhe 45h (${_fmt(eventStart)}–${_fmt(state.current)})',
+      type: EtaEventType.weeklyRest,
+      title: 'Reguläre Wochenruhe · 45 h',
+      detail: 'Vor der Weiterfahrt eingeplant',
+      start: eventStart,
+      end: state.current,
+      restSatisfied: true,
+    ));
+    _resetDailyState();
+  }
+
+  void _resetDailyState() {
+    state.continuousDriveMin = 0;
+    state.dailyDriveMin = 0;
+    state.dutyElapsedMin = 0;
+    state.splitFirstPartTaken = false;
+  }
+
+  EtaResult finish(double totalKm) {
+    int driving = 0;
+    int breaks = 0;
+    int rests = 0;
+    int waiting = 0;
+    int ferry = 0;
+    int tank = 0;
+    for (final step in steps) {
+      final minutes = step.duration.inMinutes;
+      switch (step.type) {
+        case EtaEventType.drive:
+          driving += minutes;
+        case EtaEventType.breakTime:
+          breaks += minutes;
+        case EtaEventType.dailyRest:
+        case EtaEventType.weeklyRest:
+          rests += minutes;
+        case EtaEventType.wait:
+          waiting += minutes;
+        case EtaEventType.ferry:
+          ferry += minutes;
+        case EtaEventType.tank:
+          tank += minutes;
+        case EtaEventType.start:
+        case EtaEventType.stop:
+        case EtaEventType.destination:
+        case EtaEventType.notice:
+          break;
+      }
+    }
+    return EtaResult(
+      List.unmodifiable(steps),
+      state.current,
+      summary: EtaSummary(
+        distanceKm: totalKm,
+        averageKmh: avgKmh,
+        drivingMinutes: driving,
+        breakMinutes: breaks,
+        restMinutes: rests,
+        waitingMinutes: waiting,
+        ferryMinutes: ferry,
+        tankMinutes: tank,
+        tenHourDaysUsed: state.tenHourDaysUsed,
+        reducedDailyRestsUsed: state.reducedRestsUsed,
+      ),
+    );
+  }
+}
+
 class EtaCalculator {
-  // ======= Bestehende einfache Ein-Segment-Berechnung =======
   static EtaResult compute({
     required DateTime start,
     required int alreadyDrivenMin,
+    int? alreadyDrivenSinceBreakMin,
     required int dutyTimeOffsetMin,
     required double km,
     required double avgKmh,
     required DriveRulesConfig rules,
+    String startLabel = '',
+    String destinationLabel = '',
   }) {
-    final steps = <EtaStep>[];
-    var state = _DriveState(current: start);
-
-    // Einsatzzeit rückrechnen
-    if (dutyTimeOffsetMin > 0) {
-      state.current =
-          state.current.subtract(Duration(minutes: dutyTimeOffsetMin));
-      steps.add(EtaStep(
-          '🔁 Startzeit korrigiert (Einsatzzeit): ${_fmt(state.current)}'));
-    }
-
-    // Gesamtfahrzeit dieses Segments
-    var totalMin = _minsFromKm(km, avgKmh);
-
-    // Bisher gefahrene Minuten anrechnen
-    if (alreadyDrivenMin > 0) {
-      totalMin += alreadyDrivenMin;
-      steps.add(
-          EtaStep('🕒 Fahrtzeit bisher angerechnet: ${alreadyDrivenMin} min'));
-    }
-
-    _runLeg(
-        steps: steps,
-        state: state,
-        totalMin: totalMin,
-        rules: rules,
-        avgKmh: avgKmh);
-
-    return EtaResult(steps, state.current);
+    final planner = _Planner(
+      start: start,
+      alreadyDrivenMin: alreadyDrivenMin,
+      continuousDrivenMin: alreadyDrivenSinceBreakMin ?? alreadyDrivenMin,
+      dutyTimeOffsetMin: dutyTimeOffsetMin,
+      avgKmh: avgKmh,
+      rules: rules,
+    );
+    planner.addStart(startLabel);
+    planner.planLeg(driveMinutes: _minsFromKm(km, avgKmh), km: km);
+    planner.addDestination(destinationLabel);
+    return planner.finish(km);
   }
 
-  // ======= NEU: Zwei Segmente + Fähre dazwischen =======
-  /// Rechnet:
-  /// 1) Start → Abfahrtshafen (kmBefore)
-  /// 2) Warten bis Abfahrt (aus departuresHHmm, optional manuell)
-  /// 3) Fähre (ferryDurationMin), zählt als Ruhe, wenn >= 540
-  /// 4) Ankunftshafen → Ziel (kmAfter)
   static EtaResult computeTwoLegsWithFerry({
     required DateTime start,
     required int alreadyDrivenMin,
+    int? alreadyDrivenSinceBreakMin,
     required int dutyTimeOffsetMin,
-    required double kmBefore, // z. B. Hamburg → Bari
-    required double kmAfter, // z. B. Igoumenitsa → Sindos
+    required double kmBefore,
+    required double kmAfter,
     required double avgKmh,
     required DriveRulesConfig rules,
-    required String ferryLabel, // z. B. "Bari–Igoumenitsa (Grimaldi)"
-    required int ferryDurationMin, // z. B. 600 für 10h
-    List<String>? departuresHHmm, // lokale Abfahrtzeiten "HH:mm"
-    DateTime? manualDeparture, // hat Vorrang gegenüber departuresHHmm
+    required String ferryLabel,
+    required int ferryDurationMin,
+    List<String>? departuresHHmm,
+    DateTime? manualDeparture,
+    String startLabel = '',
+    String destinationLabel = '',
+    String departurePort = '',
+    bool ferryRestEligible = false,
   }) {
-    final steps = <EtaStep>[];
-    var state = _DriveState(current: start);
+    final planner = _Planner(
+      start: start,
+      alreadyDrivenMin: alreadyDrivenMin,
+      continuousDrivenMin: alreadyDrivenSinceBreakMin ?? alreadyDrivenMin,
+      dutyTimeOffsetMin: dutyTimeOffsetMin,
+      avgKmh: avgKmh,
+      rules: rules,
+    );
+    planner.addStart(startLabel);
+    planner.planLeg(
+      driveMinutes: _minsFromKm(kmBefore, avgKmh),
+      km: kmBefore,
+    );
+    planner.addPortArrival(departurePort);
 
-    // Einsatzzeit rückrechnen
-    if (dutyTimeOffsetMin > 0) {
-      state.current =
-          state.current.subtract(Duration(minutes: dutyTimeOffsetMin));
-      steps.add(EtaStep(
-          '🔁 Startzeit korrigiert (Einsatzzeit): ${_fmt(state.current)}'));
-    }
-
-    // ggf. bereits gefahrene Minuten in das erste Segment einrechnen
-    var seg1Min = _minsFromKm(kmBefore, avgKmh) +
-        (alreadyDrivenMin > 0 ? alreadyDrivenMin : 0);
-    if (alreadyDrivenMin > 0) {
-      steps.add(
-          EtaStep('🕒 Fahrtzeit bisher angerechnet: ${alreadyDrivenMin} min'));
-    }
-
-    // --- Segment 1: bis zum Abfahrtshafen
-    _runLeg(
-        steps: steps,
-        state: state,
-        totalMin: seg1Min,
-        rules: rules,
-        avgKmh: avgKmh);
-
-    // --- Warten auf Fähre (manuell oder nächste passende Abfahrt)
-    DateTime departTime;
-    if (manualDeparture != null) {
-      // Manuell vorgegeben
-      if (manualDeparture.isAfter(state.current)) {
-        final wait = manualDeparture.difference(state.current).inMinutes;
-        steps.add(EtaStep(
-            '⏱ Wartezeit bis Fähre: ${_fmtHM(wait)} → Abfahrt: ${DateFormat('HH:mm').format(manualDeparture)}'));
-      } else {
-        steps.add(EtaStep(
-            '⚠️ Manuelle Fährzeit liegt nicht in der Zukunft – Abfahrt sofort angesetzt.'));
-      }
-      departTime = manualDeparture;
-    } else if (departuresHHmm != null && departuresHHmm.isNotEmpty) {
-      departTime = _nextDepartureFromList(state.current, departuresHHmm);
-      final wait = departTime.difference(state.current).inMinutes;
-      if (wait > 0) {
-        steps.add(EtaStep(
-            '⏱ Wartezeit bis Fähre: ${_fmtHM(wait)} → Abfahrt: ${DateFormat('HH:mm').format(departTime)}'));
-      }
+    DateTime departure;
+    if (manualDeparture != null &&
+        manualDeparture.isAfter(planner.state.current)) {
+      departure = manualDeparture;
+    } else if (manualDeparture != null) {
+      departure = planner.state.current;
+      planner.addNotice(
+          '⚠️ Die manuelle Fährabfahrt lag vor der Hafenankunft und wurde auf „sofort“ gesetzt.');
     } else {
-      // Keine Zeiten vorhanden → sofort
-      departTime = state.current;
-      steps.add(EtaStep('⏱ Keine Fährzeiten definiert → Abfahrt sofort.'));
+      departure = _nextDepartureFromList(
+        planner.state.current,
+        departuresHHmm ?? const [],
+      );
     }
-
-    // --- Fähre fährt
-    state.current = departTime.add(Duration(minutes: ferryDurationMin));
-    steps.add(EtaStep(
-        '🚢 Fähre $ferryLabel ${_fmtHM(ferryDurationMin)} → Ankunft: ${_fmt(state.current)}'));
-
-    // --- Ruhe während Fähre erfüllt?
-    if (ferryDurationMin >= 540) {
-      steps.add(EtaStep(
-          '✅ Pause während der Fähre vollständig erfüllt (≥ 9h). Zähler werden zurückgesetzt.'));
-      // Zähler resetten, Tankpause bleibt verbraucht, wenn vorher genutzt (realistisch ist: Reset der Tagesfahrleistung/Zähler, Tank bleibt egal)
-      state.tenUsed = 0;
-      state.nineUsed = 0;
-      // Tankpause absichtlich NICHT zurücksetzen – sie ist ein optionaler Bonus und wurde bereits genutzt.
-    }
-
-    // --- Segment 2: vom Ankunftshafen zum Ziel
-    final seg2Min = _minsFromKm(kmAfter, avgKmh);
-    _runLeg(
-        steps: steps,
-        state: state,
-        totalMin: seg2Min,
-        rules: rules,
-        avgKmh: avgKmh);
-
-    return EtaResult(steps, state.current);
-  }
-
-  // ======= Hilfsroutinen =======
-
-  static void _runLeg({
-    required List<EtaStep> steps,
-    required _DriveState state,
-    required int totalMin,
-    required DriveRulesConfig rules,
-    required double avgKmh,
-  }) {
-    while (totalMin > 0) {
-      final allow10 = (state.tenUsed == 0 && rules.tenHourDay1) ||
-          (state.tenUsed == 1 && rules.tenHourDay2);
-      final maxDrive = allow10 ? 600 : 540;
-      final driven = totalMin > maxDrive ? maxDrive : totalMin;
-
-      int pauseMin;
-      if (driven >= 600) {
-        pauseMin = 90;
-        state.tenUsed += 1;
-      } else if (driven >= 540) {
-        pauseMin = 45;
-      } else {
-        pauseMin = (driven ~/ 270) * 45;
-      }
-
-      if (rules.tankPause && !state.tankUsed) {
-        pauseMin += 30;
-        state.tankUsed = true;
-      }
-
-      final end = state.current.add(Duration(minutes: driven + pauseMin));
-      steps.add(EtaStep(
-          '📆 ${DateFormat('EEE HH:mm').format(state.current)} → ${driven ~/ 60}h${(driven % 60).toString().padLeft(2, '0')} + ${pauseMin} min → ${DateFormat('HH:mm').format(end)}'));
-      state.current = end;
-      totalMin -= driven;
-      if (totalMin <= 0) break;
-
-      // Ruhezeit zwischen Fahrblöcken
-      final canNine = (state.nineUsed == 0 && rules.nineHourRest1) ||
-          (state.nineUsed == 1 && rules.nineHourRest2) ||
-          (state.nineUsed == 2 && rules.nineHourRest3);
-      final rest = canNine ? 540 : 660;
-      state.current = state.current.add(Duration(minutes: rest));
-      steps.add(EtaStep(
-          '🌙 Ruhezeit ${rest ~/ 60}h → Neustart: ${_fmt(state.current)}'));
-      if (canNine) state.nineUsed += 1;
-    }
+    planner.addWait(departure);
+    planner.addFerry(
+      label: ferryLabel,
+      durationMinutes: ferryDurationMin,
+      restEligible: ferryRestEligible,
+    );
+    planner.planLeg(
+      driveMinutes: _minsFromKm(kmAfter, avgKmh),
+      km: kmAfter,
+    );
+    planner.addDestination(destinationLabel);
+    return planner.finish(kmBefore + kmAfter);
   }
 
   static int _minsFromKm(double km, double avgKmh) {
-    if (avgKmh <= 0) return 0;
+    if (km <= 0 || avgKmh <= 0) return 0;
     return (km / avgKmh * 60).round();
   }
 
-  static DateTime _nextDepartureFromList(DateTime now, List<String> hhmmList) {
-    // Sortiert und sucht die erste Abfahrt heute >= now, sonst morgen die erste
-    final parsed = hhmmList
-        .map((s) => s.trim())
-        .where((s) => RegExp(r'^\d{1,2}:\d{2}$').hasMatch(s))
-        .map((s) {
-      final p = s.split(':');
-      return TimeOfDayLite(int.parse(p[0]), int.parse(p[1]));
-    }).toList()
-      ..sort(
-          (a, b) => a.hour != b.hour ? a.hour - b.hour : a.minute - b.minute);
+  static DateTime _nextDepartureFromList(DateTime now, List<String> values) {
+    final parsed = <TimeOfDayLite>[];
+    for (final value in values) {
+      final match = RegExp(r'^(\d{1,2}):(\d{2})$').firstMatch(value.trim());
+      if (match == null) continue;
+      final hour = int.parse(match.group(1)!);
+      final minute = int.parse(match.group(2)!);
+      if (hour <= 23 && minute <= 59) {
+        parsed.add(TimeOfDayLite(hour, minute));
+      }
+    }
+    parsed.sort((a, b) => a.hour != b.hour
+        ? a.hour.compareTo(b.hour)
+        : a.minute.compareTo(b.minute));
+    if (parsed.isEmpty) return now;
 
-    for (final t in parsed) {
+    for (final time in parsed) {
       final candidate =
-          DateTime(now.year, now.month, now.day, t.hour, t.minute);
+          DateTime(now.year, now.month, now.day, time.hour, time.minute);
       if (!candidate.isBefore(now)) return candidate;
     }
-    // sonst: nächste am Folgetag
     final first = parsed.first;
     return DateTime(now.year, now.month, now.day, first.hour, first.minute)
         .add(const Duration(days: 1));
   }
-
-  static String _fmt(DateTime dt) => DateFormat('yyyy-MM-dd HH:mm').format(dt);
-
-  static String _fmtHM(int minutes) {
-    final h = minutes ~/ 60;
-    final m = minutes % 60;
-    return '${h}h${m.toString().padLeft(2, '0')}';
-  }
 }
 
-/// Minimaler Ersatz für TimeOfDay (ohne Flutter-Import hier)
 class TimeOfDayLite {
   final int hour;
   final int minute;
-  TimeOfDayLite(this.hour, this.minute);
+
+  const TimeOfDayLite(this.hour, this.minute);
+}
+
+String _fmt(DateTime value) =>
+    DateFormat('EEE, dd.MM. HH:mm', 'de').format(value);
+
+String _fmtHm(int minutes) {
+  final hours = minutes ~/ 60;
+  final rest = minutes % 60;
+  if (hours == 0) return '$rest min';
+  if (rest == 0) return '$hours h';
+  return '$hours h ${rest.toString().padLeft(2, '0')} min';
 }

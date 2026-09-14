@@ -52,6 +52,7 @@ lib/secrets.dart
 
 # Local env
 .env
+/ios/Flutter/GoogleMaps.xcconfig
 
 # Build & IDE
 /build/

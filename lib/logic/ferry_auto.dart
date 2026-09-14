@@ -53,12 +53,19 @@ class FerryAutoDetect {
     if (!mapsDirectCallsAllowed()) {
       if (mapsProxyConfigured()) {
         try {
-          final data = await proxyDirections(origin: origin, destination: destination, waypoints: waypoints, mode: 'driving', departureTime: 'now');
+          final data = await proxyDirections(
+              origin: origin,
+              destination: destination,
+              waypoints: waypoints,
+              mode: 'driving',
+              departureTime: 'now');
           final status = (data['status'] ?? 'UNKNOWN').toString();
           if (status != 'OK') {
             if (kDebugMode) {
               print('[FerryAutoDetect] Proxy Directions status: $status');
-              if (data.containsKey('error_message')) print('[FerryAutoDetect] proxy error_message: ${data['error_message']}');
+              if (data.containsKey('error_message'))
+                print(
+                    '[FerryAutoDetect] proxy error_message: ${data['error_message']}');
             }
             return DirectionsFetchResult(
               ok: false,
@@ -142,14 +149,16 @@ class FerryAutoDetect {
     // print('[FerryAutoDetect] GET $uri');
     // print masked URL (do not print API key)
     // ignore: avoid_print
-    print('[FerryAutoDetect] GET ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
+    print(
+        '[FerryAutoDetect] GET ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
 
     final res = await http.get(uri);
 
     // log HTTP problems to help diagnose API key restrictions on Android
     if (res.statusCode != 200) {
       // ignore: avoid_print
-      print('[FerryAutoDetect] HTTP ${res.statusCode} for ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
+      print(
+          '[FerryAutoDetect] HTTP ${res.statusCode} for ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
       // ignore: avoid_print
       print('[FerryAutoDetect] Response body: ${res.body}');
       return DirectionsFetchResult.error('HTTP_${res.statusCode}');
@@ -161,7 +170,8 @@ class FerryAutoDetect {
     // log non-OK status
     if (status != 'OK') {
       // ignore: avoid_print
-      print('[FerryAutoDetect] Directions status: $status for ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
+      print(
+          '[FerryAutoDetect] Directions status: $status for ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
       // ignore: avoid_print
       print('[FerryAutoDetect] Response body: ${res.body}');
       if (data.containsKey('error_message')) {
@@ -241,6 +251,7 @@ extension FerryAutoEta on FerryAutoDetect {
   Future<EtaResult> computeEtaWithOptionalFerry({
     required DateTime startTime,
     required int alreadyDrivenMin,
+    int? alreadyDrivenSinceBreakMin,
     required int dutyOffsetMin,
     required double avgKmh,
     required DriveRulesConfig rules,
@@ -249,6 +260,8 @@ extension FerryAutoEta on FerryAutoDetect {
     FerryRoute? autoOrManualFerry,
     DateTime? manualDeparture,
     List<String> waypoints = const [],
+    double? fallbackKm,
+    bool ferryRestEligible = false,
     // Optional context-sensitive guard callbacks. If provided, use these instead of a global guard.
     bool Function()? ferryPlannedGet,
     void Function(bool)? ferryPlannedSet,
@@ -258,33 +271,51 @@ extension FerryAutoEta on FerryAutoDetect {
     final bool alreadyPlanned =
         ferryPlannedGet != null ? ferryPlannedGet() : false;
     if (alreadyPlanned) {
-      final km = await _distanceSingle(origin: startAddress, destination: endAddress, waypoints: waypoints) ?? 0.0;
+      var km = await _distanceSingle(
+            origin: startAddress,
+            destination: endAddress,
+            waypoints: waypoints,
+          ) ??
+          0.0;
+      if (km <= 0 && fallbackKm != null && fallbackKm > 0) km = fallbackKm;
       final single = EtaCalculator.compute(
         start: startTime,
         alreadyDrivenMin: alreadyDrivenMin,
+        alreadyDrivenSinceBreakMin: alreadyDrivenSinceBreakMin,
         dutyTimeOffsetMin: dutyOffsetMin,
         km: km,
         avgKmh: avgKmh,
         rules: rules,
+        startLabel: startAddress,
+        destinationLabel: endAddress,
       );
       return EtaResult([
         EtaStep(
             '⚠️ Doppel-Trigger erkannt – Fähre wurde bereits geplant; Fallback auf Ein-Segment.'),
         ...single.steps
-      ], single.arrival);
+      ], single.arrival, summary: single.summary);
     }
 
     // If no ferry is requested, do the normal single-segment computation (do NOT set the guard)
     if (autoOrManualFerry == null) {
-      final fullKm = await _approxKm(startAddress, endAddress, waypoints: waypoints) ?? 0.0;
-      if (kDebugMode) debugPrint('[ETA] full route distance with waypoints: ${fullKm} km');
+      var fullKm =
+          await _approxKm(startAddress, endAddress, waypoints: waypoints) ??
+              0.0;
+      if (fullKm <= 0 && fallbackKm != null && fallbackKm > 0) {
+        fullKm = fallbackKm;
+      }
+      if (kDebugMode)
+        debugPrint('[ETA] full route distance with waypoints: ${fullKm} km');
       return EtaCalculator.compute(
         start: startTime,
         alreadyDrivenMin: alreadyDrivenMin,
+        alreadyDrivenSinceBreakMin: alreadyDrivenSinceBreakMin,
         dutyTimeOffsetMin: dutyOffsetMin,
         km: fullKm,
         avgKmh: avgKmh,
         rules: rules,
+        startLabel: startAddress,
+        destinationLabel: endAddress,
       );
     }
 
@@ -304,6 +335,10 @@ extension FerryAutoEta on FerryAutoDetect {
       if (kmBefore == 0.0) {
         kmBefore = await _approxKm(startAddress, fromPort) ?? 0.0;
       }
+      if (kmBefore <= 0) {
+        throw StateError(
+            'Distanz zum Abfahrtshafen konnte nicht ermittelt werden');
+      }
       distLogs.add(
           EtaStep('📍 Distanz ${startAddress} → ${fromPort}: ${kmBefore} km'));
 
@@ -319,13 +354,10 @@ extension FerryAutoEta on FerryAutoDetect {
         }
       }
       if (kmAfter == null || kmAfter == 0) {
-        kmAfter = 500.0; // conservative fallback estimate
-        distLogs.add(EtaStep(
-            '⚠️ Distanz ${toPort} → ${effectiveEnd} geschätzt (${kmAfter} km)'));
-      } else {
-        distLogs.add(
-            EtaStep('📍 Distanz ${toPort} → ${effectiveEnd}: ${kmAfter} km'));
+        throw StateError(
+            'Distanz vom Ankunftshafen zum Ziel konnte nicht ermittelt werden');
       }
+      distLogs.add(EtaStep('📍 Distanz $toPort → $effectiveEnd: $kmAfter km'));
 
       // Build ferry label and call the internal two-leg calculator exactly once
       final operatorName = (autoOrManualFerry.operators.isNotEmpty)
@@ -337,15 +369,20 @@ extension FerryAutoEta on FerryAutoDetect {
       final result = EtaCalculator.computeTwoLegsWithFerry(
         start: startTime,
         alreadyDrivenMin: alreadyDrivenMin,
+        alreadyDrivenSinceBreakMin: alreadyDrivenSinceBreakMin,
         dutyTimeOffsetMin: dutyOffsetMin,
         kmBefore: kmBefore,
-        kmAfter: kmAfter!,
+        kmAfter: kmAfter,
         avgKmh: avgKmh,
         rules: rules,
         ferryLabel: ferryLabel,
         ferryDurationMin: (autoOrManualFerry.durationHours * 60).round(),
         departuresHHmm: autoOrManualFerry.departuresLocal,
         manualDeparture: manualDeparture,
+        startLabel: startAddress,
+        destinationLabel: endAddress,
+        departurePort: autoOrManualFerry.from,
+        ferryRestEligible: ferryRestEligible,
       );
 
       // Combine dist logs + result steps
@@ -371,10 +408,10 @@ extension FerryAutoEta on FerryAutoDetect {
             s.text.startsWith('⚠️') ||
             s.text.startsWith('🔎')));
         out.addAll(result.steps);
-        return EtaResult(out, result.arrival);
+        return EtaResult(out, result.arrival, summary: result.summary);
       }
 
-      return EtaResult(steps, result.arrival);
+      return EtaResult(steps, result.arrival, summary: result.summary);
     } finally {
       // reset context guard for next UI computation
       ferryPlannedSet?.call(false);
@@ -382,14 +419,20 @@ extension FerryAutoEta on FerryAutoDetect {
   }
 
   // Kleine Hilfsfunktion: wenn Directions nicht verfügbar, schätze Strecke aus Namen (0.0 fallback)
-  Future<double?> _approxKm(String origin, String destination, {List<String> waypoints = const []}) async {
+  Future<double?> _approxKm(String origin, String destination,
+      {List<String> waypoints = const []}) async {
     const d = DistanceService();
-    return await d.fetchKmDistance(origin: origin, destination: destination, waypoints: waypoints);
+    return await d.fetchKmDistance(
+        origin: origin, destination: destination, waypoints: waypoints);
   }
 
   // helper to obtain a single-segment distance via DistanceService
-  Future<double?> _distanceSingle({required String origin, required String destination, List<String> waypoints = const []}) async {
+  Future<double?> _distanceSingle(
+      {required String origin,
+      required String destination,
+      List<String> waypoints = const []}) async {
     const d = DistanceService();
-    return await d.fetchKmDistance(origin: origin, destination: destination, waypoints: waypoints);
+    return await d.fetchKmDistance(
+        origin: origin, destination: destination, waypoints: waypoints);
   }
 }
