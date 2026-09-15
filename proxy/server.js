@@ -113,8 +113,15 @@ app.post('/api/directions', handleDirections);
 app.post('/api/geocode', async (req, res) => {
   try {
     const address = (req.body && req.body.address) || '';
-    if (!address) return res.status(400).json({ error: 'missing_address' });
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${GOOGLE_KEY}`;
+    const lat = req.body && req.body.lat;
+    const lng = req.body && req.body.lng;
+    if (!address && (!Number.isFinite(lat) || !Number.isFinite(lng))) {
+      return res.status(400).json({ error: 'missing_address_or_coordinates' });
+    }
+    const query = address
+      ? `address=${encodeURIComponent(address)}`
+      : `latlng=${encodeURIComponent(`${lat},${lng}`)}`;
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?${query}&key=${GOOGLE_KEY}`;
     const r = await forwardGet(url);
     res.status(r.status).type('application/json').send(r.body);
   } catch (err) {
@@ -126,10 +133,13 @@ app.post('/api/geocode', async (req, res) => {
 
 app.post('/api/autocomplete', async (req, res) => {
   try {
-    const { input, sessiontoken } = req.body || {};
+    const { input, sessiontoken, language, location, radius } = req.body || {};
     if (!input) return res.status(400).json({ error: 'missing_input' });
     let url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${GOOGLE_KEY}`;
     if (sessiontoken) url += `&sessiontoken=${encodeURIComponent(sessiontoken)}`;
+    if (language) url += `&language=${encodeURIComponent(language)}`;
+    if (location) url += `&location=${encodeURIComponent(location)}`;
+    if (radius) url += `&radius=${encodeURIComponent(radius)}`;
     const r = await forwardGet(url);
     res.status(r.status).type('application/json').send(r.body);
   } catch (err) {

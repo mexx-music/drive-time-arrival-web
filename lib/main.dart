@@ -1031,6 +1031,11 @@ class _HomeScreenState extends State<HomeScreen> {
                               hint: 'Start eingeben',
                               controller: _startCtl,
                               initialText: _startCtl.text,
+                              enableCurrentLocation: true,
+                              onCoordinatesResolved: (lat, lng) => setState(() {
+                                _startLat = lat;
+                                _startLng = lng;
+                              }),
                               onChanged: (v) => _startCtl.text = v,
                               onConfirmed: (v) async {
                                 final txt = v.trim();
@@ -1047,11 +1052,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   // debug
                                   print('preview resolved start: $txt');
                                 } catch (e) {
-                                  if (mounted)
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                            content: Text(
-                                                'Start konnte nicht aufgelöst werden: $e')));
+                                  debugPrint(
+                                      'start preview geocoding failed: $e');
                                 }
                               },
                             ),
@@ -1064,6 +1066,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               hint: 'Ziel eingeben',
                               controller: _destCtl,
                               initialText: _destCtl.text,
+                              originLat: _startLat,
+                              originLng: _startLng,
+                              onCoordinatesResolved: (lat, lng) => setState(() {
+                                _destLat = lat;
+                                _destLng = lng;
+                              }),
                               onChanged: (v) => _destCtl.text = v,
                               onConfirmed: (v) async {
                                 final txt = v.trim();
@@ -1079,11 +1087,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   // debug
                                   print('preview resolved destination: $txt');
                                 } catch (e) {
-                                  if (mounted)
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                            content: Text(
-                                                'Ziel konnte nicht aufgelöst werden: $e')));
+                                  debugPrint(
+                                      'destination preview geocoding failed: $e');
                                 }
                               },
                             ),
@@ -1829,16 +1834,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                   ),
                 ),
-                Padding(
-                  padding: pad,
-                  child: SwitchListTile(
-                    value: _showDetails,
-                    onChanged: (v) => setState(() => _showDetails = v),
-                    title: const Text('🔧 Details/Debug anzeigen'),
-                    subtitle: const Text('Technische Hinweise ein-/ausblenden'),
+                if (kDebugMode)
+                  Padding(
+                    padding: pad,
+                    child: SwitchListTile(
+                      value: _showDetails,
+                      onChanged: (v) => setState(() => _showDetails = v),
+                      title: const Text('🔧 Details/Debug anzeigen'),
+                      subtitle:
+                          const Text('Technische Hinweise ein-/ausblenden'),
+                    ),
                   ),
-                ),
-                if (_showDetails && _log.isNotEmpty)
+                if (kDebugMode && _showDetails && _log.isNotEmpty)
                   Padding(
                     padding: pad,
                     child: Column(

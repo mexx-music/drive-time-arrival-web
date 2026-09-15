@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../logic/eta_calculator.dart';
 import '../logic/speed_profile.dart';
+import '../logic/tour_export.dart';
 
 class TourResultView extends StatelessWidget {
   final EtaResult result;
@@ -25,6 +29,12 @@ class TourResultView extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final visibleSteps = result.steps.where((step) => !step.technical).toList();
+    final exportText = TourExport.asText(
+      result: result,
+      origin: origin,
+      destination: destination,
+      roadMix: roadMix,
+    );
     EtaStep? nextRequiredStop;
     for (final step in visibleSteps) {
       if (step.type == EtaEventType.breakTime ||
@@ -52,6 +62,12 @@ class TourResultView extends StatelessWidget {
             const SizedBox(height: 10),
             _RoadMixBanner(analysis: roadMix!),
           ],
+          const SizedBox(height: 10),
+          _ExportActions(
+            text: exportText,
+            subject:
+                'DriverRoute ETA: ${_shortPlace(origin)} → ${_shortPlace(destination)}',
+          ),
           if (nextRequiredStop != null) ...[
             const SizedBox(height: 10),
             _NextStopBanner(step: nextRequiredStop),
@@ -114,6 +130,117 @@ class TourResultView extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ExportActions extends StatelessWidget {
+  final String text;
+  final String subject;
+
+  const _ExportActions({required this.text, required this.subject});
+
+  Future<void> _share(BuildContext context) async {
+    try {
+      final box = context.findRenderObject() as RenderBox?;
+      await Share.share(
+        text,
+        subject: subject,
+        sharePositionOrigin:
+            box == null ? null : box.localToGlobal(Offset.zero) & box.size,
+      );
+    } catch (_) {
+      if (context.mounted)
+        _message(context, 'Teilen konnte nicht geöffnet werden.');
+    }
+  }
+
+  Future<void> _openWhatsApp(BuildContext context) async {
+    final uri = Uri.https('wa.me', '/', {'text': text});
+    await _launch(context, uri, 'WhatsApp konnte nicht geöffnet werden.');
+  }
+
+  Future<void> _openMail(BuildContext context) async {
+    final uri = Uri(
+      scheme: 'mailto',
+      query:
+          'subject=${Uri.encodeComponent(subject)}&body=${Uri.encodeComponent(text)}',
+    );
+    await _launch(context, uri, 'E-Mail konnte nicht geöffnet werden.');
+  }
+
+  Future<void> _launch(
+    BuildContext context,
+    Uri uri,
+    String errorMessage,
+  ) async {
+    try {
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!opened && context.mounted) _message(context, errorMessage);
+    } catch (_) {
+      if (context.mounted) _message(context, errorMessage);
+    }
+  }
+
+  Future<void> _copy(BuildContext context) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (context.mounted) _message(context, 'Tourergebnis kopiert.');
+  }
+
+  void _message(BuildContext context, String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Ergebnis exportieren',
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 9),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: () => _share(context),
+                icon: const Icon(Icons.ios_share_rounded),
+                label: const Text('Teilen'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _openWhatsApp(context),
+                icon: const Icon(Icons.chat_rounded),
+                label: const Text('WhatsApp'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _openMail(context),
+                icon: const Icon(Icons.mail_outline_rounded),
+                label: const Text('E-Mail'),
+              ),
+              IconButton.outlined(
+                onPressed: () => _copy(context),
+                tooltip: 'Ergebnis kopieren',
+                icon: const Icon(Icons.copy_rounded),
+              ),
+            ],
           ),
         ],
       ),

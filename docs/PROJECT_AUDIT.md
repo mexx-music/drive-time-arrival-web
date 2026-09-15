@@ -43,13 +43,24 @@ Stand: 15. September 2026
 
 ## 4. UI-/UX-Verbesserungen
 
+- Eigenes DriverRoute-App-Icon für PWA/Homescreen, Android, iOS, macOS und
+  Windows statt der Flutter-Standardgrafik.
 - Start und Ziel stapeln sich auf Smartphones und stehen auf breiten Ansichten nebeneinander.
+- Die Ortsvorschläge laufen im Web über den geschützten Karten-Proxy; technische
+  HTTP-Fehler werden nicht mehr als Meldung in der Fahreransicht gezeigt.
+- Der Startort kann über `Meine Position` aus der Browser-/Geräteposition
+  übernommen werden; die Zielsuche wird anschließend auf diesen Bereich
+  gewichtet.
 - Selten benötigte Eingaben sind eingeklappt; technische Fahrplanquellen erscheinen nur im Debugmodus.
 - Nach der Berechnung steht zuerst eine Tourzusammenfassung mit Distanz, reiner Fahrzeit, Pausen/Ruhe und ETA.
 - Der Tourablauf wird als typisierte Timeline mit Start, Fahrblöcken, Lenkpausen, Tankstopp, Tages-/Wochenruhe, Hafen, Wartezeit, Fähre und Ziel dargestellt.
 - Fähren zeigen explizit, ob eine tägliche Ruhezeit erfüllt wurde.
 - Der Berechnen-Button hat einen Ladezustand und verhindert Doppelberechnungen.
 - Fehler werden als verständliche Meldungen ausgegeben; technische Details bleiben im Debugmodus.
+- Tourergebnisse lassen sich als strukturierter Text über das System-Menü,
+  WhatsApp, E-Mail oder die Zwischenablage exportieren.
+- Debug-Schalter und technische Fahrplanprotokolle sind nur in
+  Entwicklungs-Builds sichtbar und fehlen in der offiziellen Release-Version.
 
 ## 5. Überarbeitete Berechnungslogik
 

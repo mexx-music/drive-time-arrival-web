@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import '../widgets/places_autocomplete.dart';
 import '../services/geocoding_service.dart';
 import '../core/feature_flags.dart';
@@ -13,6 +14,10 @@ class PlaceInput extends StatefulWidget {
   final ValueChanged<String>? onConfirmed;
   final ValueChanged<String>? onChanged;
   final bool inlineAutocomplete; // if true show inline suggestions (no modal)
+  final bool enableCurrentLocation;
+  final double? originLat;
+  final double? originLng;
+  final void Function(double latitude, double longitude)? onCoordinatesResolved;
 
   const PlaceInput({
     super.key,
@@ -23,6 +28,10 @@ class PlaceInput extends StatefulWidget {
     this.onConfirmed,
     this.onChanged,
     this.inlineAutocomplete = false,
+    this.enableCurrentLocation = false,
+    this.originLat,
+    this.originLng,
+    this.onCoordinatesResolved,
   });
 
   @override
@@ -43,6 +52,7 @@ class _PlaceInputState extends State<PlaceInput>
   bool _suppressControllerListener = false;
   bool _isTyping = false;
   Timer? _typingTimer;
+  bool _locating = false;
 
   @override
   void initState() {
@@ -162,6 +172,92 @@ class _PlaceInputState extends State<PlaceInput>
     }
   }
 
+  Future<void> _useCurrentLocation() async {
+    if (_locating) return;
+    setState(() => _locating = true);
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        throw const _LocationMessage('Bitte die Standortdienste einschalten.');
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied) {
+        throw const _LocationMessage(
+          'Standortfreigabe abgelehnt. Bitte einen Startort eingeben.',
+        );
+      }
+      if (permission == LocationPermission.deniedForever) {
+        throw const _LocationMessage(
+          'Standortzugriff ist blockiert. Bitte in den Einstellungen freigeben.',
+        );
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+      widget.onCoordinatesResolved?.call(
+        position.latitude,
+        position.longitude,
+      );
+
+      var description =
+          '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
+      try {
+        final resolved = await GeocodingService.reverse(
+          position.latitude,
+          position.longitude,
+        );
+        description = resolved.description;
+      } catch (error) {
+        debugPrint('reverse geocoding current position failed: $error');
+      }
+
+      _lastSelectedSuggestion = description;
+      _hasSelectedSuggestion = true;
+      _applyResolvedValue(description);
+      if (mounted) FocusScope.of(context).unfocus();
+    } on _LocationMessage catch (error) {
+      if (mounted) _showMessage(error.text);
+    } catch (error) {
+      debugPrint('current location failed: $error');
+      if (mounted) {
+        _showMessage(
+          'Position konnte nicht ermittelt werden. Bitte erneut versuchen.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
+  }
+
+  void _showMessage(String text) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Widget _currentLocationButton() {
+    if (!widget.enableCurrentLocation) return const SizedBox.shrink();
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: _locating ? null : _useCurrentLocation,
+        icon: _locating
+            ? const SizedBox.square(
+                dimension: 17,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.my_location_rounded),
+        label: Text(_locating ? 'Position wird ermittelt …' : 'Meine Position'),
+      ),
+    );
+  }
+
   Future<void> _finalizeInput({bool force = false}) async {
     final raw = _ctl.text.trim();
     if (raw.isEmpty) return;
@@ -208,7 +304,8 @@ class _PlaceInputState extends State<PlaceInput>
 
         if (_isStartField) {
           debugPrint('visible finalization for start: ${res.description}');
-          debugPrint('visible finalization by submit for start: ${res.description}');
+          debugPrint(
+              'visible finalization by submit for start: ${res.description}');
         } else if (_isDestinationField) {
           debugPrint(
             'destination finalized from raw text via geocoding: ${res.description}',
@@ -238,7 +335,8 @@ class _PlaceInputState extends State<PlaceInput>
         'destination last selected suggestion: ${_lastSelectedSuggestion ?? ''}',
       );
 
-      if (_lastSelectedSuggestion != null && _lastSelectedSuggestion!.isNotEmpty) {
+      if (_lastSelectedSuggestion != null &&
+          _lastSelectedSuggestion!.isNotEmpty) {
         final lowCur = raw.toLowerCase();
         final lowSel = _lastSelectedSuggestion!.toLowerCase();
 
@@ -256,7 +354,8 @@ class _PlaceInputState extends State<PlaceInput>
         }
       }
 
-      debugPrint('destination focus loss with no explicit selection, keeping raw text');
+      debugPrint(
+          'destination focus loss with no explicit selection, keeping raw text');
     }
   }
 
@@ -319,7 +418,8 @@ class _PlaceInputState extends State<PlaceInput>
       _applyResolvedValue(full);
 
       if (_isDestinationField) {
-        debugPrint('destination explicit autocomplete selection applied: $full');
+        debugPrint(
+            'destination explicit autocomplete selection applied: $full');
       }
 
       FocusScope.of(context).unfocus();
@@ -351,7 +451,8 @@ class _PlaceInputState extends State<PlaceInput>
                 _lastSelectedSuggestion = applied;
                 _hasSelectedSuggestion = true;
                 _applyResolvedValue(applied);
-                debugPrint('applied resolved place for ${widget.label}: $applied');
+                debugPrint(
+                    'applied resolved place for ${widget.label}: $applied');
               },
               child: const Text('Übernehmen'),
             ),
@@ -374,6 +475,9 @@ class _PlaceInputState extends State<PlaceInput>
             controller: _ctl,
             hintText: widget.hint,
             mode: PlacesAutocompleteMode.inline,
+            originLat: widget.originLat,
+            originLng: widget.originLng,
+            biasRadiusMeters: 50000,
             onPlacePicked: (description, placeId, lat, lng) {
               debugPrint(
                 'inline suggestion tapped for field "${widget.label}": $description',
@@ -382,7 +486,8 @@ class _PlaceInputState extends State<PlaceInput>
               final current = _ctl.text.trim();
 
               if (_isDestinationField) {
-                debugPrint('destination inline selection: current text: $current');
+                debugPrint(
+                    'destination inline selection: current text: $current');
                 debugPrint('destination suggestion query: $description');
 
                 final lowCur = current.toLowerCase();
@@ -394,7 +499,8 @@ class _PlaceInputState extends State<PlaceInput>
                     lowCur.startsWith(lowDesc);
 
                 if (!relevant) {
-                  debugPrint('stale destination suggestion ignored: $description');
+                  debugPrint(
+                      'stale destination suggestion ignored: $description');
                   _pendingQuery = '';
                   _activeReqId = 0;
                   return;
@@ -406,16 +512,22 @@ class _PlaceInputState extends State<PlaceInput>
               _lastSelectedSuggestion = description;
               _hasSelectedSuggestion = true;
 
+              if (lat != null && lng != null) {
+                widget.onCoordinatesResolved?.call(lat, lng);
+              }
+
               _applyResolvedValue(description);
 
               debugPrint('inline selection applied to field: $description');
 
               if (_isDestinationField) {
-                debugPrint('destination explicit autocomplete selection applied: $description');
+                debugPrint(
+                    'destination explicit autocomplete selection applied: $description');
               }
             },
             onSearchPressed: _verifyCurrentText,
           ),
+          _currentLocationButton(),
           _buildResolvedPreview(),
         ],
       );
@@ -489,7 +601,8 @@ class _PlaceInputState extends State<PlaceInput>
                 ),
                 TextButton(
                   onPressed: _verifyCurrentText,
-                  child: const Text('Ort prüfen', style: TextStyle(fontSize: 12)),
+                  child:
+                      const Text('Ort prüfen', style: TextStyle(fontSize: 12)),
                 ),
               ],
             ),
@@ -507,7 +620,8 @@ class _PlaceInputState extends State<PlaceInput>
               final res = await GeocodingService.resolve(raw);
               if (res != null && res.description.isNotEmpty) {
                 _applyResolvedValue(res.description);
-                debugPrint('visible finalization by submit: ${res.description}');
+                debugPrint(
+                    'visible finalization by submit: ${res.description}');
                 return;
               }
             } catch (e) {
@@ -524,4 +638,10 @@ class _PlaceInputState extends State<PlaceInput>
 
   @override
   bool get wantKeepAlive => true;
+}
+
+class _LocationMessage implements Exception {
+  final String text;
+
+  const _LocationMessage(this.text);
 }

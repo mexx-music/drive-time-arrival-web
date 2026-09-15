@@ -8,6 +8,10 @@ Der Planungsschnitt kann automatisch aus Distanz und Routendauer ermittelt
 oder als Profil gewählt werden: 80 km/h Standard, 70 km/h bei viel
 Bundes-/Landstraße und 60 km/h für Norwegen bzw. langsame Strecken.
 
+Start und Ziel bieten laufende Ortsvorschläge; beim Start kann direkt
+`Meine Position` verwendet werden. Berechnete Ergebnisse lassen sich über das
+System-Teilen, WhatsApp, E-Mail oder die Zwischenablage weitergeben.
+
 Die aktuelle technische und fachliche Bestandsaufnahme steht in
 [`docs/PROJECT_AUDIT.md`](docs/PROJECT_AUDIT.md).
 

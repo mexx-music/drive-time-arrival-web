@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
+import '../services/geocoding_service.dart';
+import '../services/maps_proxy.dart';
+
 enum PlacesAutocompleteMode { inline, bottomSheet }
 
 const int _kMinChars = 3;
@@ -77,7 +80,8 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
     // on focus loss, we deliberately DO NOT auto-apply suggestions.
     if (!_focus.hasFocus) {
       // Debug: notify that no auto-apply will happen on blur
-      debugPrint('focus loss: no suggestion auto-applied for ${widget.hintText ?? 'field'}');
+      debugPrint(
+          'focus loss: no suggestion auto-applied for ${widget.hintText ?? 'field'}');
     }
   }
 
@@ -149,41 +153,64 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
     };
 
     try {
-      if (kDebugMode && (widget.apiKey.isEmpty)) {
+      if (kDebugMode && mapsDirectCallsAllowed() && widget.apiKey.isEmpty) {
         debugPrint('[PlacesAutocomplete] WARNING: apiKey is empty');
       }
-      final res = await http.post(
-        Uri.parse('https://places.googleapis.com/v1/places:autocomplete'),
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': widget.apiKey,
-          'X-Goog-FieldMask': '*',
-        },
-        body: jsonEncode(body),
-      );
-
-      if (res.statusCode != 200) {
-        if (kDebugMode) {
-          // ignore: avoid_print
-          print('[PlacesAutocomplete] HTTP ${res.statusCode}');
-          // ignore: avoid_print
-          print('[PlacesAutocomplete] ${res.body}');
+      late final Map<String, dynamic> data;
+      if (!mapsDirectCallsAllowed()) {
+        if (!mapsProxyConfigured()) return;
+        data = await proxyAutocomplete(
+          input: q,
+          sessionToken: _sessionToken,
+          language: widget.language,
+          latitude: widget.originLat,
+          longitude: widget.originLng,
+          radiusMeters: safeR?.round(),
+        );
+      } else {
+        final res = await http.post(
+          Uri.parse('https://places.googleapis.com/v1/places:autocomplete'),
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': widget.apiKey,
+            'X-Goog-FieldMask': '*',
+          },
+          body: jsonEncode(body),
+        );
+        if (res.statusCode != 200) {
+          if (kDebugMode) {
+            debugPrint('[PlacesAutocomplete] HTTP ${res.statusCode}');
+            debugPrint('[PlacesAutocomplete] ${res.body}');
+          }
+          if (mounted) {
+            setState(() {
+              _items = [];
+              _showInlineList = false;
+            });
+          }
+          return;
         }
-        if (mounted)
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('Places Autocomplete: HTTP ${res.statusCode}')));
-        return;
+        data = jsonDecode(res.body) as Map<String, dynamic>;
       }
 
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      if (kDebugMode) debugPrint('[PlacesAutocomplete] got ${data.keys.length} keys from autocomplete response');
-      final list = (data['suggestions'] as List? ?? []);
-      final newItems = list.map((s) {
-        final pred = (s['placePrediction'] as Map<String, dynamic>?) ?? {};
-        final text = (pred['text']?['text'] ?? '') as String;
-        final id = (pred['placeId'] ?? '') as String;
-        return _Pred(text, id);
-      }).toList();
+      if (kDebugMode) {
+        debugPrint(
+          '[PlacesAutocomplete] got ${data.keys.length} keys from autocomplete response',
+        );
+      }
+      final newItems = <_Pred>[];
+      for (final suggestion in (data['suggestions'] as List? ?? const [])) {
+        final pred =
+            (suggestion['placePrediction'] as Map<String, dynamic>?) ?? {};
+        final text = (pred['text']?['text'] ?? '').toString();
+        final id = (pred['placeId'] ?? '').toString();
+        if (text.isNotEmpty) newItems.add(_Pred(text, id));
+      }
+      for (final prediction in (data['predictions'] as List? ?? const [])) {
+        final text = (prediction['description'] ?? '').toString();
+        final id = (prediction['place_id'] ?? '').toString();
+        if (text.isNotEmpty) newItems.add(_Pred(text, id));
+      }
 
       if (!mounted) return;
       setState(() {
@@ -192,7 +219,13 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
         _autoApplied = false;
       });
       // publish suggestions for external consumers (e.g. main.dart fallback)
-      _registerSuggestionsForController(widget.controller, _items.map((e) => e.description ?? '').where((s) => s.isNotEmpty).toList());
+      _registerSuggestionsForController(
+        widget.controller,
+        _items
+            .map((e) => e.description ?? '')
+            .where((s) => s.isNotEmpty)
+            .toList(),
+      );
 
       if (widget.mode == PlacesAutocompleteMode.inline) {
         setState(() => _showInlineList = _items.isNotEmpty);
@@ -237,7 +270,8 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
                         child: InkWell(
                           onTap: () {
                             // debug immediately when tapped in bottom sheet
-                            debugPrint('selected suggestion (bottomSheet): ${it.description}');
+                            debugPrint(
+                                'selected suggestion (bottomSheet): ${it.description}');
                             Navigator.of(ctx).pop(it.description);
                           },
                           child: ListTile(
@@ -255,7 +289,8 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
 
     if (res != null) {
       // res contains full description
-      if (kDebugMode) debugPrint('[PlacesAutocomplete] bottomSheet selected: ${res}');
+      if (kDebugMode)
+        debugPrint('[PlacesAutocomplete] bottomSheet selected: ${res}');
       await _handleSelection(res, null, null);
     }
   }
@@ -293,29 +328,44 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
     // Immediate debug so we know tapping worked (sync onTap should fire this)
     debugPrint('pickDetailAndSelect invoked for: ${p.description}');
     try {
-      if (kDebugMode) debugPrint('[PlacesAutocomplete] fetch detail for placeId=${p.placeId}');
-      final detRes = await http.get(
-        Uri.parse(
-            'https://places.googleapis.com/v1/places/${Uri.encodeComponent(p.placeId)}'),
-        headers: {
-          'X-Goog-Api-Key': widget.apiKey,
-          'X-Goog-FieldMask': '*',
-        },
-      );
-
-      if (detRes.statusCode == 200) {
-        if (kDebugMode) debugPrint('[PlacesAutocomplete] detail response length=${detRes.body.length}');
-        final body = jsonDecode(detRes.body) as Map<String, dynamic>;
-        final loc = body['location'] as Map<String, dynamic>?;
-        if (loc != null) {
-          lat = (loc['latitude'] as num).toDouble();
-          lng = (loc['longitude'] as num).toDouble();
-        }
+      if (!mapsDirectCallsAllowed()) {
+        final resolved = await GeocodingService.resolve(p.description);
+        lat = resolved.lat;
+        lng = resolved.lng;
       } else {
-        if (kDebugMode) debugPrint('[PlacesAutocomplete] detail HTTP ${detRes.statusCode}: ${detRes.body}');
+        if (kDebugMode) {
+          debugPrint(
+            '[PlacesAutocomplete] fetch detail for placeId=${p.placeId}',
+          );
+        }
+        final detRes = await http.get(
+          Uri.parse(
+              'https://places.googleapis.com/v1/places/${Uri.encodeComponent(p.placeId)}'),
+          headers: {
+            'X-Goog-Api-Key': widget.apiKey,
+            'X-Goog-FieldMask': '*',
+          },
+        );
+
+        if (detRes.statusCode == 200) {
+          if (kDebugMode)
+            debugPrint(
+                '[PlacesAutocomplete] detail response length=${detRes.body.length}');
+          final body = jsonDecode(detRes.body) as Map<String, dynamic>;
+          final loc = body['location'] as Map<String, dynamic>?;
+          if (loc != null) {
+            lat = (loc['latitude'] as num).toDouble();
+            lng = (loc['longitude'] as num).toDouble();
+          }
+        } else {
+          if (kDebugMode)
+            debugPrint(
+                '[PlacesAutocomplete] detail HTTP ${detRes.statusCode}: ${detRes.body}');
+        }
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[PlacesAutocomplete] detail fetch exception: $e');
+      if (kDebugMode)
+        debugPrint('[PlacesAutocomplete] detail fetch exception: $e');
     }
 
     await _handleSelection(p.description, lat, lng);
@@ -372,7 +422,8 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
                     child: InkWell(
                       onTap: () async {
                         // debug immediately when tapped inline
-                        debugPrint('selected suggestion (inline): ${it.description}');
+                        debugPrint(
+                            'selected suggestion (inline): ${it.description}');
                         await _pickDetailAndSelect(it);
                       },
                       child: ListTile(
@@ -424,7 +475,8 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
 final Map<int, List<String>> _placesLastSuggestions = {};
 final Map<int, bool> _placesExplicitSelection = {};
 
-void _registerSuggestionsForController(TextEditingController ctl, List<String> suggestions) {
+void _registerSuggestionsForController(
+    TextEditingController ctl, List<String> suggestions) {
   _placesLastSuggestions[ctl.hashCode] = suggestions;
 }
 
