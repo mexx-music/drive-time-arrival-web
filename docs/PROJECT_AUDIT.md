@@ -70,8 +70,9 @@ Stand: 15. September 2026
 - Zusätzlich lässt sich die vollständige gestaltete Tourübersicht samt
   Kennzahlen, Straßenmix, Pausen-Timeline und ETA als PNG-Grafik teilen. Im Web
   kann die Grafik auch direkt gespeichert werden. Fehlt WhatsApp im
-  macOS-Teilen-Menü, wird das PNG gespeichert und WhatsApp mit einem klaren
-  Hinweis zum Anhängen des Bildes geöffnet.
+  macOS-Teilen-Menü, wird zuerst das PNG gespeichert. Danach bestätigt der
+  Nutzer den klar getrennten zweiten Schritt `Weiter zu WhatsApp`; erst dann
+  öffnet sich WhatsApp mit dem Hinweis zum Anhängen des Bildes.
 - Debug-Schalter und technische Fahrplanprotokolle sind nur in
   Entwicklungs-Builds sichtbar und fehlen in der offiziellen Release-Version.
 

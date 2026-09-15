@@ -102,13 +102,28 @@ class _TourResultViewState extends State<TourResultView> {
         'Die Tourgrafik wurde als ${image.filename} gespeichert. '
         'Bitte im gewünschten Chat als Bild anhängen.';
     final uri = Uri.https('wa.me', '/', {'text': message});
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => _WhatsAppImageReadyDialog(
+        filename: image.filename,
+        onContinue: () {
+          Navigator.pop(dialogContext);
+          _openWhatsAppForImage(uri);
+        },
+      ),
+    );
+  }
+
+  Future<void> _openWhatsAppForImage(Uri uri) async {
     try {
       final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!opened && mounted) {
         _message('WhatsApp konnte nicht geöffnet werden.');
       }
       if (opened && mounted) {
-        _message('PNG gespeichert – jetzt in WhatsApp als Bild anhängen.');
+        _message('In WhatsApp jetzt die gespeicherte PNG-Grafik anhängen.');
       }
     } catch (_) {
       if (mounted) _message('WhatsApp konnte nicht geöffnet werden.');
@@ -145,7 +160,7 @@ class _TourResultViewState extends State<TourResultView> {
         title: 'Grafik teilen',
         description: 'Wähle, wohin die gestaltete PNG-Tour gehen soll.',
         whatsAppSubtitle: kIsWeb
-            ? 'PNG speichern und WhatsApp öffnen'
+            ? 'Zuerst PNG speichern, danach WhatsApp öffnen'
             : 'PNG über das Teilen-Menü an WhatsApp senden',
         mailSubtitle: 'PNG anhängen – danach im Systemfenster Mail wählen',
         moreSubtitle: 'AirDrop, Nachrichten und weitere installierte Apps',
@@ -572,6 +587,121 @@ class _ShareOptionsSheet extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _WhatsAppImageReadyDialog extends StatelessWidget {
+  final String filename;
+  final VoidCallback onContinue;
+
+  const _WhatsAppImageReadyDialog({
+    required this.filename,
+    required this.onContinue,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: const CircleAvatar(
+        radius: 25,
+        backgroundColor: Color(0xFFE8F5EE),
+        foregroundColor: Color(0xFF087F5B),
+        child: Icon(Icons.download_done_rounded, size: 28),
+      ),
+      title: const Text(
+        'PNG ist vorbereitet',
+        textAlign: TextAlign.center,
+      ),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _ShareStep(
+              number: '1',
+              title: 'PNG speichern',
+              detail: 'Der Speichern-Dialog wurde zuerst geöffnet.',
+              completed: true,
+            ),
+            const SizedBox(height: 14),
+            const _ShareStep(
+              number: '2',
+              title: 'Weiter zu WhatsApp',
+              detail: 'Chat auswählen und das PNG dort als Bild anhängen.',
+            ),
+            const SizedBox(height: 14),
+            Text(
+              filename,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Später'),
+        ),
+        FilledButton.icon(
+          onPressed: onContinue,
+          icon: const Icon(Icons.chat_rounded),
+          label: const Text('Weiter zu WhatsApp'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ShareStep extends StatelessWidget {
+  final String number;
+  final String title;
+  final String detail;
+  final bool completed;
+
+  const _ShareStep({
+    required this.number,
+    required this.title,
+    required this.detail,
+    this.completed = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = completed
+        ? const Color(0xFF087F5B)
+        : Theme.of(context).colorScheme.primary;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        CircleAvatar(
+          radius: 16,
+          backgroundColor: color.withValues(alpha: 0.12),
+          foregroundColor: color,
+          child: completed
+              ? const Icon(Icons.check_rounded, size: 18)
+              : Text(
+                  number,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Text(detail, style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
