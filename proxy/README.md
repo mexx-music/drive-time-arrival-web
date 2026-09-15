@@ -35,7 +35,7 @@ npm run start:dev
 
 - POST /api/autocomplete
   - body: { "input": "Rot" }
-  - forwards to Places Autocomplete API
+  - forwards server-side to Places API (New) Autocomplete
 
 - GET /health
   - returns { ok: true }

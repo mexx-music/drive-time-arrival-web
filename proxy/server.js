@@ -135,13 +135,42 @@ app.post('/api/autocomplete', async (req, res) => {
   try {
     const { input, sessiontoken, language, location, radius } = req.body || {};
     if (!input) return res.status(400).json({ error: 'missing_input' });
-    let url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${GOOGLE_KEY}`;
-    if (sessiontoken) url += `&sessiontoken=${encodeURIComponent(sessiontoken)}`;
-    if (language) url += `&language=${encodeURIComponent(language)}`;
-    if (location) url += `&location=${encodeURIComponent(location)}`;
-    if (radius) url += `&radius=${encodeURIComponent(radius)}`;
-    const r = await forwardGet(url);
-    res.status(r.status).type('application/json').send(r.body);
+    const body = {
+      input,
+      languageCode: language || 'de',
+      includeQueryPredictions: false,
+    };
+    if (sessiontoken) body.sessionToken = sessiontoken;
+
+    if (location) {
+      const [latitude, longitude] = String(location)
+        .split(',')
+        .map(Number);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        body.locationBias = {
+          circle: {
+            center: { latitude, longitude },
+            radius: Math.min(Number(radius) || 50000, 50000),
+          },
+        };
+      }
+    }
+
+    const response = await fetch(
+      'https://places.googleapis.com/v1/places:autocomplete',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': GOOGLE_KEY,
+          'X-Goog-FieldMask':
+            'suggestions.placePrediction.placeId,suggestions.placePrediction.text',
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const responseBody = await response.text();
+    res.status(response.status).type('application/json').send(responseBody);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'proxy_error', message: err.message });
