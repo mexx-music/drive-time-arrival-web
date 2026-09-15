@@ -43,6 +43,13 @@ Stand: 15. September 2026
 
 ## 4. UI-/UX-Verbesserungen
 
+- Die Eingabeseite verwendet jetzt dieselbe moderne Kartenoptik, Farbwelt und
+  visuelle Hierarchie wie die Ergebnisdarstellung.
+- Auf Desktop und im Querformat stehen Planung und Tourübersicht in zwei
+  unabhängig scrollbaren Spalten nebeneinander; vor der ersten Berechnung
+  erklärt eine kompakte Vorschau, welche Ergebnisse dort erscheinen.
+- Auf Smartphone und schmalen Fenstern bleibt die Bedienung einspaltig und wird
+  auf eine gut lesbare maximale Breite begrenzt.
 - Eigenes DriverRoute-App-Icon für PWA/Homescreen, Android, iOS, macOS und
   Windows statt der Flutter-Standardgrafik.
 - Start und Ziel stapeln sich auf Smartphones und stehen auf breiten Ansichten nebeneinander.

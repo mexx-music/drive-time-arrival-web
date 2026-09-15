@@ -55,13 +55,60 @@ class DriverRouteApp extends StatelessWidget {
           seedColor: const Color(0xFF0A6EBD),
           brightness: Brightness.light,
         ),
-        scaffoldBackgroundColor: const Color(0xFFF6F8FB),
+        scaffoldBackgroundColor: const Color(0xFFF2F5F9),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF102A43),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          surfaceTintColor: Colors.transparent,
+        ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.white,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
+            borderSide: const BorderSide(color: Color(0xFFD9E2EC)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFFD9E2EC)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFF0A6EBD), width: 2),
+          ),
+        ),
+        expansionTileTheme: const ExpansionTileThemeData(
+          backgroundColor: Colors.white,
+          collapsedBackgroundColor: Colors.white,
+          iconColor: Color(0xFF0A6EBD),
+          collapsedIconColor: Color(0xFF486581),
+          textColor: Color(0xFF102A43),
+          collapsedTextColor: Color(0xFF102A43),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(18)),
+            side: BorderSide(color: Color(0xFFD9E2EC)),
+          ),
+          collapsedShape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(18)),
+            side: BorderSide(color: Color(0xFFD9E2EC)),
+          ),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(0, 52),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            textStyle: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size(0, 48),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
           ),
         ),
         useMaterial3: true,
@@ -995,24 +1042,49 @@ class _HomeScreenState extends State<HomeScreen> {
     final pad = const EdgeInsets.symmetric(horizontal: 16, vertical: 8);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('DriverRoute ETA'),
+        toolbarHeight: 68,
+        title: const Row(
+          children: [
+            Icon(Icons.local_shipping_rounded, color: Color(0xFF69F0AE)),
+            SizedBox(width: 11),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'DriverRoute ETA',
+                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+                ),
+                Text(
+                  'LKW-Tourenplanung',
+                  style: TextStyle(fontSize: 11, color: Color(0xFFBCCCDC)),
+                ),
+              ],
+            ),
+          ],
+        ),
         centerTitle: false,
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView(
-              children: [
-                if (_showDetails)
-                  Padding(
-                    padding: pad,
-                    child: Text(
-                      'Fahrplan-Quelle: $_source · ${_routes.length} Routen',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
+      body: LayoutBuilder(
+        builder: (context, viewport) {
+          final wideLayout = viewport.maxWidth >= 860;
+          final formPane = ListView(
+            padding: EdgeInsets.symmetric(vertical: wideLayout ? 14 : 8),
+            children: [
+              const _PageIntro(),
+              if (_showDetails)
                 Padding(
                   padding: pad,
+                  child: Text(
+                    'Fahrplan-Quelle: $_source · ${_routes.length} Routen',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              Padding(
+                padding: pad,
+                child: _InputCard(
+                  title: 'Route planen',
+                  subtitle: 'Start und Ziel festlegen',
+                  icon: Icons.route_rounded,
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final stacked = constraints.maxWidth < 680;
@@ -1098,778 +1170,812 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                   ),
                 ),
-                Padding(
-                  padding: pad,
-                  child: ExpansionTile(
-                    title: const Text('Weitere Einstellungen'),
-                    subtitle: const Text(
-                      'Zwischenstopp, Lenkzeiten, Fähre und Geschwindigkeit',
-                    ),
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-                        child: PlaceInput(
-                          inlineAutocomplete: true,
-                          label: '📍 Zwischenziel',
-                          hint: 'Adresse/Ort für Zwischenziel',
-                          controller: _stopCtl,
-                          initialText: _stopCtl.text,
-                          onChanged: (v) => _stopCtl.text = v,
-                          onConfirmed: (txt) async {
-                            final t = txt.trim();
-                            if (t.isEmpty) return;
-
-                            try {
-                              final res = await GeocodingService.resolve(t);
-                              setState(() {
-                                _stopCtl.text = res.description;
-
-                                if (_stops.isEmpty) {
-                                  _stops.add(res.description);
-                                } else {
-                                  _stops[0] = res.description;
-                                }
-
-                                final coord = LatLng(res.lat, res.lng);
-                                if (_stopCoords.isEmpty) {
-                                  _stopCoords.add(coord);
-                                } else {
-                                  _stopCoords[0] = coord;
-                                }
-                              });
-
-                              debugPrint(
-                                  'intermediate stop resolved: ${res.description}');
-                              debugPrint(
-                                  'intermediate stop applied to field: ${res.description}');
-                            } catch (e) {
-                              setState(() {
-                                _stopCtl.text = t;
-
-                                if (_stops.isEmpty) {
-                                  _stops.add(t);
-                                } else {
-                                  _stops[0] = t;
-                                }
-
-                                if (_stopCoords.isEmpty) {
-                                  _stopCoords.add(null);
-                                } else {
-                                  _stopCoords[0] = null;
-                                }
-                              });
-
-                              debugPrint(
-                                  'intermediate stop applied to field (raw): $t');
-
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                      content: Text(
-                                          'Zwischenziel konnte nicht aufgelöst werden: $e')),
-                                );
-                              }
-                            }
-                          },
-                        ),
-                      ),
-                    ],
+              ),
+              Padding(
+                padding: pad,
+                child: ExpansionTile(
+                  leading: const Icon(Icons.add_location_alt_rounded),
+                  title: const Text(
+                    'Zwischenstopp',
+                    style: TextStyle(fontWeight: FontWeight.w800),
                   ),
+                  subtitle: const Text(
+                    'Optional einen Ort zwischen Start und Ziel einplanen',
+                  ),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                      child: PlaceInput(
+                        inlineAutocomplete: true,
+                        label: '📍 Zwischenziel',
+                        hint: 'Adresse/Ort für Zwischenziel',
+                        controller: _stopCtl,
+                        initialText: _stopCtl.text,
+                        onChanged: (v) => _stopCtl.text = v,
+                        onConfirmed: (txt) async {
+                          final t = txt.trim();
+                          if (t.isEmpty) return;
+
+                          try {
+                            final res = await GeocodingService.resolve(t);
+                            setState(() {
+                              _stopCtl.text = res.description;
+
+                              if (_stops.isEmpty) {
+                                _stops.add(res.description);
+                              } else {
+                                _stops[0] = res.description;
+                              }
+
+                              final coord = LatLng(res.lat, res.lng);
+                              if (_stopCoords.isEmpty) {
+                                _stopCoords.add(coord);
+                              } else {
+                                _stopCoords[0] = coord;
+                              }
+                            });
+
+                            debugPrint(
+                                'intermediate stop resolved: ${res.description}');
+                            debugPrint(
+                                'intermediate stop applied to field: ${res.description}');
+                          } catch (e) {
+                            setState(() {
+                              _stopCtl.text = t;
+
+                              if (_stops.isEmpty) {
+                                _stops.add(t);
+                              } else {
+                                _stops[0] = t;
+                              }
+
+                              if (_stopCoords.isEmpty) {
+                                _stopCoords.add(null);
+                              } else {
+                                _stopCoords[0] = null;
+                              }
+                            });
+
+                            debugPrint(
+                                'intermediate stop applied to field (raw): $t');
+
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                    content: Text(
+                                        'Zwischenziel konnte nicht aufgelöst werden: $e')),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-                Padding(
-                  padding: pad,
-                  child: ExpansionTile(
-                    title: const Text('Abfahrt und bisherige Lenkzeit'),
-                    children: [
-                      LayoutBuilder(
-                        builder: (ctx, box) {
-                          // bei schmalen Layouts untereinander
-                          final stackVertically = box.maxWidth < 720;
+              ),
+              Padding(
+                padding: pad,
+                child: ExpansionTile(
+                  leading: const Icon(Icons.schedule_rounded),
+                  title: const Text(
+                    'Abfahrt und bisherige Lenkzeit',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  children: [
+                    LayoutBuilder(
+                      builder: (ctx, box) {
+                        // bei schmalen Layouts untereinander
+                        final stackVertically = box.maxWidth < 720;
 
-                          final leftWidget = Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 12),
-                            child: ExpansionTile(
-                              title: Text(
-                                'Bereits gefahren / Einsatzzeit',
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              initiallyExpanded: false,
-                              children: [
-                                // "Bereits gefahren" block
-                                Container(
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .dividerColor
-                                          .withValues(alpha: 0.6),
-                                    ),
-                                  ),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 8),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text('Heute bereits gefahren',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall),
-                                      const SizedBox(height: 8),
-                                      _durationField(
-                                        'Heute bereits gefahren',
-                                        _drivenMin,
-                                        (v) => setState(() => _drivenMin = v),
-                                        showLabel: false,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Container(
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .dividerColor
-                                          .withValues(alpha: 0.6),
-                                    ),
-                                  ),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 8),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text('Seit der letzten Lenkpause',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        'Zeit seit der letzten vollständigen 45-Minuten-Pause',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
-                                      ),
-                                      const SizedBox(height: 8),
-                                      _durationField(
-                                        'Seit der letzten Lenkpause',
-                                        _continuousDrivenMin,
-                                        (v) => setState(
-                                            () => _continuousDrivenMin = v),
-                                        showLabel: false,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                // "Einsatzzeit bisher" block
-                                Container(
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Theme.of(context)
-                                          .dividerColor
-                                          .withValues(alpha: 0.6),
-                                    ),
-                                  ),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 8),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text('Einsatzzeit bisher',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall),
-                                      const SizedBox(height: 8),
-                                      _durationField(
-                                        'Einsatzzeit bisher',
-                                        _dutyOffsetMin,
-                                        (v) =>
-                                            setState(() => _dutyOffsetMin = v),
-                                        showLabel: false,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                const SizedBox(height: 8),
-                                _speedProfileInput(),
-                              ],
+                        final leftWidget = Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          child: ExpansionTile(
+                            title: Text(
+                              'Bereits gefahren / Einsatzzeit',
+                              style: Theme.of(context).textTheme.titleMedium,
                             ),
-                          );
-
-                          final rightWidget = Container(
-                            padding: const EdgeInsets.all(12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('🕓 Manuelle Abfahrt',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium),
-                                Row(
+                            initiallyExpanded: false,
+                            children: [
+                              // "Bereits gefahren" block
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Theme.of(context)
+                                        .dividerColor
+                                        .withValues(alpha: 0.6),
+                                  ),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 8),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Switch(
-                                      value: _manualDepartureActive,
-                                      onChanged: (v) => setState(
-                                          () => _manualDepartureActive = v),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        'Manuelle Abfahrt aktivieren',
+                                    Text('Heute bereits gefahren',
                                         style: Theme.of(context)
                                             .textTheme
-                                            .bodyMedium,
-                                      ),
+                                            .titleSmall),
+                                    const SizedBox(height: 8),
+                                    _durationField(
+                                      'Heute bereits gefahren',
+                                      _drivenMin,
+                                      (v) => setState(() => _drivenMin = v),
+                                      showLabel: false,
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 6),
-                                GestureDetector(
-                                  onTap: () async {
-                                    final selectedDate = await showDatePicker(
-                                      context: context,
-                                      initialDate: _manualDepartureDate,
-                                      firstDate: DateTime.now()
-                                          .subtract(const Duration(days: 365)),
-                                      lastDate: DateTime.now()
-                                          .add(const Duration(days: 365)),
-                                    );
-                                    if (selectedDate != null) {
-                                      setState(() =>
-                                          _manualDepartureDate = selectedDate);
-                                    }
-                                  },
-                                  child: InputDecorator(
-                                    decoration: InputDecoration(
-                                      labelText: '📅 Datum',
-                                      border: OutlineInputBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(8)),
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                              vertical: 12, horizontal: 12),
-                                    ),
-                                    child: Text(DateFormat('yyyy-MM-dd')
-                                        .format(_manualDepartureDate)),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text('🕓 Abfahrtszeit',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium),
-                                const SizedBox(height: 6),
-                                Builder(
-                                  builder: (ctx) {
-                                    final hourPicker = OutlinedButton(
-                                      style: OutlinedButton.styleFrom(
-                                          padding: const EdgeInsets.symmetric(
-                                              vertical: 10, horizontal: 8)),
-                                      onPressed: () async {
-                                        final sel = await _showWheelPicker(
-                                            ctx, _manualDepartureHour, 23);
-                                        if (sel != null) {
-                                          setState(
-                                              () => _manualDepartureHour = sel);
-                                        }
-                                      },
-                                      child: Row(
-                                        children: [
-                                          const Icon(Icons.access_time,
-                                              size: 18),
-                                          const SizedBox(width: 6),
-                                          Flexible(
-                                            fit: FlexFit.loose,
-                                            child: Text(
-                                              _manualDepartureHour
-                                                  .toString()
-                                                  .padLeft(2, '0'),
-                                              style:
-                                                  const TextStyle(fontSize: 18),
-                                              textAlign: TextAlign.center,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-
-                                    final minutePicker = OutlinedButton(
-                                      style: OutlinedButton.styleFrom(
-                                          padding: const EdgeInsets.symmetric(
-                                              vertical: 10, horizontal: 8)),
-                                      onPressed: () async {
-                                        final sel = await _showWheelPicker(
-                                            ctx, _manualDepartureMinute, 59);
-                                        if (sel != null) {
-                                          setState(() =>
-                                              _manualDepartureMinute = sel);
-                                        }
-                                      },
-                                      child: Row(
-                                        children: [
-                                          const SizedBox(width: 4),
-                                          Flexible(
-                                            fit: FlexFit.loose,
-                                            child: Text(
-                                              _manualDepartureMinute
-                                                  .toString()
-                                                  .padLeft(2, '0'),
-                                              style:
-                                                  const TextStyle(fontSize: 18),
-                                              textAlign: TextAlign.center,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-
-                                    return Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children: [
-                                        Flexible(
-                                            fit: FlexFit.tight,
-                                            child: hourPicker),
-                                        const SizedBox(width: 8),
-                                        Flexible(
-                                            fit: FlexFit.tight,
-                                            child: minutePicker),
-                                      ],
-                                    );
-                                  },
-                                ),
-                                const SizedBox(height: 8),
-                                if (_manualDepartureActive)
-                                  Text(
-                                    '🕓 Manuelle Abfahrt gesetzt: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime(_manualDepartureDate.year, _manualDepartureDate.month, _manualDepartureDate.day, _manualDepartureHour, _manualDepartureMinute))}',
-                                    style:
-                                        const TextStyle(color: Colors.black54),
-                                  ),
-                              ],
-                            ),
-                          );
-
-                          if (stackVertically) {
-                            return Column(
-                              children: [
-                                leftWidget,
-                                const SizedBox(height: 12),
-                                rightWidget
-                              ],
-                            );
-                          }
-
-                          return Row(
-                            children: [
-                              Expanded(child: leftWidget),
-                              const SizedBox(width: 12),
-                              Expanded(child: rightWidget),
-                            ],
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
-                ),
-
-                // --- Lenk-/Ruhezeit & Tankpause ---
-                Padding(
-                  padding: pad,
-                  child: ExpansionTile(
-                    title: const Text('Lenk- und Ruhezeiten'),
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 6),
-                        child: Text(
-                          'Tippe, um Verfügbarkeit umzuschalten (hell = nicht verfügbar).',
-                          style: TextStyle(fontSize: 12, color: Colors.black54),
-                        ),
-                      ),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
-                        children: [
-                          FilterChip(
-                            label: const Text('10h-Tag #1'),
-                            selected: _ten1,
-                            onSelected: (v) => setState(() => _ten1 = v),
-                          ),
-                          FilterChip(
-                            label: const Text('10h-Tag #2'),
-                            selected: _ten2,
-                            onSelected: (v) => setState(() => _ten2 = v),
-                          ),
-                          FilterChip(
-                            label: const Text('9h-Ruhe #1'),
-                            selected: _nine1,
-                            onSelected: (v) => setState(() => _nine1 = v),
-                          ),
-                          FilterChip(
-                            label: const Text('9h-Ruhe #2'),
-                            selected: _nine2,
-                            onSelected: (v) => setState(() => _nine2 = v),
-                          ),
-                          FilterChip(
-                            label: const Text('9h-Ruhe #3'),
-                            selected: _nine3,
-                            onSelected: (v) => setState(() => _nine3 = v),
-                          ),
-                          FilterChip(
-                            label: const Text('⛽ Tankpause +30 min'),
-                            selected: _tankpause,
-                            onSelected: (v) => setState(() => _tankpause = v),
-                          ),
-                          FilterChip(
-                            label: const Text('Geteilte Pause 15 + 30 min'),
-                            selected: _splitBreak,
-                            onSelected: (v) => setState(() => _splitBreak = v),
-                          ),
-                          FilterChip(
-                            label: const Text('Wochenruhe vor Abfahrt fällig'),
-                            selected: _weeklyRestDue,
-                            onSelected: (v) =>
-                                setState(() => _weeklyRestDue = v),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
-                ),
-
-                // --- Fähre ---
-                Padding(
-                  padding: pad,
-                  child: ExpansionTile(
-                    title: const Text('Fähre'),
-                    children: [
-                      SwitchListTile(
-                        title: const Text(
-                            '🚢 Automatische Erkennung aktivieren (MVP Anzeige)'),
-                        value: _autoFerry,
-                        onChanged: (v) => setState(() => _autoFerry = v),
-                      ),
-                      SwitchListTile(
-                        title: const Text('Schlafkabine/Liegeplatz verfügbar'),
-                        subtitle: const Text(
-                          'Nur dann kann die Zeit an Bord als Ruhezeit gewertet werden.',
-                        ),
-                        value: _ferryRestEligible,
-                        onChanged: (value) =>
-                            setState(() => _ferryRestEligible = value),
-                      ),
-                      // WICHTIG: Kein "null"-DropdownItem, stattdessen hint verwenden
-                      // --- Fähre Auswahl (mit robustem initialValue + Reset) ---
-                      Builder(builder: (ctx) {
-                        final selectedFerry = _routes.contains(_manualFerry)
-                            ? _manualFerry
-                            : null;
-                        return Row(
-                          children: [
-                            Expanded(
-                              child: DropdownButtonFormField<FerryRoute>(
-                                isExpanded: true,
-                                initialValue: selectedFerry,
-                                hint: const Text('Keine'),
-                                decoration: const InputDecoration(
-                                  labelText: 'Manuelle Fährwahl (optional)',
-                                ),
-                                items: _routes
-                                    .map((r) => DropdownMenuItem<FerryRoute>(
-                                          value: r,
-                                          child: Text(r.name),
-                                        ))
-                                    .toList(),
-                                onChanged: (v) =>
-                                    setState(() => _manualFerry = v),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            IconButton(
-                              tooltip: 'Auswahl zurücksetzen',
-                              onPressed: () => setState(() {
-                                _manualFerry = null;
-                                _manualFerryDeparture = null;
-                              }),
-                              icon: const Icon(Icons.clear),
-                            ),
-                          ],
+                              const SizedBox(height: 8),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Theme.of(context)
+                                        .dividerColor
+                                        .withValues(alpha: 0.6),
+                                  ),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 8),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Seit der letzten Lenkpause',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleSmall),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Zeit seit der letzten vollständigen 45-Minuten-Pause',
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _durationField(
+                                      'Seit der letzten Lenkpause',
+                                      _continuousDrivenMin,
+                                      (v) => setState(
+                                          () => _continuousDrivenMin = v),
+                                      showLabel: false,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              // "Einsatzzeit bisher" block
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Theme.of(context)
+                                        .dividerColor
+                                        .withValues(alpha: 0.6),
+                                  ),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 8),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Einsatzzeit bisher',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleSmall),
+                                    const SizedBox(height: 8),
+                                    _durationField(
+                                      'Einsatzzeit bisher',
+                                      _dutyOffsetMin,
+                                      (v) => setState(() => _dutyOffsetMin = v),
+                                      showLabel: false,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              const SizedBox(height: 8),
+                              _speedProfileInput(),
+                            ],
+                          ),
                         );
-                      }),
-                      const SizedBox(height: 8),
-                      // Test widget: liefert ein FerryRoute-Objekt an die RouteInputWidget-Instanz
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                        child: RouteInputWidget(
-                          detectedRoute: _manualFerry ??
-                              (_routes.isNotEmpty ? _routes.first : null),
-                        ),
-                      ),
-                      if (_manualFerry != null)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+
+                        final rightWidget = Container(
+                          padding: const EdgeInsets.all(12),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('🕓 Manuelle Abfahrtszeit für Fähre',
+                              Text('🕓 Manuelle Abfahrt',
                                   style:
                                       Theme.of(context).textTheme.titleMedium),
-                              const SizedBox(height: 6),
                               Row(
                                 children: [
+                                  Switch(
+                                    value: _manualDepartureActive,
+                                    onChanged: (v) => setState(
+                                        () => _manualDepartureActive = v),
+                                  ),
+                                  const SizedBox(width: 8),
                                   Expanded(
-                                    child: GestureDetector(
-                                      onTap: () async {
-                                        final now = DateTime.now();
-                                        final d = await showDatePicker(
-                                          context: context,
-                                          firstDate: now,
-                                          lastDate: now
-                                              .add(const Duration(days: 365)),
-                                          initialDate:
-                                              _manualFerryDeparture ?? now,
-                                        );
-                                        if (d == null) return;
-                                        setState(() {
-                                          final prev = _manualFerryDeparture ??
-                                              DateTime.now();
-                                          _manualFerryDeparture = DateTime(
-                                              d.year,
-                                              d.month,
-                                              d.day,
-                                              prev.hour,
-                                              prev.minute);
-                                        });
-                                      },
-                                      child: InputDecorator(
-                                        decoration: InputDecoration(
-                                          labelText: '📅 Datum',
-                                          border: OutlineInputBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(8)),
-                                          contentPadding:
-                                              const EdgeInsets.symmetric(
-                                                  vertical: 12, horizontal: 12),
-                                        ),
-                                        child: Text(_manualFerryDeparture ==
-                                                null
-                                            ? 'Kein Datum'
-                                            : DateFormat('yyyy-MM-dd').format(
-                                                _manualFerryDeparture!)),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Flexible(
-                                    child: OutlinedButton(
-                                      style: OutlinedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 10, horizontal: 8),
-                                      ),
-                                      onPressed: () async {
-                                        final now = DateTime.now();
-                                        final initial =
-                                            _manualFerryDeparture?.hour ??
-                                                now.hour;
-                                        final sel = await _showWheelPicker(
-                                            context, initial, 23);
-                                        if (sel != null) {
-                                          setState(() {
-                                            final prev =
-                                                _manualFerryDeparture ??
-                                                    DateTime.now();
-                                            _manualFerryDeparture = DateTime(
-                                                prev.year,
-                                                prev.month,
-                                                prev.day,
-                                                sel,
-                                                prev.minute);
-                                          });
-                                        }
-                                      },
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(Icons.access_time,
-                                              size: 18),
-                                          const SizedBox(width: 6),
-                                          Text(
-                                            _manualFerryDeparture == null
-                                                ? 'Stunde'
-                                                : _manualFerryDeparture!.hour
-                                                    .toString()
-                                                    .padLeft(2, '0'),
-                                            style:
-                                                const TextStyle(fontSize: 16),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Flexible(
-                                    child: OutlinedButton(
-                                      style: OutlinedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 10, horizontal: 8),
-                                      ),
-                                      onPressed: () async {
-                                        final now = DateTime.now();
-                                        final initial =
-                                            _manualFerryDeparture?.minute ??
-                                                now.minute;
-                                        final sel = await _showWheelPicker(
-                                            context, initial, 59);
-                                        if (sel != null) {
-                                          setState(() {
-                                            final prev =
-                                                _manualFerryDeparture ??
-                                                    DateTime.now();
-                                            _manualFerryDeparture = DateTime(
-                                                prev.year,
-                                                prev.month,
-                                                prev.day,
-                                                prev.hour,
-                                                sel);
-                                          });
-                                        }
-                                      },
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            _manualFerryDeparture == null
-                                                ? 'Minute'
-                                                : _manualFerryDeparture!.minute
-                                                    .toString()
-                                                    .padLeft(2, '0'),
-                                            style:
-                                                const TextStyle(fontSize: 16),
-                                          ),
-                                        ],
-                                      ),
+                                    child: Text(
+                                      'Manuelle Abfahrt aktivieren',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium,
                                     ),
                                   ),
                                 ],
                               ),
                               const SizedBox(height: 6),
-                              if (_manualFerryDeparture != null)
+                              GestureDetector(
+                                onTap: () async {
+                                  final selectedDate = await showDatePicker(
+                                    context: context,
+                                    initialDate: _manualDepartureDate,
+                                    firstDate: DateTime.now()
+                                        .subtract(const Duration(days: 365)),
+                                    lastDate: DateTime.now()
+                                        .add(const Duration(days: 365)),
+                                  );
+                                  if (selectedDate != null) {
+                                    setState(() =>
+                                        _manualDepartureDate = selectedDate);
+                                  }
+                                },
+                                child: InputDecorator(
+                                  decoration: InputDecoration(
+                                    labelText: '📅 Datum',
+                                    border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(8)),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                        vertical: 12, horizontal: 12),
+                                  ),
+                                  child: Text(DateFormat('yyyy-MM-dd')
+                                      .format(_manualDepartureDate)),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text('🕓 Abfahrtszeit',
+                                  style:
+                                      Theme.of(context).textTheme.titleMedium),
+                              const SizedBox(height: 6),
+                              Builder(
+                                builder: (ctx) {
+                                  final hourPicker = OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 10, horizontal: 8)),
+                                    onPressed: () async {
+                                      final sel = await _showWheelPicker(
+                                          ctx, _manualDepartureHour, 23);
+                                      if (sel != null) {
+                                        setState(
+                                            () => _manualDepartureHour = sel);
+                                      }
+                                    },
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.access_time, size: 18),
+                                        const SizedBox(width: 6),
+                                        Flexible(
+                                          fit: FlexFit.loose,
+                                          child: Text(
+                                            _manualDepartureHour
+                                                .toString()
+                                                .padLeft(2, '0'),
+                                            style:
+                                                const TextStyle(fontSize: 18),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+
+                                  final minutePicker = OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 10, horizontal: 8)),
+                                    onPressed: () async {
+                                      final sel = await _showWheelPicker(
+                                          ctx, _manualDepartureMinute, 59);
+                                      if (sel != null) {
+                                        setState(
+                                            () => _manualDepartureMinute = sel);
+                                      }
+                                    },
+                                    child: Row(
+                                      children: [
+                                        const SizedBox(width: 4),
+                                        Flexible(
+                                          fit: FlexFit.loose,
+                                          child: Text(
+                                            _manualDepartureMinute
+                                                .toString()
+                                                .padLeft(2, '0'),
+                                            style:
+                                                const TextStyle(fontSize: 18),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+
+                                  return Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
+                                    children: [
+                                      Flexible(
+                                          fit: FlexFit.tight,
+                                          child: hourPicker),
+                                      const SizedBox(width: 8),
+                                      Flexible(
+                                          fit: FlexFit.tight,
+                                          child: minutePicker),
+                                    ],
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 8),
+                              if (_manualDepartureActive)
                                 Text(
-                                  'Manuelle Abfahrtszeit: ${DateFormat('dd.MM. HH:mm').format(_manualFerryDeparture!)}',
+                                  '🕓 Manuelle Abfahrt gesetzt: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime(_manualDepartureDate.year, _manualDepartureDate.month, _manualDepartureDate.day, _manualDepartureHour, _manualDepartureMinute))}',
                                   style: const TextStyle(color: Colors.black54),
                                 ),
                             ],
                           ),
+                        );
+
+                        if (stackVertically) {
+                          return Column(
+                            children: [
+                              leftWidget,
+                              const SizedBox(height: 12),
+                              rightWidget
+                            ],
+                          );
+                        }
+
+                        return Row(
+                          children: [
+                            Expanded(child: leftWidget),
+                            const SizedBox(width: 12),
+                            Expanded(child: rightWidget),
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+
+              // --- Lenk-/Ruhezeit & Tankpause ---
+              Padding(
+                padding: pad,
+                child: ExpansionTile(
+                  leading: const Icon(Icons.rule_rounded),
+                  title: const Text(
+                    'Lenk- und Ruhezeiten',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 6),
+                      child: Text(
+                        'Tippe, um Verfügbarkeit umzuschalten (hell = nicht verfügbar).',
+                        style: TextStyle(fontSize: 12, color: Colors.black54),
+                      ),
+                    ),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 8,
+                      children: [
+                        FilterChip(
+                          label: const Text('10h-Tag #1'),
+                          selected: _ten1,
+                          onSelected: (v) => setState(() => _ten1 = v),
+                        ),
+                        FilterChip(
+                          label: const Text('10h-Tag #2'),
+                          selected: _ten2,
+                          onSelected: (v) => setState(() => _ten2 = v),
+                        ),
+                        FilterChip(
+                          label: const Text('9h-Ruhe #1'),
+                          selected: _nine1,
+                          onSelected: (v) => setState(() => _nine1 = v),
+                        ),
+                        FilterChip(
+                          label: const Text('9h-Ruhe #2'),
+                          selected: _nine2,
+                          onSelected: (v) => setState(() => _nine2 = v),
+                        ),
+                        FilterChip(
+                          label: const Text('9h-Ruhe #3'),
+                          selected: _nine3,
+                          onSelected: (v) => setState(() => _nine3 = v),
+                        ),
+                        FilterChip(
+                          label: const Text('⛽ Tankpause +30 min'),
+                          selected: _tankpause,
+                          onSelected: (v) => setState(() => _tankpause = v),
+                        ),
+                        FilterChip(
+                          label: const Text('Geteilte Pause 15 + 30 min'),
+                          selected: _splitBreak,
+                          onSelected: (v) => setState(() => _splitBreak = v),
+                        ),
+                        FilterChip(
+                          label: const Text('Wochenruhe vor Abfahrt fällig'),
+                          selected: _weeklyRestDue,
+                          onSelected: (v) => setState(() => _weeklyRestDue = v),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+
+              // --- Fähre ---
+              Padding(
+                padding: pad,
+                child: ExpansionTile(
+                  leading: const Icon(Icons.directions_boat_rounded),
+                  title: const Text(
+                    'Fähre',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  children: [
+                    SwitchListTile(
+                      title: const Text(
+                          '🚢 Automatische Erkennung aktivieren (MVP Anzeige)'),
+                      value: _autoFerry,
+                      onChanged: (v) => setState(() => _autoFerry = v),
+                    ),
+                    SwitchListTile(
+                      title: const Text('Schlafkabine/Liegeplatz verfügbar'),
+                      subtitle: const Text(
+                        'Nur dann kann die Zeit an Bord als Ruhezeit gewertet werden.',
+                      ),
+                      value: _ferryRestEligible,
+                      onChanged: (value) =>
+                          setState(() => _ferryRestEligible = value),
+                    ),
+                    // WICHTIG: Kein "null"-DropdownItem, stattdessen hint verwenden
+                    // --- Fähre Auswahl (mit robustem initialValue + Reset) ---
+                    Builder(builder: (ctx) {
+                      final selectedFerry =
+                          _routes.contains(_manualFerry) ? _manualFerry : null;
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<FerryRoute>(
+                              isExpanded: true,
+                              initialValue: selectedFerry,
+                              hint: const Text('Keine'),
+                              decoration: const InputDecoration(
+                                labelText: 'Manuelle Fährwahl (optional)',
+                              ),
+                              items: _routes
+                                  .map((r) => DropdownMenuItem<FerryRoute>(
+                                        value: r,
+                                        child: Text(r.name),
+                                      ))
+                                  .toList(),
+                              onChanged: (v) =>
+                                  setState(() => _manualFerry = v),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            tooltip: 'Auswahl zurücksetzen',
+                            onPressed: () => setState(() {
+                              _manualFerry = null;
+                              _manualFerryDeparture = null;
+                            }),
+                            icon: const Icon(Icons.clear),
+                          ),
+                        ],
+                      );
+                    }),
+                    const SizedBox(height: 8),
+                    // Test widget: liefert ein FerryRoute-Objekt an die RouteInputWidget-Instanz
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: RouteInputWidget(
+                        detectedRoute: _manualFerry ??
+                            (_routes.isNotEmpty ? _routes.first : null),
+                      ),
+                    ),
+                    if (_manualFerry != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('🕓 Manuelle Abfahrtszeit für Fähre',
+                                style: Theme.of(context).textTheme.titleMedium),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: GestureDetector(
+                                    onTap: () async {
+                                      final now = DateTime.now();
+                                      final d = await showDatePicker(
+                                        context: context,
+                                        firstDate: now,
+                                        lastDate:
+                                            now.add(const Duration(days: 365)),
+                                        initialDate:
+                                            _manualFerryDeparture ?? now,
+                                      );
+                                      if (d == null) return;
+                                      setState(() {
+                                        final prev = _manualFerryDeparture ??
+                                            DateTime.now();
+                                        _manualFerryDeparture = DateTime(
+                                            d.year,
+                                            d.month,
+                                            d.day,
+                                            prev.hour,
+                                            prev.minute);
+                                      });
+                                    },
+                                    child: InputDecorator(
+                                      decoration: InputDecoration(
+                                        labelText: '📅 Datum',
+                                        border: OutlineInputBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(8)),
+                                        contentPadding:
+                                            const EdgeInsets.symmetric(
+                                                vertical: 12, horizontal: 12),
+                                      ),
+                                      child: Text(_manualFerryDeparture == null
+                                          ? 'Kein Datum'
+                                          : DateFormat('yyyy-MM-dd')
+                                              .format(_manualFerryDeparture!)),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 10, horizontal: 8),
+                                    ),
+                                    onPressed: () async {
+                                      final now = DateTime.now();
+                                      final initial =
+                                          _manualFerryDeparture?.hour ??
+                                              now.hour;
+                                      final sel = await _showWheelPicker(
+                                          context, initial, 23);
+                                      if (sel != null) {
+                                        setState(() {
+                                          final prev = _manualFerryDeparture ??
+                                              DateTime.now();
+                                          _manualFerryDeparture = DateTime(
+                                              prev.year,
+                                              prev.month,
+                                              prev.day,
+                                              sel,
+                                              prev.minute);
+                                        });
+                                      }
+                                    },
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(Icons.access_time, size: 18),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          _manualFerryDeparture == null
+                                              ? 'Stunde'
+                                              : _manualFerryDeparture!.hour
+                                                  .toString()
+                                                  .padLeft(2, '0'),
+                                          style: const TextStyle(fontSize: 16),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 10, horizontal: 8),
+                                    ),
+                                    onPressed: () async {
+                                      final now = DateTime.now();
+                                      final initial =
+                                          _manualFerryDeparture?.minute ??
+                                              now.minute;
+                                      final sel = await _showWheelPicker(
+                                          context, initial, 59);
+                                      if (sel != null) {
+                                        setState(() {
+                                          final prev = _manualFerryDeparture ??
+                                              DateTime.now();
+                                          _manualFerryDeparture = DateTime(
+                                              prev.year,
+                                              prev.month,
+                                              prev.day,
+                                              prev.hour,
+                                              sel);
+                                        });
+                                      }
+                                    },
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          _manualFerryDeparture == null
+                                              ? 'Minute'
+                                              : _manualFerryDeparture!.minute
+                                                  .toString()
+                                                  .padLeft(2, '0'),
+                                          style: const TextStyle(fontSize: 16),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            if (_manualFerryDeparture != null)
+                              Text(
+                                'Manuelle Abfahrtszeit: ${DateFormat('dd.MM. HH:mm').format(_manualFerryDeparture!)}',
+                                style: const TextStyle(color: Colors.black54),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: pad,
+                child: FilledButton.icon(
+                  icon: _calculating
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.route),
+                  label: Text(_calculating
+                      ? 'Route wird berechnet …'
+                      : 'Route berechnen'),
+                  onPressed: _calculating ? null : _compute,
+                ),
+              ),
+              if (!wideLayout && _etaResult != null)
+                Padding(
+                  padding: pad,
+                  child: TourResultView(
+                    result: _etaResult!,
+                    origin: _resultOrigin,
+                    destination: _resultDestination,
+                    roadMix: _resultRoadMix,
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: pad,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.map),
+                  label: const Text('Karte anzeigen'),
+                  onPressed: () {
+                    // Ensure window.open is triggered synchronously from user gesture to avoid popup blocking on web
+                    if (kIsWeb) {
+                      if (_stops.isEmpty) {
+                        // ignore: avoid_print
+                        print('[MapButton] using external web tab');
+                        openInNewTabWithName('about:blank', 'driverroute_map');
+                      } else {
+                        // ignore: avoid_print
+                        print(
+                            '[MapButton] using in-app map because waypoints are present');
+                      }
+                    }
+                    _openMapOsm();
+                  },
+                ),
+              ),
+              if (kDebugMode)
+                Padding(
+                  padding: pad,
+                  child: SwitchListTile(
+                    value: _showDetails,
+                    onChanged: (v) => setState(() => _showDetails = v),
+                    title: const Text('🔧 Details/Debug anzeigen'),
+                    subtitle: const Text('Technische Hinweise ein-/ausblenden'),
+                  ),
+                ),
+              if (kDebugMode && _showDetails && _log.isNotEmpty)
+                Padding(
+                  padding: pad,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('📋 Fahrplan:',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 8),
+                      for (final l in _log)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(l),
                         ),
                     ],
                   ),
                 ),
-                Padding(
-                  padding: pad,
-                  child: FilledButton.icon(
-                    icon: _calculating
-                        ? const SizedBox.square(
-                            dimension: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.route),
-                    label: Text(_calculating
-                        ? 'Route wird berechnet …'
-                        : 'Route berechnen'),
-                    onPressed: _calculating ? null : _compute,
-                  ),
-                ),
-                if (_etaResult != null)
-                  Padding(
-                    padding: pad,
-                    child: TourResultView(
-                      result: _etaResult!,
-                      origin: _resultOrigin,
-                      destination: _resultDestination,
-                      roadMix: _resultRoadMix,
-                    ),
-                  ),
-                const SizedBox(height: 8),
-                Padding(
-                  padding: pad,
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.map),
-                    label: const Text('Karte anzeigen'),
-                    onPressed: () {
-                      // Ensure window.open is triggered synchronously from user gesture to avoid popup blocking on web
-                      if (kIsWeb) {
-                        if (_stops.isEmpty) {
-                          // ignore: avoid_print
-                          print('[MapButton] using external web tab');
-                          openInNewTabWithName(
-                              'about:blank', 'driverroute_map');
-                        } else {
-                          // ignore: avoid_print
-                          print(
-                              '[MapButton] using in-app map because waypoints are present');
-                        }
-                      }
-                      _openMapOsm();
-                    },
-                  ),
-                ),
-                if (kDebugMode)
-                  Padding(
-                    padding: pad,
-                    child: SwitchListTile(
-                      value: _showDetails,
-                      onChanged: (v) => setState(() => _showDetails = v),
-                      title: const Text('🔧 Details/Debug anzeigen'),
-                      subtitle:
-                          const Text('Technische Hinweise ein-/ausblenden'),
-                    ),
-                  ),
-                if (kDebugMode && _showDetails && _log.isNotEmpty)
-                  Padding(
-                    padding: pad,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('📋 Fahrplan:',
-                            style: TextStyle(
-                                fontSize: 18, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 8),
-                        for (final l in _log)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
-                            child: Text(l),
-                          ),
-                      ],
-                    ),
-                  ),
-                const SizedBox(height: 24),
-              ],
-            ),
+              const SizedBox(height: 24),
+            ],
+          );
+
+          if (!wideLayout) {
+            final mobileWidth =
+                viewport.maxWidth > 820 ? 820.0 : viewport.maxWidth;
+            return Align(
+              alignment: Alignment.topCenter,
+              child: SizedBox(width: mobileWidth, child: formPane),
+            );
+          }
+
+          final inputWidth =
+              (viewport.maxWidth * 0.42).clamp(380.0, 540.0).toDouble();
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(width: inputWidth, child: formPane),
+              const VerticalDivider(width: 1, thickness: 1),
+              Expanded(child: _buildDesktopResultPane()),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildDesktopResultPane() {
+    if (_etaResult == null) {
+      return const _DesktopEmptyResult();
+    }
+    return ColoredBox(
+      color: const Color(0xFFF6F8FB),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(24, 22, 24, 36),
+        children: [
+          TourResultView(
+            result: _etaResult!,
+            origin: _resultOrigin,
+            destination: _resultDestination,
+            roadMix: _resultRoadMix,
           ),
         ],
-      ), // <-- Column schließen (Komma!)
-    ); // <-- Scaffold schließen (Semikolon)
+      ),
+    );
   }
 
   Widget _slider(
@@ -1960,6 +2066,193 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _PageIntro extends StatelessWidget {
+  const _PageIntro();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Tour vorbereiten',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  color: const Color(0xFF102A43),
+                  fontWeight: FontWeight.w900,
+                ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Route, Lenkzeiten und Pausen in wenigen Schritten planen.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFF627D98),
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InputCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Widget child;
+
+  const _InputCard({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFD9E2EC)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0D102A43),
+            blurRadius: 18,
+            offset: Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF4FF),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: const Color(0xFF0A6EBD)),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Color(0xFF102A43),
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Color(0xFF627D98),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _DesktopEmptyResult extends StatelessWidget {
+  const _DesktopEmptyResult();
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: const Color(0xFFF6F8FB),
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(28),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Container(
+              padding: const EdgeInsets.all(30),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: const Color(0xFFD9E2EC)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 78,
+                    height: 78,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFE8F5EE),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.route_rounded,
+                      size: 40,
+                      color: Color(0xFF087F5B),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'Deine Tourübersicht',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          color: const Color(0xFF102A43),
+                          fontWeight: FontWeight.w900,
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Nach der Berechnung erscheinen hier ETA, Straßenmix, '
+                    'Lenkpausen, Ruhezeiten und der komplette Tourablauf.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Color(0xFF627D98), height: 1.45),
+                  ),
+                  const SizedBox(height: 20),
+                  const Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      Chip(
+                        avatar: Icon(Icons.flag_rounded, size: 17),
+                        label: Text('Ankunft'),
+                      ),
+                      Chip(
+                        avatar: Icon(Icons.coffee_rounded, size: 17),
+                        label: Text('Pausen'),
+                      ),
+                      Chip(
+                        avatar: Icon(Icons.add_road_rounded, size: 17),
+                        label: Text('Straßenmix'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
