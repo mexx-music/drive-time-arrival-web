@@ -66,6 +66,10 @@ Stand: 15. September 2026
 - Fehler werden als verständliche Meldungen ausgegeben; technische Details bleiben im Debugmodus.
 - Tourergebnisse lassen sich als strukturierter Text über das System-Menü,
   WhatsApp, E-Mail oder die Zwischenablage exportieren.
+- Zusätzlich lässt sich die vollständige gestaltete Tourübersicht samt
+  Kennzahlen, Straßenmix, Pausen-Timeline und ETA als PNG-Grafik teilen. Im Web
+  wird die Grafik heruntergeladen, falls der Browser keine Dateifreigabe
+  unterstützt.
 - Debug-Schalter und technische Fahrplanprotokolle sind nur in
   Entwicklungs-Builds sichtbar und fehlen in der offiziellen Release-Version.
 

@@ -7,8 +7,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../logic/eta_calculator.dart';
 import '../logic/speed_profile.dart';
 import '../logic/tour_export.dart';
+import '../services/tour_image_export.dart';
 
-class TourResultView extends StatelessWidget {
+class TourResultView extends StatefulWidget {
   final EtaResult result;
   final String origin;
   final String destination;
@@ -23,7 +24,53 @@ class TourResultView extends StatelessWidget {
   });
 
   @override
+  State<TourResultView> createState() => _TourResultViewState();
+}
+
+class _TourResultViewState extends State<TourResultView> {
+  final GlobalKey _imageBoundaryKey = GlobalKey();
+  bool _creatingImage = false;
+
+  Future<void> _shareImage(BuildContext shareContext, String text) async {
+    if (_creatingImage) return;
+    final box = shareContext.findRenderObject() as RenderBox?;
+    final shareOrigin =
+        box == null ? null : box.localToGlobal(Offset.zero) & box.size;
+    setState(() => _creatingImage = true);
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      final png = await TourImageExport.capture(_imageBoundaryKey);
+      final filename =
+          'driverroute-${_filePart(widget.origin)}-${_filePart(widget.destination)}.png';
+      await Share.shareXFiles(
+        [XFile.fromData(png, mimeType: 'image/png', name: filename)],
+        subject:
+            'DriverRoute ETA: ${_shortPlace(widget.origin)} → ${_shortPlace(widget.destination)}',
+        text: text,
+        fileNameOverrides: [filename],
+        sharePositionOrigin: shareOrigin,
+      );
+    } catch (_) {
+      if (mounted) {
+        _message('Die Tourgrafik konnte nicht erstellt oder geteilt werden.');
+      }
+    } finally {
+      if (mounted) setState(() => _creatingImage = false);
+    }
+  }
+
+  void _message(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final result = widget.result;
+    final origin = widget.origin;
+    final destination = widget.destination;
+    final roadMix = widget.roadMix;
     final summary = result.summary;
     if (summary == null || result.arrival == null) {
       return const SizedBox.shrink();
@@ -45,91 +92,111 @@ class TourResultView extends StatelessWidget {
       }
     }
 
+    final subject =
+        'DriverRoute ETA: ${_shortPlace(origin)} → ${_shortPlace(destination)}';
+
     return Semantics(
       label: 'Berechneter Tourablauf von $origin nach $destination',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _TourHeader(
-            origin: origin,
-            destination: destination,
-            summary: summary,
-            arrival: result.arrival!,
-          ),
-          const SizedBox(height: 16),
-          _SummaryGrid(summary: summary, arrival: result.arrival!),
-          if (roadMix != null && roadMix!.hasBreakdown) ...[
-            const SizedBox(height: 10),
-            _RoadMixBanner(analysis: roadMix!),
-          ],
-          const SizedBox(height: 10),
-          _ExportActions(
-            text: exportText,
-            subject:
-                'DriverRoute ETA: ${_shortPlace(origin)} → ${_shortPlace(destination)}',
-          ),
-          if (nextRequiredStop != null) ...[
-            const SizedBox(height: 10),
-            _NextStopBanner(step: nextRequiredStop),
-          ],
-          const SizedBox(height: 18),
-          Text(
-            'Tourablauf',
-            style: Theme.of(context)
-                .textTheme
-                .titleLarge
-                ?.copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 10),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: Theme.of(context).colorScheme.outlineVariant,
-              ),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 16, 14, 8),
+          RepaintBoundary(
+            key: _imageBoundaryKey,
+            child: ColoredBox(
+              color: const Color(0xFFF6F8FB),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (var index = 0; index < visibleSteps.length; index++)
-                    _TimelineRow(
-                      step: visibleSteps[index],
-                      isLast: index == visibleSteps.length - 1,
+                  _TourHeader(
+                    origin: origin,
+                    destination: destination,
+                    summary: summary,
+                    arrival: result.arrival!,
+                    creatingImage: _creatingImage,
+                    onShareImage: () => _shareImage(context, exportText),
+                  ),
+                  const SizedBox(height: 16),
+                  _SummaryGrid(summary: summary, arrival: result.arrival!),
+                  if (roadMix != null && roadMix.hasBreakdown) ...[
+                    const SizedBox(height: 10),
+                    _RoadMixBanner(analysis: roadMix),
+                  ],
+                  if (nextRequiredStop != null) ...[
+                    const SizedBox(height: 10),
+                    _NextStopBanner(step: nextRequiredStop),
+                  ],
+                  const SizedBox(height: 18),
+                  Text(
+                    'Tourablauf',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 10),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surface,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                      ),
                     ),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 16, 14, 8),
+                      child: Column(
+                        children: [
+                          for (var index = 0;
+                              index < visibleSteps.length;
+                              index++)
+                            _TimelineRow(
+                              step: visibleSteps[index],
+                              isLast: index == visibleSteps.length - 1,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF0A7A4B), Color(0xFF075E3A)],
+                      ),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text(
+                          'Voraussichtliche Ankunft',
+                          style: TextStyle(color: Colors.white70, fontSize: 14),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          DateFormat('EEEE, dd.MM. – HH:mm', 'de')
+                              .format(result.arrival!),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
           ),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF0A7A4B), Color(0xFF075E3A)],
-              ),
-              borderRadius: BorderRadius.circular(18),
-            ),
-            child: Column(
-              children: [
-                const Text(
-                  'Voraussichtliche Ankunft',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  DateFormat('EEEE, dd.MM. – HH:mm', 'de')
-                      .format(result.arrival!),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ],
-            ),
+          const SizedBox(height: 10),
+          _ExportActions(
+            text: exportText,
+            subject: subject,
+            creatingImage: _creatingImage,
+            onShareImage: (buttonContext) =>
+                _shareImage(buttonContext, exportText),
           ),
         ],
       ),
@@ -137,11 +204,26 @@ class TourResultView extends StatelessWidget {
   }
 }
 
+String _filePart(String value) {
+  final short = _shortPlace(value).toLowerCase();
+  final cleaned = short.replaceAll(RegExp(r'[^a-z0-9äöüß]+'), '-');
+  return cleaned.replaceAll(RegExp(r'^-+|-+$'), '').isEmpty
+      ? 'ort'
+      : cleaned.replaceAll(RegExp(r'^-+|-+$'), '');
+}
+
 class _ExportActions extends StatelessWidget {
   final String text;
   final String subject;
+  final bool creatingImage;
+  final Future<void> Function(BuildContext context) onShareImage;
 
-  const _ExportActions({required this.text, required this.subject});
+  const _ExportActions({
+    required this.text,
+    required this.subject,
+    required this.creatingImage,
+    required this.onShareImage,
+  });
 
   Future<void> _share(BuildContext context) async {
     try {
@@ -209,21 +291,41 @@ class _ExportActions extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Ergebnis exportieren',
+            'Tour exportieren',
             style: Theme.of(context)
                 .textTheme
                 .titleSmall
                 ?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'Als gestaltete Grafik oder als kopierbaren Text teilen.',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 9),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              FilledButton.icon(
+              Builder(
+                builder: (buttonContext) => FilledButton.icon(
+                  onPressed:
+                      creatingImage ? null : () => onShareImage(buttonContext),
+                  icon: creatingImage
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.image_rounded),
+                  label: Text(
+                    creatingImage ? 'Grafik wird erstellt …' : 'Grafik teilen',
+                  ),
+                ),
+              ),
+              OutlinedButton.icon(
                 onPressed: () => _share(context),
-                icon: const Icon(Icons.ios_share_rounded),
-                label: const Text('Teilen'),
+                icon: const Icon(Icons.notes_rounded),
+                label: const Text('Text teilen'),
               ),
               OutlinedButton.icon(
                 onPressed: () => _openWhatsApp(context),
@@ -337,12 +439,16 @@ class _TourHeader extends StatelessWidget {
   final String destination;
   final EtaSummary summary;
   final DateTime arrival;
+  final bool creatingImage;
+  final VoidCallback onShareImage;
 
   const _TourHeader({
     required this.origin,
     required this.destination,
     required this.summary,
     required this.arrival,
+    required this.creatingImage,
+    required this.onShareImage,
   });
 
   @override
@@ -356,16 +462,32 @@ class _TourHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'DEINE TOUR',
-            style: TextStyle(
-              color: Color(0xFF9FB3C8),
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.4,
-            ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'DEINE TOUR',
+                  style: TextStyle(
+                    color: Color(0xFF9FB3C8),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.4,
+                  ),
+                ),
+              ),
+              if (!creatingImage)
+                IconButton(
+                  onPressed: onShareImage,
+                  tooltip: 'Tourgrafik teilen',
+                  style: IconButton.styleFrom(
+                    foregroundColor: const Color(0xFF69F0AE),
+                    backgroundColor: const Color(0xFF243F5C),
+                  ),
+                  icon: const Icon(Icons.ios_share_rounded),
+                ),
+            ],
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: creatingImage ? 8 : 2),
           Text(
             '${_shortPlace(origin)}  →  ${_shortPlace(destination)}',
             style: const TextStyle(

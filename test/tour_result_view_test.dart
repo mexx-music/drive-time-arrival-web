@@ -69,7 +69,10 @@ void main() {
     expect(find.text('Voraussichtliche Ankunft'), findsOneWidget);
     expect(find.text('Nächste Lenkpause'), findsOneWidget);
     expect(find.text('Straßenmix der Route'), findsOneWidget);
-    expect(find.text('Ergebnis exportieren'), findsOneWidget);
+    expect(find.text('Tour exportieren'), findsOneWidget);
+    expect(find.text('Grafik teilen'), findsOneWidget);
+    expect(find.text('Text teilen'), findsOneWidget);
+    expect(find.byTooltip('Tourgrafik teilen'), findsOneWidget);
     expect(find.text('WhatsApp'), findsOneWidget);
     expect(find.text('E-Mail'), findsOneWidget);
     expect(tester.takeException(), isNull);
