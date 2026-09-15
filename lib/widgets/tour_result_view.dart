@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -8,6 +9,7 @@ import '../logic/eta_calculator.dart';
 import '../logic/speed_profile.dart';
 import '../logic/tour_export.dart';
 import '../services/tour_image_export.dart';
+import '../utils/file_download.dart';
 
 class TourResultView extends StatefulWidget {
   final EtaResult result;
@@ -31,32 +33,143 @@ class _TourResultViewState extends State<TourResultView> {
   final GlobalKey _imageBoundaryKey = GlobalKey();
   bool _creatingImage = false;
 
-  Future<void> _shareImage(BuildContext shareContext, String text) async {
-    if (_creatingImage) return;
-    final box = shareContext.findRenderObject() as RenderBox?;
-    final shareOrigin =
-        box == null ? null : box.localToGlobal(Offset.zero) & box.size;
+  Future<({Uint8List bytes, String filename})?> _createImage() async {
+    if (_creatingImage) return null;
     setState(() => _creatingImage = true);
     try {
       await WidgetsBinding.instance.endOfFrame;
       final png = await TourImageExport.capture(_imageBoundaryKey);
       final filename =
           'driverroute-${_filePart(widget.origin)}-${_filePart(widget.destination)}.png';
-      await Share.shareXFiles(
-        [XFile.fromData(png, mimeType: 'image/png', name: filename)],
-        subject:
-            'DriverRoute ETA: ${_shortPlace(widget.origin)} → ${_shortPlace(widget.destination)}',
-        text: text,
-        fileNameOverrides: [filename],
-        sharePositionOrigin: shareOrigin,
-      );
+      return (bytes: png, filename: filename);
     } catch (_) {
-      if (mounted) {
-        _message('Die Tourgrafik konnte nicht erstellt oder geteilt werden.');
-      }
+      if (mounted) _message('Die Tourgrafik konnte nicht erstellt werden.');
+      return null;
     } finally {
       if (mounted) setState(() => _creatingImage = false);
     }
+  }
+
+  Future<void> _shareImageFile(
+    String text,
+    String subject,
+    Rect? shareOrigin,
+  ) async {
+    final image = await _createImage();
+    if (image == null) return;
+    try {
+      await Share.shareXFiles(
+        [
+          XFile.fromData(
+            image.bytes,
+            mimeType: 'image/png',
+            name: image.filename,
+          ),
+        ],
+        subject: subject,
+        text: text,
+        fileNameOverrides: [image.filename],
+        sharePositionOrigin: shareOrigin,
+      );
+    } catch (_) {
+      if (mounted) _message('Die Tourgrafik konnte nicht geteilt werden.');
+    }
+  }
+
+  Future<void> _shareImageToWhatsApp(
+    String text,
+    String subject,
+    Rect? shareOrigin,
+  ) async {
+    if (!kIsWeb) {
+      await _shareImageFile(text, subject, shareOrigin);
+      return;
+    }
+
+    final image = await _createImage();
+    if (image == null) return;
+    final saved = await downloadBytes(
+      image.bytes,
+      filename: image.filename,
+      mimeType: 'image/png',
+    );
+    if (!saved) {
+      if (mounted) _message('Die PNG-Datei konnte nicht gespeichert werden.');
+      return;
+    }
+
+    final message = '$subject\n'
+        'Die Tourgrafik wurde als ${image.filename} gespeichert. '
+        'Bitte im gewünschten Chat als Bild anhängen.';
+    final uri = Uri.https('wa.me', '/', {'text': message});
+    try {
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!opened && mounted) {
+        _message('WhatsApp konnte nicht geöffnet werden.');
+      }
+      if (opened && mounted) {
+        _message('PNG gespeichert – jetzt in WhatsApp als Bild anhängen.');
+      }
+    } catch (_) {
+      if (mounted) _message('WhatsApp konnte nicht geöffnet werden.');
+    }
+  }
+
+  Future<void> _saveImage() async {
+    final image = await _createImage();
+    if (image == null) return;
+    final saved = await downloadBytes(
+      image.bytes,
+      filename: image.filename,
+      mimeType: 'image/png',
+    );
+    if (mounted) {
+      _message(
+          saved ? 'Tourgrafik gespeichert.' : 'Speichern nicht verfügbar.');
+    }
+  }
+
+  Future<void> _showImageShareOptions(
+    BuildContext shareContext,
+    String text,
+    String subject,
+  ) async {
+    if (_creatingImage) return;
+    final box = shareContext.findRenderObject() as RenderBox?;
+    final shareOrigin =
+        box == null ? null : box.localToGlobal(Offset.zero) & box.size;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => _ShareOptionsSheet(
+        title: 'Grafik teilen',
+        description: 'Wähle, wohin die gestaltete PNG-Tour gehen soll.',
+        whatsAppSubtitle: kIsWeb
+            ? 'PNG speichern und WhatsApp öffnen'
+            : 'PNG über das Teilen-Menü an WhatsApp senden',
+        mailSubtitle: 'PNG anhängen – danach im Systemfenster Mail wählen',
+        moreSubtitle: 'AirDrop, Nachrichten und weitere installierte Apps',
+        saveLabel: kIsWeb ? 'PNG speichern' : null,
+        onWhatsApp: () {
+          Navigator.pop(sheetContext);
+          _shareImageToWhatsApp(text, subject, shareOrigin);
+        },
+        onMail: () {
+          Navigator.pop(sheetContext);
+          _shareImageFile(text, subject, shareOrigin);
+        },
+        onMore: () {
+          Navigator.pop(sheetContext);
+          _shareImageFile(text, subject, shareOrigin);
+        },
+        onSave: kIsWeb
+            ? () {
+                Navigator.pop(sheetContext);
+                _saveImage();
+              }
+            : null,
+      ),
+    );
   }
 
   void _message(String message) {
@@ -113,7 +226,8 @@ class _TourResultViewState extends State<TourResultView> {
                     summary: summary,
                     arrival: result.arrival!,
                     creatingImage: _creatingImage,
-                    onShareImage: () => _shareImage(context, exportText),
+                    onShareImage: () =>
+                        _showImageShareOptions(context, exportText, subject),
                   ),
                   const SizedBox(height: 16),
                   _SummaryGrid(summary: summary, arrival: result.arrival!),
@@ -195,8 +309,11 @@ class _TourResultViewState extends State<TourResultView> {
             text: exportText,
             subject: subject,
             creatingImage: _creatingImage,
-            onShareImage: (buttonContext) =>
-                _shareImage(buttonContext, exportText),
+            onShareImage: (buttonContext) => _showImageShareOptions(
+              buttonContext,
+              exportText,
+              subject,
+            ),
           ),
         ],
       ),
@@ -235,8 +352,9 @@ class _ExportActions extends StatelessWidget {
             box == null ? null : box.localToGlobal(Offset.zero) & box.size,
       );
     } catch (_) {
-      if (context.mounted)
+      if (context.mounted) {
         _message(context, 'Teilen konnte nicht geöffnet werden.');
+      }
     }
   }
 
@@ -276,6 +394,38 @@ class _ExportActions extends StatelessWidget {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _showTextShareOptions(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => _ShareOptionsSheet(
+        title: 'Text teilen',
+        description: 'Wähle, wohin der strukturierte Tourtext gehen soll.',
+        whatsAppSubtitle: 'Tourtext direkt in WhatsApp öffnen',
+        mailSubtitle: 'Betreff und Tourtext in einer E-Mail vorfüllen',
+        moreSubtitle: 'Nachrichten, Notizen und weitere installierte Apps',
+        saveLabel: 'Text kopieren',
+        saveIcon: Icons.copy_rounded,
+        onWhatsApp: () {
+          Navigator.pop(sheetContext);
+          _openWhatsApp(context);
+        },
+        onMail: () {
+          Navigator.pop(sheetContext);
+          _openMail(context);
+        },
+        onMore: () {
+          Navigator.pop(sheetContext);
+          _share(context);
+        },
+        onSave: () {
+          Navigator.pop(sheetContext);
+          _copy(context);
+        },
+      ),
+    );
   }
 
   @override
@@ -323,28 +473,148 @@ class _ExportActions extends StatelessWidget {
                 ),
               ),
               OutlinedButton.icon(
-                onPressed: () => _share(context),
+                onPressed: () => _showTextShareOptions(context),
                 icon: const Icon(Icons.notes_rounded),
                 label: const Text('Text teilen'),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => _openWhatsApp(context),
-                icon: const Icon(Icons.chat_rounded),
-                label: const Text('WhatsApp'),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => _openMail(context),
-                icon: const Icon(Icons.mail_outline_rounded),
-                label: const Text('E-Mail'),
-              ),
-              IconButton.outlined(
-                onPressed: () => _copy(context),
-                tooltip: 'Ergebnis kopieren',
-                icon: const Icon(Icons.copy_rounded),
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ShareOptionsSheet extends StatelessWidget {
+  final String title;
+  final String description;
+  final String whatsAppSubtitle;
+  final String mailSubtitle;
+  final String moreSubtitle;
+  final String? saveLabel;
+  final IconData? saveIcon;
+  final VoidCallback onWhatsApp;
+  final VoidCallback onMail;
+  final VoidCallback onMore;
+  final VoidCallback? onSave;
+
+  const _ShareOptionsSheet({
+    required this.title,
+    required this.description,
+    required this.whatsAppSubtitle,
+    required this.mailSubtitle,
+    required this.moreSubtitle,
+    required this.onWhatsApp,
+    required this.onMail,
+    required this.onMore,
+    this.saveLabel,
+    this.saveIcon,
+    this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  description,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: 14),
+                _ShareDestination(
+                  icon: Icons.chat_rounded,
+                  color: const Color(0xFF168C4B),
+                  label: 'WhatsApp',
+                  subtitle: whatsAppSubtitle,
+                  onTap: onWhatsApp,
+                ),
+                _ShareDestination(
+                  icon: Icons.mail_outline_rounded,
+                  color: const Color(0xFF1565C0),
+                  label: 'E-Mail',
+                  subtitle: mailSubtitle,
+                  onTap: onMail,
+                ),
+                _ShareDestination(
+                  icon: Icons.ios_share_rounded,
+                  color: const Color(0xFF6A1B9A),
+                  label: 'Weitere Apps',
+                  subtitle: moreSubtitle,
+                  onTap: onMore,
+                ),
+                if (saveLabel != null && onSave != null)
+                  _ShareDestination(
+                    icon: saveIcon ?? Icons.download_rounded,
+                    color: const Color(0xFF455A64),
+                    label: saveLabel!,
+                    onTap: onSave!,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ShareDestination extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String? subtitle;
+  final VoidCallback onTap;
+
+  const _ShareDestination({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.onTap,
+    this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: color.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(14),
+        child: ListTile(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          leading: CircleAvatar(
+            backgroundColor: color.withValues(alpha: 0.13),
+            foregroundColor: color,
+            child: Icon(icon),
+          ),
+          title: Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: subtitle == null ? null : Text(subtitle!),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: onTap,
+        ),
       ),
     );
   }

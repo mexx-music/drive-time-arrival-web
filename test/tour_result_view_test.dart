@@ -73,8 +73,36 @@ void main() {
     expect(find.text('Grafik teilen'), findsOneWidget);
     expect(find.text('Text teilen'), findsOneWidget);
     expect(find.byTooltip('Tourgrafik teilen'), findsOneWidget);
+    expect(find.text('WhatsApp'), findsNothing);
+    expect(find.text('E-Mail'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Grafik teilen bietet klare Zielauswahl', (tester) async {
+    await pumpAtSize(tester, const Size(390, 844));
+    final button = find.text('Grafik teilen');
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+
     expect(find.text('WhatsApp'), findsOneWidget);
     expect(find.text('E-Mail'), findsOneWidget);
+    expect(find.text('Weitere Apps'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Text teilen bietet WhatsApp und E-Mail direkt an',
+      (tester) async {
+    await pumpAtSize(tester, const Size(390, 844));
+    final button = find.text('Text teilen');
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+
+    expect(find.text('WhatsApp'), findsOneWidget);
+    expect(find.text('E-Mail'), findsOneWidget);
+    expect(find.text('Weitere Apps'), findsOneWidget);
+    expect(find.text('Text kopieren'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

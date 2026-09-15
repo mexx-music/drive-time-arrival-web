@@ -64,12 +64,14 @@ Stand: 15. September 2026
 - Fähren zeigen explizit, ob eine tägliche Ruhezeit erfüllt wurde.
 - Der Berechnen-Button hat einen Ladezustand und verhindert Doppelberechnungen.
 - Fehler werden als verständliche Meldungen ausgegeben; technische Details bleiben im Debugmodus.
-- Tourergebnisse lassen sich als strukturierter Text über das System-Menü,
-  WhatsApp, E-Mail oder die Zwischenablage exportieren.
+- `Grafik teilen` und `Text teilen` öffnen jeweils eine eindeutige Auswahl für
+  WhatsApp, E-Mail und weitere Apps; der Text kann dort zusätzlich kopiert
+  werden.
 - Zusätzlich lässt sich die vollständige gestaltete Tourübersicht samt
   Kennzahlen, Straßenmix, Pausen-Timeline und ETA als PNG-Grafik teilen. Im Web
-  wird die Grafik heruntergeladen, falls der Browser keine Dateifreigabe
-  unterstützt.
+  kann die Grafik auch direkt gespeichert werden. Fehlt WhatsApp im
+  macOS-Teilen-Menü, wird das PNG gespeichert und WhatsApp mit einem klaren
+  Hinweis zum Anhängen des Bildes geöffnet.
 - Debug-Schalter und technische Fahrplanprotokolle sind nur in
   Entwicklungs-Builds sichtbar und fehlen in der offiziellen Release-Version.
 
