@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:driverroute_eta/logic/eta_calculator.dart';
 import 'package:driverroute_eta/logic/speed_profile.dart';
 import 'package:driverroute_eta/widgets/tour_result_view.dart';
@@ -103,6 +105,34 @@ void main() {
     expect(find.text('E-Mail'), findsOneWidget);
     expect(find.text('Weitere Apps'), findsOneWidget);
     expect(find.text('Text kopieren'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('WhatsApp-Dialog zeigt PNG-Vorschau statt sendbaren Hinweistext',
+      (tester) async {
+    var continued = false;
+    final png = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/dYkAAAAASUVORK5CYII=',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WhatsAppImageReadyDialog(
+            filename: 'driverroute-test.png',
+            png: png,
+            onContinue: () => continued = true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('Grafik kopieren'), findsNWidgets(2));
+    expect(find.text('Weiter zu WhatsApp'), findsOneWidget);
+    expect(find.textContaining('Chat auswählen, Bild mit'), findsOneWidget);
+    await tester.tap(find.text('Weiter zu WhatsApp'));
+    expect(continued, isTrue);
     expect(tester.takeException(), isNull);
   });
 

@@ -10,6 +10,7 @@ import '../logic/speed_profile.dart';
 import '../logic/tour_export.dart';
 import '../services/tour_image_export.dart';
 import '../utils/file_download.dart';
+import '../utils/image_clipboard.dart';
 
 class TourResultView extends StatefulWidget {
   final EtaResult result;
@@ -98,32 +99,29 @@ class _TourResultViewState extends State<TourResultView> {
       return;
     }
 
-    final message = '$subject\n'
-        'Die Tourgrafik wurde als ${image.filename} gespeichert. '
-        'Bitte im gewünschten Chat als Bild anhängen.';
-    final uri = Uri.https('wa.me', '/', {'text': message});
     if (!mounted) return;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => _WhatsAppImageReadyDialog(
+      builder: (dialogContext) => WhatsAppImageReadyDialog(
         filename: image.filename,
+        png: image.bytes,
         onContinue: () {
           Navigator.pop(dialogContext);
-          _openWhatsAppForImage(uri);
+          _openWhatsAppForImage();
         },
       ),
     );
   }
 
-  Future<void> _openWhatsAppForImage(Uri uri) async {
+  Future<void> _openWhatsAppForImage() async {
     try {
-      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      final opened = await launchUrl(
+        Uri.https('web.whatsapp.com', '/'),
+        mode: LaunchMode.externalApplication,
+      );
       if (!opened && mounted) {
         _message('WhatsApp konnte nicht geöffnet werden.');
-      }
-      if (opened && mounted) {
-        _message('In WhatsApp jetzt die gespeicherte PNG-Grafik anhängen.');
       }
     } catch (_) {
       if (mounted) _message('WhatsApp konnte nicht geöffnet werden.');
@@ -591,18 +589,49 @@ class _ShareOptionsSheet extends StatelessWidget {
   }
 }
 
-class _WhatsAppImageReadyDialog extends StatelessWidget {
+class WhatsAppImageReadyDialog extends StatefulWidget {
   final String filename;
+  final Uint8List png;
   final VoidCallback onContinue;
 
-  const _WhatsAppImageReadyDialog({
+  const WhatsAppImageReadyDialog({
     required this.filename,
+    required this.png,
     required this.onContinue,
   });
 
   @override
+  State<WhatsAppImageReadyDialog> createState() =>
+      _WhatsAppImageReadyDialogState();
+}
+
+class _WhatsAppImageReadyDialogState extends State<WhatsAppImageReadyDialog> {
+  bool _copied = false;
+  bool _copying = false;
+
+  Future<void> _copyImage() async {
+    if (_copying) return;
+    setState(() => _copying = true);
+    final copied = await copyPngToClipboard(widget.png);
+    if (!mounted) return;
+    setState(() {
+      _copying = false;
+      _copied = copied;
+    });
+    if (!copied) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Bildkopie nicht verfügbar – gespeichertes PNG in WhatsApp anhängen.'),
+        ),
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       icon: const CircleAvatar(
         radius: 25,
         backgroundColor: Color(0xFFE8F5EE),
@@ -610,7 +639,7 @@ class _WhatsAppImageReadyDialog extends StatelessWidget {
         child: Icon(Icons.download_done_rounded, size: 28),
       ),
       title: const Text(
-        'PNG ist vorbereitet',
+        'Tourgrafik ist vorbereitet',
         textAlign: TextAlign.center,
       ),
       content: ConstrainedBox(
@@ -619,21 +648,50 @@ class _WhatsAppImageReadyDialog extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Center(
+              child: Container(
+                height: 150,
+                constraints: const BoxConstraints(maxWidth: 300),
+                decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0xFFD9E2EC)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Image.memory(widget.png, fit: BoxFit.contain),
+              ),
+            ),
+            const SizedBox(height: 16),
             const _ShareStep(
               number: '1',
               title: 'PNG speichern',
-              detail: 'Der Speichern-Dialog wurde zuerst geöffnet.',
+              detail: 'Das Bild wurde zum Speichern angeboten.',
               completed: true,
             ),
             const SizedBox(height: 14),
-            const _ShareStep(
+            _ShareStep(
               number: '2',
-              title: 'Weiter zu WhatsApp',
-              detail: 'Chat auswählen und das PNG dort als Bild anhängen.',
+              title: 'Grafik kopieren',
+              detail: _copied
+                  ? 'Bild liegt in der Zwischenablage.'
+                  : 'Damit du es im WhatsApp-Chat einfügen kannst.',
+              completed: _copied,
+            ),
+            const SizedBox(height: 14),
+            const _ShareStep(
+              number: '3',
+              title: 'WhatsApp öffnen',
+              detail:
+                  'Chat auswählen, Bild mit ⌘V/Strg+V einfügen und erst dann senden.',
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Falls das Kopieren nicht klappt, kannst du stattdessen '
+              'die gespeicherte PNG-Datei im Chat anhängen.',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 14),
             Text(
-              filename,
+              widget.filename,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -648,8 +706,13 @@ class _WhatsAppImageReadyDialog extends StatelessWidget {
           onPressed: () => Navigator.pop(context),
           child: const Text('Später'),
         ),
+        OutlinedButton.icon(
+          onPressed: _copying ? null : _copyImage,
+          icon: const Icon(Icons.copy_rounded),
+          label: Text(_copied ? 'Grafik erneut kopieren' : 'Grafik kopieren'),
+        ),
         FilledButton.icon(
-          onPressed: onContinue,
+          onPressed: widget.onContinue,
           icon: const Icon(Icons.chat_rounded),
           label: const Text('Weiter zu WhatsApp'),
         ),
