@@ -2,12 +2,54 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/widgets.dart';
+import 'package:screenshot/screenshot.dart';
 
 class TourImageExport {
+  static const double shareWidth = 600;
   static const double _maxDimension = 8000;
   static const double _maxPixels = 12000000;
+
+  static Future<Uint8List> captureForSharing({
+    required BuildContext context,
+    required Widget graphic,
+    required int estimatedEvents,
+    required GlobalKey fallbackBoundaryKey,
+  }) async {
+    try {
+      final estimatedHeight = 760.0 + estimatedEvents * 95.0;
+      final pixelRatio = recommendedPixelRatio(
+        Size(shareWidth, estimatedHeight),
+      );
+      return await ScreenshotController().captureFromLongWidget(
+        InheritedTheme.captureAll(
+          context,
+          MediaQuery(
+            data: MediaQuery.of(context),
+            child: SizedBox(
+              width: shareWidth,
+              child: graphic,
+            ),
+          ),
+        ),
+        context: context,
+        delay: const Duration(milliseconds: 50),
+        pixelRatio: pixelRatio,
+        constraints: const BoxConstraints(
+          minWidth: shareWidth,
+          maxWidth: shareWidth,
+        ),
+      );
+    } catch (error, stackTrace) {
+      assert(() {
+        debugPrint('Offscreen-Tourgrafik fehlgeschlagen: $error');
+        debugPrintStack(stackTrace: stackTrace);
+        return true;
+      }());
+      return capture(fallbackBoundaryKey);
+    }
+  }
 
   static Future<Uint8List> capture(GlobalKey boundaryKey) async {
     final renderObject = boundaryKey.currentContext?.findRenderObject();

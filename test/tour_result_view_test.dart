@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:driverroute_eta/logic/eta_calculator.dart';
 import 'package:driverroute_eta/logic/speed_profile.dart';
+import 'package:driverroute_eta/services/tour_image_export.dart';
 import 'package:driverroute_eta/widgets/tour_result_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -144,6 +146,49 @@ void main() {
     expect(find.text('Pausen / Ruhe'), findsOneWidget);
     expect(find.textContaining('Ø 80 km/h'), findsWidgets);
     expect(find.text('ETA'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Vollständige Tourgrafik wird in Exportbreite gerendert',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final result = exampleResult();
+    final fallbackKey = GlobalKey();
+    late BuildContext exportContext;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Builder(builder: (context) {
+          exportContext = context;
+          return RepaintBoundary(
+            key: fallbackKey,
+            child: const SizedBox(width: 100, height: 100),
+          );
+        }),
+      ),
+    ));
+
+    final png = await tester.runAsync(
+      () => TourImageExport.captureForSharing(
+        context: exportContext,
+        graphic: TourResultView(
+          result: result,
+          origin: 'Wien, Österreich',
+          destination: 'Stockholm, Schweden',
+          exportOnly: true,
+        ),
+        estimatedEvents: result.steps.length,
+        fallbackBoundaryKey: fallbackKey,
+      ),
+    );
+
+    expect(png, isNotNull);
+    final data = ByteData.sublistView(png!);
+    expect(data.getUint32(16), 1200);
+    expect(data.getUint32(20), greaterThan(1200));
     expect(tester.takeException(), isNull);
   });
 }

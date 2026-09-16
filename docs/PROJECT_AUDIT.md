@@ -75,6 +75,10 @@ Stand: 15. September 2026
   danach öffnet `Weiter zu WhatsApp` einen Chat ohne vorausgefüllten Text. Dort
   kann das Bild mit Einfügen eingesetzt oder die gespeicherte Datei angehängt
   werden. Ein WhatsApp-Link kann keine lokale Datei automatisch anhängen.
+- Der PNG-Export verwendet auf iPhone und Desktop dieselbe 600-Pixel-Layoutbreite
+  (bei normalen Touren in doppelter Bildauflösung), ohne die Bildschirmansicht
+  zu verändern. Das reduziert das sehr schmale Hochformat in WhatsApp; bei
+  langen Tourabläufen bleibt eine Vorschau mit seitlichen Flächen möglich.
 - Debug-Schalter und technische Fahrplanprotokolle sind nur in
   Entwicklungs-Builds sichtbar und fehlen in der offiziellen Release-Version.
 

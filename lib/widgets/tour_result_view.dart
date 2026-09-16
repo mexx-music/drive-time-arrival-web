@@ -17,6 +17,7 @@ class TourResultView extends StatefulWidget {
   final String origin;
   final String destination;
   final RoadMixAnalysis? roadMix;
+  final bool exportOnly;
 
   const TourResultView({
     super.key,
@@ -24,6 +25,7 @@ class TourResultView extends StatefulWidget {
     required this.origin,
     required this.destination,
     this.roadMix,
+    this.exportOnly = false,
   });
 
   @override
@@ -38,8 +40,18 @@ class _TourResultViewState extends State<TourResultView> {
     if (_creatingImage) return null;
     setState(() => _creatingImage = true);
     try {
-      await WidgetsBinding.instance.endOfFrame;
-      final png = await TourImageExport.capture(_imageBoundaryKey);
+      final png = await TourImageExport.captureForSharing(
+        context: context,
+        graphic: TourResultView(
+          result: widget.result,
+          origin: widget.origin,
+          destination: widget.destination,
+          roadMix: widget.roadMix,
+          exportOnly: true,
+        ),
+        estimatedEvents: widget.result.steps.length,
+        fallbackBoundaryKey: _imageBoundaryKey,
+      );
       final filename =
           'driverroute-${_filePart(widget.origin)}-${_filePart(widget.destination)}.png';
       return (bytes: png, filename: filename);
@@ -238,12 +250,16 @@ class _TourResultViewState extends State<TourResultView> {
                     destination: destination,
                     summary: summary,
                     arrival: result.arrival!,
-                    creatingImage: _creatingImage,
+                    creatingImage: _creatingImage || widget.exportOnly,
                     onShareImage: () =>
                         _showImageShareOptions(context, exportText, subject),
                   ),
                   const SizedBox(height: 16),
-                  _SummaryGrid(summary: summary, arrival: result.arrival!),
+                  _SummaryGrid(
+                    summary: summary,
+                    arrival: result.arrival!,
+                    exportOnly: widget.exportOnly,
+                  ),
                   if (roadMix != null && roadMix.hasBreakdown) ...[
                     const SizedBox(height: 10),
                     _RoadMixBanner(analysis: roadMix),
@@ -317,17 +333,19 @@ class _TourResultViewState extends State<TourResultView> {
               ),
             ),
           ),
-          const SizedBox(height: 10),
-          _ExportActions(
-            text: exportText,
-            subject: subject,
-            creatingImage: _creatingImage,
-            onShareImage: (buttonContext) => _showImageShareOptions(
-              buttonContext,
-              exportText,
-              subject,
+          if (!widget.exportOnly) ...[
+            const SizedBox(height: 10),
+            _ExportActions(
+              text: exportText,
+              subject: subject,
+              creatingImage: _creatingImage,
+              onShareImage: (buttonContext) => _showImageShareOptions(
+                buttonContext,
+                exportText,
+                subject,
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -992,8 +1010,13 @@ class _TourHeader extends StatelessWidget {
 class _SummaryGrid extends StatelessWidget {
   final EtaSummary summary;
   final DateTime arrival;
+  final bool exportOnly;
 
-  const _SummaryGrid({required this.summary, required this.arrival});
+  const _SummaryGrid({
+    required this.summary,
+    required this.arrival,
+    required this.exportOnly,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1059,17 +1082,29 @@ class _SummaryGrid extends StatelessWidget {
               runSpacing: 8,
               children: [
                 if (summary.tenHourDaysUsed > 0)
-                  Chip(
-                    avatar: const Icon(Icons.schedule_rounded, size: 18),
-                    label: Text(
-                        '10-h-Fahrt: ${summary.tenHourDaysUsed} von 2 verwendet'),
-                  ),
+                  exportOnly
+                      ? _ExportStatusChip(
+                          icon: Icons.schedule_rounded,
+                          label:
+                              '10-h-Fahrt: ${summary.tenHourDaysUsed} von 2 verwendet',
+                        )
+                      : Chip(
+                          avatar: const Icon(Icons.schedule_rounded, size: 18),
+                          label: Text(
+                              '10-h-Fahrt: ${summary.tenHourDaysUsed} von 2 verwendet'),
+                        ),
                 if (summary.reducedDailyRestsUsed > 0)
-                  Chip(
-                    avatar: const Icon(Icons.nightlight_round, size: 18),
-                    label: Text(
-                        '9-h-Ruhe: ${summary.reducedDailyRestsUsed} von 3 verwendet'),
-                  ),
+                  exportOnly
+                      ? _ExportStatusChip(
+                          icon: Icons.nightlight_round,
+                          label:
+                              '9-h-Ruhe: ${summary.reducedDailyRestsUsed} von 3 verwendet',
+                        )
+                      : Chip(
+                          avatar: const Icon(Icons.nightlight_round, size: 18),
+                          label: Text(
+                              '9-h-Ruhe: ${summary.reducedDailyRestsUsed} von 3 verwendet'),
+                        ),
               ],
             ),
           ],
@@ -1077,6 +1112,30 @@ class _SummaryGrid extends StatelessWidget {
       );
     });
   }
+}
+
+class _ExportStatusChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _ExportStatusChip({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18),
+            const SizedBox(width: 8),
+            Text(label),
+          ],
+        ),
+      );
 }
 
 String _speed(double kmh) {
