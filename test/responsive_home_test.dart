@@ -1,6 +1,7 @@
 import 'package:driverroute_eta/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   Future<void> pumpAtSize(
@@ -175,7 +176,8 @@ void main() {
       250,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.ensureVisible(find.text('Alternative über Dänemark: 2 Fähren'));
+    await tester
+        .ensureVisible(find.text('Alternative über Dänemark: 2 Fähren'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Alternative über Dänemark: 2 Fähren'));
     await tester.pumpAndSettle();
@@ -190,6 +192,42 @@ void main() {
     );
     expect(tester.widget<SwitchListTile>(automatic).value, isFalse);
     expect(tester.widget<SwitchListTile>(denmark).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Fährsuche wählt eine Verbindung und übersteuert Automatik',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'ferries_json_cache_v2':
+          '{"routes":[{"id":"igou_bari_grimaldi","name":"Igoumenitsa–Bari (Grimaldi)","from":"Igoumenitsa","to":"Bari","operators":["Grimaldi"],"duration_hours":10,"departures_local":[],"tz":"Europe/Athens","region":"Griechenland/Italien","active":true}]}',
+    });
+    await pumpAtSize(tester, width: 390, height: 844);
+    await tester.scrollUntilVisible(
+      find.text('Fähre'),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('Fähre'));
+    await tester.pumpAndSettle();
+
+    final search = find.byWidgetPredicate((widget) =>
+        widget is TextField &&
+        widget.decoration?.labelText == 'Fähre manuell suchen');
+    await tester.ensureVisible(search);
+    await tester.enterText(search, 'Igoumenitsa Bari');
+    await tester.pumpAndSettle();
+    final route = find.text('Igoumenitsa–Bari (Grimaldi)');
+    await tester.ensureVisible(route);
+    await tester.tap(route);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Manuell gewählt – statt automatischem Vorschlag'),
+        findsOneWidget);
+    final automatic = find.ancestor(
+      of: find.text('Fähre automatisch vorschlagen'),
+      matching: find.byType(SwitchListTile),
+    );
+    expect(tester.widget<SwitchListTile>(automatic).value, isFalse);
     expect(tester.takeException(), isNull);
   });
 }

@@ -14,6 +14,7 @@ import 'services/ferry_schedule_loader.dart';
 import 'logic/eta_calculator.dart';
 import 'logic/ferry_auto.dart';
 import 'logic/ferry_route_suggester.dart';
+import 'logic/ferry_route_search.dart';
 import 'logic/denmark_ferry_route.dart';
 import 'logic/port_aliases.dart';
 import 'logic/speed_profile.dart';
@@ -143,6 +144,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Waypoints
   final _stopCtl = TextEditingController();
+  final _ferrySearchCtl = TextEditingController();
   final List<String> _stops = [];
   final List<LatLng?> _stopCoords =
       []; // parallel storage for resolved stop coordinates
@@ -224,6 +226,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _destCtl.dispose();
     _kmCtl.dispose();
     _stopCtl.dispose();
+    _ferrySearchCtl.dispose();
     super.dispose();
   }
 
@@ -1726,13 +1729,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     SwitchListTile(
                       title: const Text('Fähre automatisch vorschlagen'),
-                      subtitle: const Text(
-                        'Für Griechenland–Italien sowie Deutschland/Österreich–Schweden/Norwegen werden erreichbare Häfen ohne Zwischenstopp verglichen. Buchung separat beim Anbieter prüfen.',
-                      ),
                       value: _autoFerry,
                       onChanged: (v) => setState(() {
                         _autoFerry = v;
-                        if (v) _viaDenmarkFerries = false;
+                        if (v) {
+                          _viaDenmarkFerries = false;
+                          _manualFerry = null;
+                          _manualFerryDeparture = null;
+                        }
                         _etaResult = null;
                       }),
                     ),
@@ -1761,48 +1765,99 @@ class _HomeScreenState extends State<HomeScreen> {
                       onChanged: (value) =>
                           setState(() => _ferryRestEligible = value),
                     ),
-                    // WICHTIG: Kein "null"-DropdownItem, stattdessen hint verwenden
-                    // --- Fähre Auswahl (mit robustem initialValue + Reset) ---
-                    Builder(builder: (ctx) {
-                      final selectedFerry =
-                          _routes.contains(_manualFerry) ? _manualFerry : null;
-                      return Row(
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Expanded(
-                            child: DropdownButtonFormField<FerryRoute>(
-                              key: ValueKey(selectedFerry?.id ?? 'no-ferry'),
-                              isExpanded: true,
-                              initialValue: selectedFerry,
-                              hint: const Text('Keine'),
-                              decoration: const InputDecoration(
-                                labelText: 'Manuelle Fährwahl (optional)',
-                              ),
-                              items: _routes
-                                  .map((r) => DropdownMenuItem<FerryRoute>(
-                                        value: r,
-                                        child: Text(r.name),
-                                      ))
-                                  .toList(),
-                              onChanged: (v) => setState(() {
-                                _manualFerry = v;
-                                if (v != null) _viaDenmarkFerries = false;
-                                _etaResult = null;
-                              }),
+                          TextField(
+                            controller: _ferrySearchCtl,
+                            decoration: InputDecoration(
+                              labelText: 'Fähre manuell suchen',
+                              hintText:
+                                  'Hafen oder Verbindung, z. B. Igoumenitsa',
+                              prefixIcon: const Icon(Icons.search),
+                              suffixIcon: _ferrySearchCtl.text.isEmpty
+                                  ? null
+                                  : IconButton(
+                                      tooltip: 'Suche löschen',
+                                      onPressed: () => setState(
+                                        () => _ferrySearchCtl.clear(),
+                                      ),
+                                      icon: const Icon(Icons.clear),
+                                    ),
                             ),
+                            onChanged: (_) => setState(() {}),
                           ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            tooltip: 'Auswahl zurücksetzen',
-                            onPressed: () => setState(() {
-                              _manualFerry = null;
-                              _manualFerryDeparture = null;
-                              _etaResult = null;
+                          if (_manualFerry != null) ...[
+                            const SizedBox(height: 8),
+                            Card(
+                              color: const Color(0xFFEAF4FF),
+                              child: ListTile(
+                                leading: const Icon(Icons.directions_boat),
+                                title: Text(_manualFerry!.name),
+                                subtitle: const Text(
+                                  'Manuell gewählt – statt automatischem Vorschlag',
+                                ),
+                                trailing: IconButton(
+                                  tooltip: 'Fährwahl zurücksetzen',
+                                  onPressed: () => setState(() {
+                                    _manualFerry = null;
+                                    _manualFerryDeparture = null;
+                                    _etaResult = null;
+                                  }),
+                                  icon: const Icon(Icons.close),
+                                ),
+                              ),
+                            ),
+                          ],
+                          if (_ferrySearchCtl.text.trim().isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Builder(builder: (context) {
+                              final matches = FerryRouteSearch.find(
+                                _routes,
+                                _ferrySearchCtl.text,
+                              );
+                              if (matches.isEmpty) {
+                                return const Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: Text(
+                                      'Keine passende Fährverbindung gefunden.'),
+                                );
+                              }
+                              return ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxHeight: 260),
+                                child: ListView.builder(
+                                  shrinkWrap: true,
+                                  itemCount: matches.length,
+                                  itemBuilder: (context, index) {
+                                    final route = matches[index];
+                                    return ListTile(
+                                      title: Text(route.name),
+                                      subtitle: Text(
+                                        '${route.from} → ${route.to} · ${route.operators.join(', ')}',
+                                      ),
+                                      onTap: () {
+                                        FocusScope.of(context).unfocus();
+                                        setState(() {
+                                          _manualFerry = route;
+                                          _manualFerryDeparture = null;
+                                          _autoFerry = false;
+                                          _viaDenmarkFerries = false;
+                                          _ferrySearchCtl.clear();
+                                          _etaResult = null;
+                                        });
+                                      },
+                                    );
+                                  },
+                                ),
+                              );
                             }),
-                            icon: const Icon(Icons.clear),
-                          ),
+                          ],
                         ],
-                      );
-                    }),
+                      ),
+                    ),
                     if (_manualFerry != null || _autoFerry)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 8.0),
