@@ -1,6 +1,6 @@
 # DriveTimeArrival / DriverRoute ETA – Projektprüfung
 
-Stand: 15. September 2026
+Stand: 17. September 2026
 
 ## 1. Was bereits gut funktioniert
 
@@ -40,6 +40,9 @@ Stand: 15. September 2026
 - Fährdaten enthalten derzeit nur eine Zeitzone pro Route. Abfahrts- und Ankunftshafen brauchen getrennte IANA-Zeitzonen, damit lokale Uhrzeiten und Sommerzeitwechsel zuverlässig dargestellt werden.
 - Zwischenstopps beeinflussen die Routendistanz, haben aber noch keine eigene Aufenthaltsdauer und deshalb kein eigenes Timeline-Ereignis.
 - Persistenz mit `shared_preferences` ist als Abhängigkeit vorhanden, wird für Tour- und Wochenzustand aber noch nicht konsequent eingesetzt.
+- Allgemeine Ländersperren für beliebige Länder und die automatische
+  Kombination einer Serbien-Umfahrung mit eigenen Zwischenstopps sind noch
+  nicht implementiert. Google Directions bietet keinen Länder-`avoid`-Parameter.
 
 ## 4. UI-/UX-Verbesserungen
 
@@ -58,6 +61,61 @@ Stand: 15. September 2026
 - Der Startort kann über `Meine Position` aus der Browser-/Geräteposition
   übernommen werden; die Zielsuche wird anschließend auf diesen Bereich
   gewichtet.
+- Es lassen sich bis zu zehn Zwischenstopps hinzufügen, in Fahrreihenfolge
+  verschieben und wieder entfernen. Die Reihenfolge wird für Route, ETA und
+  Kartenansicht beibehalten.
+- `Serbien für die Route sperren` ist optional. Führt die ursprüngliche Route
+  durch Serbien, wird für Griechenland–Österreich automatisch ein Korridor über
+  Bulgarien, Rumänien und Ungarn angefordert. Die tatsächlichen Google-
+  Streckenlinien werden gegen eine vereinfachte Natural-Earth-Ländergrenze
+  geprüft. Bei fehlender oder weiterhin durch Serbien führender Route wird
+  keine scheinbar gültige ETA erzeugt. Andere Relationen benötigen derzeit
+  eigene Zwischenstopps; Grenzdaten und Verkehrsführung bleiben eine
+  Planungshilfe und sind vor der Fahrt zu prüfen.
+- Fahr- und Einsatzzeit werden jetzt als *verbleibende* Zeit eingegeben und in
+  die bereits verbrauchten Werte der ETA-Engine umgerechnet. Die Eingabe von
+  Stunden und Minuten erfolgt per Zahlentastatur statt per Zahlenrad;
+  manuelle Abfahrtszeit wird in einem gemeinsamen Zeitdialog gewählt.
+- Die automatische Fährplanung ist standardmäßig aktiv. Für erkannte
+  Griechenland–Italien-Touren ohne Zwischenstopps vergleicht sie Patras und
+  Igoumenitsa mit Brindisi, Bari, Ancona und Venedig anhand der erreichbaren
+  Straßenbeine und der hinterlegten Überfahrtsdauer. Die Route wird ohne
+  Hafen-Zwischenpunkte in die ETA übernommen. Hafen- und Zielstrecken müssen
+  von Directions geliefert werden; bei fehlenden Daten erfolgt kein
+  erfundener Fährvorschlag. Abfahrtszeiten und saisonale Verbindungen aus der
+  lokalen Beispieldatei sind nicht live geprüft und müssen beim Betreiber
+  verifiziert werden.
+- Für eine optionale manuelle Fährabfahrt werden Datum und Uhrzeit jetzt mit
+  einem gemeinsamen 24-Stunden-Zeitdialog statt zwei Zahlenrädern gewählt.
+  Der funktionslose Testknopf wurde aus der offiziellen Oberfläche entfernt.
+- Nordeuropa: Für Deutschland/Österreich–Schweden/Norwegen werden Kiel, Travemünde und
+  Rostock mit Trelleborg, Malmö, Göteborg und Oslo verglichen. Für Lkw-Touren
+  wird eine nach den hinterlegten Verbindungen erreichbare Fähre gegenüber der
+  Strecke über Dänemark bevorzugt; innerhalb der Fährangebote zählt bislang
+  Straßenstrecke plus Überfahrtsdauer, **kein** Live-Preis. Bei konkreten
+  Hafenpaaren erhält die Direktverbindung Vorrang. Neu aufgenommen wurden
+  [Finnlines Travemünde–Malmö](https://www.finnlines.com/routes/malmo-travemunde/)
+  (ca. 9 h) und
+  [Stena Line Kiel–Göteborg](https://www.stenaline.co.uk/routes/kiel-gothenburg)
+  (ca. 14 h), jeweils in beiden Richtungen. TT-Line Kiel–Trelleborg wurde
+  deaktiviert, weil die aktuelle
+  [TT-Line-Routenübersicht](https://www.ttline.com/en/sweden-ferries)
+  Kiel nicht als Hafen führt. Rostock–Trelleborg wird von
+  [TT-Line](https://www.ttline.com/en/germany-ferries/trelleborg-rostock/)
+  und [Stena Line](https://www.stenaline.se/rutter/trelleborg-rostock)
+  bestätigt.
+- Ein ungeprüfter Beispiel-Fahrplan wird nicht mehr zur Hafenwartezeit
+  hochgerechnet. Ohne eingetragene gebuchte Abfahrt ist die Fähren-ETA nur
+  eine frühestmögliche Schätzung ohne Wartezeit; Buchung, Fahrzeugzulassung,
+  Preis und Abfahrt müssen separat beim Betreiber geprüft werden.
+- Als ausdrücklich wählbare Alternative für Deutschland–Schweden ist die
+  Route über Dänemark mit **zwei** kurzen Fähren enthalten:
+  [Helsingborg–Helsingør (20 min)](https://www.oresundslinjen.com/freight)
+  und [Rødby–Puttgarden (45 min)](https://freight.scandlines.com/freight-routes/puttgarden-rodby/).
+  Die drei Straßenbeine werden separat geprüft und beide Fähren als eigene
+  Timeline-Ereignisse geplant. Sie wird nicht automatisch statt der direkten
+  Ostseefähre gewählt. Warte- und Check-in-Zeiten sind mangels gebuchter
+  Abfahrten noch nicht enthalten; die ETA ist daher eine Untergrenze.
 - Selten benötigte Eingaben sind eingeklappt; technische Fahrplanquellen erscheinen nur im Debugmodus.
 - Nach der Berechnung steht zuerst eine Tourzusammenfassung mit Distanz, reiner Fahrzeit, Pausen/Ruhe und ETA.
 - Der Tourablauf wird als typisierte Timeline mit Start, Fahrblöcken, Lenkpausen, Tankstopp, Tages-/Wochenruhe, Hafen, Wartezeit, Fähre und Ziel dargestellt.

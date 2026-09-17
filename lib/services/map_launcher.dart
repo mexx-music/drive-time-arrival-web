@@ -26,7 +26,7 @@ List<LatLng> decodePolyline(String encoded) {
       result |= (b & 0x1f) << shift;
       shift += 5;
     } while (b >= 0x20);
-    final dlat = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
+    final dlat = result.isOdd ? -(result ~/ 2) - 1 : result ~/ 2;
     lat += dlat;
 
     shift = 0;
@@ -36,7 +36,7 @@ List<LatLng> decodePolyline(String encoded) {
       result |= (b & 0x1f) << shift;
       shift += 5;
     } while (b >= 0x20);
-    final dlng = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
+    final dlng = result.isOdd ? -(result ~/ 2) - 1 : result ~/ 2;
     lng += dlng;
 
     points.add(LatLng(lat / 1e5, lng / 1e5));
@@ -45,8 +45,10 @@ List<LatLng> decodePolyline(String encoded) {
   // debug: basic info
   try {
     // ignore: avoid_print
-    print('[decodePolyline] encoded.length=${encoded.length}, points=${points.length}');
-    final first5 = points.take(5).map((p) => '${p.latitude},${p.longitude}').toList();
+    print(
+        '[decodePolyline] encoded.length=${encoded.length}, points=${points.length}');
+    final first5 =
+        points.take(5).map((p) => '${p.latitude},${p.longitude}').toList();
     // ignore: avoid_print
     print('[decodePolyline] first5: $first5');
   } catch (_) {}
@@ -107,7 +109,8 @@ Future<void> openMapOsm(
         final res = await det.fetchDirections(origin: from, destination: to);
         if (!res.ok) {
           // ignore: avoid_print
-          print('[openMapOsm] segment directions failed: ${res.status} for $from->$to');
+          print(
+              '[openMapOsm] segment directions failed: ${res.status} for $from->$to');
           continue;
         }
         final routeRaw = res.raw;
@@ -115,7 +118,8 @@ Future<void> openMapOsm(
         // --- Diagnostics: inspect routeRaw and its structure (minimal, safe)
         try {
           // ignore: avoid_print
-          print('[openMapOsm] routeRaw keys: ${routeRaw is Map ? (routeRaw as Map).keys.toList() : routeRaw.runtimeType}');
+          print(
+              '[openMapOsm] routeRaw keys: ${routeRaw is Map ? (routeRaw as Map).keys.toList() : routeRaw.runtimeType}');
           if (routeRaw is Map && routeRaw.containsKey('routes')) {
             final routes = routeRaw['routes'];
             // ignore: avoid_print
@@ -125,9 +129,12 @@ Future<void> openMapOsm(
               if (r0 is Map) {
                 // ignore: avoid_print
                 print('[openMapOsm] routes[0] keys: ${r0.keys.toList()}');
-                final overview = (r0['overview_polyline'] is Map) ? (r0['overview_polyline'] as Map)['points'] : null;
+                final overview = (r0['overview_polyline'] is Map)
+                    ? (r0['overview_polyline'] as Map)['points']
+                    : null;
                 // ignore: avoid_print
-                print('[openMapOsm] overview_polyline exists: ${overview != null} (type=${overview?.runtimeType})');
+                print(
+                    '[openMapOsm] overview_polyline exists: ${overview != null} (type=${overview?.runtimeType})');
                 final legs = r0['legs'];
                 // ignore: avoid_print
                 print('[openMapOsm] legs type: ${legs.runtimeType}');
@@ -137,12 +144,18 @@ Future<void> openMapOsm(
                   if (firstLeg is Map && firstLeg.containsKey('steps')) {
                     final steps = firstLeg['steps'];
                     // ignore: avoid_print
-                    print('[openMapOsm] firstLeg.steps type: ${steps.runtimeType} length=${steps is List ? steps.length : 'n/a'}');
+                    print(
+                        '[openMapOsm] firstLeg.steps type: ${steps.runtimeType} length=${steps is List ? steps.length : 'n/a'}');
                     if (steps is List && steps.isNotEmpty) {
                       final sample = steps.take(3).map((st) {
                         if (st is Map) {
-                          final poly = (st['polyline'] is Map) ? (st['polyline'] as Map)['points'] : null;
-                          return {'polylineType': poly?.runtimeType.toString(), 'polylineLen': poly is String ? poly.length : 0};
+                          final poly = (st['polyline'] is Map)
+                              ? (st['polyline'] as Map)['points']
+                              : null;
+                          return {
+                            'polylineType': poly?.runtimeType.toString(),
+                            'polylineLen': poly is String ? poly.length : 0
+                          };
                         }
                         return {'polylineType': st.runtimeType.toString()};
                       }).toList();
@@ -166,7 +179,9 @@ Future<void> openMapOsm(
           if (routes is List && routes.isNotEmpty) {
             final first = routes.first as Map<String, dynamic>;
             final ov = first['overview_polyline'];
-            if (ov is Map && ov.containsKey('points') && ov['points'] is String) {
+            if (ov is Map &&
+                ov.containsKey('points') &&
+                ov['points'] is String) {
               poly = ov['points'] as String;
             } else {
               poly = null;
@@ -182,28 +197,41 @@ Future<void> openMapOsm(
           try {
             final snippet = poly.length > 120 ? poly.substring(0, 120) : poly;
             // ignore: avoid_print
-            print('[openMapOsm] overview_polyline length=${poly.length} snippet=$snippet');
+            print(
+                '[openMapOsm] overview_polyline length=${poly.length} snippet=$snippet');
           } catch (_) {}
 
           final seg = decodePolyline(poly);
-          final validSeg = seg.where((p) => p.latitude >= -90 && p.latitude <= 90 && p.longitude >= -180 && p.longitude <= 180).toList();
+          final validSeg = seg
+              .where((p) =>
+                  p.latitude >= -90 &&
+                  p.latitude <= 90 &&
+                  p.longitude >= -180 &&
+                  p.longitude <= 180)
+              .toList();
           // ignore: avoid_print
-          print('[openMapOsm] overview_polyline decoded points=${seg.length} valid=${validSeg.length}');
+          print(
+              '[openMapOsm] overview_polyline decoded points=${seg.length} valid=${validSeg.length}');
 
           // If overview gives too few valid points, try safe step-concatenation as fallback
           if (validSeg.length < 8) {
             try {
-              final legs = routeRaw['routes'] is List && (routeRaw['routes'] as List).isNotEmpty
+              final legs = routeRaw['routes'] is List &&
+                      (routeRaw['routes'] as List).isNotEmpty
                   ? (routeRaw['routes'] as List).first['legs']
                   : null;
               if (legs is List) {
                 final stepPolys = <LatLng>[];
                 for (final leg in legs) {
-                  if (leg is Map && leg.containsKey('steps') && leg['steps'] is List) {
+                  if (leg is Map &&
+                      leg.containsKey('steps') &&
+                      leg['steps'] is List) {
                     final steps = leg['steps'] as List;
                     for (final st in steps) {
                       if (st is Map) {
-                        final sp = (st['polyline'] is Map) ? (st['polyline'] as Map)['points'] : null;
+                        final sp = (st['polyline'] is Map)
+                            ? (st['polyline'] as Map)['points']
+                            : null;
                         if (sp is String && sp.isNotEmpty) {
                           try {
                             final pts = decodePolyline(sp);
@@ -214,16 +242,25 @@ Future<void> openMapOsm(
                     }
                   }
                 }
-                final validStepPolys = stepPolys.where((p) => p.latitude >= -90 && p.latitude <= 90 && p.longitude >= -180 && p.longitude <= 180).toList();
+                final validStepPolys = stepPolys
+                    .where((p) =>
+                        p.latitude >= -90 &&
+                        p.latitude <= 90 &&
+                        p.longitude >= -180 &&
+                        p.longitude <= 180)
+                    .toList();
                 // ignore: avoid_print
-                print('[openMapOsm] step-polylines concat valid=${validStepPolys.length}');
+                print(
+                    '[openMapOsm] step-polylines concat valid=${validStepPolys.length}');
                 if (validStepPolys.length > validSeg.length) {
                   // ignore: avoid_print
-                  print('[openMapOsm] using step-polylines fallback, points=${validStepPolys.length}');
+                  print(
+                      '[openMapOsm] using step-polylines fallback, points=${validStepPolys.length}');
                   if (points.isNotEmpty) {
                     final first = validStepPolys.first;
                     final lastExisting = points.last;
-                    if (!(lastExisting.latitude == first.latitude && lastExisting.longitude == first.longitude)) {
+                    if (!(lastExisting.latitude == first.latitude &&
+                        lastExisting.longitude == first.longitude)) {
                       points.addAll(validStepPolys);
                     } else {
                       points.addAll(validStepPolys.skip(1));
@@ -237,7 +274,8 @@ Future<void> openMapOsm(
                     if (points.isNotEmpty) {
                       final first = validSeg.first;
                       final lastExisting = points.last;
-                      if (!(lastExisting.latitude == first.latitude && lastExisting.longitude == first.longitude)) {
+                      if (!(lastExisting.latitude == first.latitude &&
+                          lastExisting.longitude == first.longitude)) {
                         points.addAll(validSeg);
                       } else {
                         points.addAll(validSeg.skip(1));
@@ -253,7 +291,8 @@ Future<void> openMapOsm(
                   if (points.isNotEmpty) {
                     final first = validSeg.first;
                     final lastExisting = points.last;
-                    if (!(lastExisting.latitude == first.latitude && lastExisting.longitude == first.longitude)) {
+                    if (!(lastExisting.latitude == first.latitude &&
+                        lastExisting.longitude == first.longitude)) {
                       points.addAll(validSeg);
                     } else {
                       points.addAll(validSeg.skip(1));
@@ -271,7 +310,8 @@ Future<void> openMapOsm(
                 if (points.isNotEmpty) {
                   final first = validSeg.first;
                   final lastExisting = points.last;
-                  if (!(lastExisting.latitude == first.latitude && lastExisting.longitude == first.longitude)) {
+                  if (!(lastExisting.latitude == first.latitude &&
+                      lastExisting.longitude == first.longitude)) {
                     points.addAll(validSeg);
                   } else {
                     points.addAll(validSeg.skip(1));
@@ -286,7 +326,8 @@ Future<void> openMapOsm(
             if (points.isNotEmpty) {
               final first = validSeg.first;
               final lastExisting = points.last;
-              if (!(lastExisting.latitude == first.latitude && lastExisting.longitude == first.longitude)) {
+              if (!(lastExisting.latitude == first.latitude &&
+                  lastExisting.longitude == first.longitude)) {
                 points.addAll(validSeg);
               } else {
                 points.addAll(validSeg.skip(1));
@@ -301,15 +342,20 @@ Future<void> openMapOsm(
             final routes = routeRaw['routes'];
             if (routes is List && routes.isNotEmpty) {
               final r0 = routes.first;
-              final legs = (r0 is Map && r0.containsKey('legs')) ? r0['legs'] : null;
+              final legs =
+                  (r0 is Map && r0.containsKey('legs')) ? r0['legs'] : null;
               if (legs is List) {
                 final stepPolys = <LatLng>[];
                 for (final leg in legs) {
-                  if (leg is Map && leg.containsKey('steps') && leg['steps'] is List) {
+                  if (leg is Map &&
+                      leg.containsKey('steps') &&
+                      leg['steps'] is List) {
                     final steps = leg['steps'] as List;
                     for (final st in steps) {
                       if (st is Map) {
-                        final sp = (st['polyline'] is Map) ? (st['polyline'] as Map)['points'] : null;
+                        final sp = (st['polyline'] is Map)
+                            ? (st['polyline'] as Map)['points']
+                            : null;
                         if (sp is String && sp.isNotEmpty) {
                           try {
                             final pts = decodePolyline(sp);
@@ -320,14 +366,22 @@ Future<void> openMapOsm(
                     }
                   }
                 }
-                final validStepPolys = stepPolys.where((p) => p.latitude >= -90 && p.latitude <= 90 && p.longitude >= -180 && p.longitude <= 180).toList();
+                final validStepPolys = stepPolys
+                    .where((p) =>
+                        p.latitude >= -90 &&
+                        p.latitude <= 90 &&
+                        p.longitude >= -180 &&
+                        p.longitude <= 180)
+                    .toList();
                 // ignore: avoid_print
-                print('[openMapOsm] steps concat valid=${validStepPolys.length}');
+                print(
+                    '[openMapOsm] steps concat valid=${validStepPolys.length}');
                 if (validStepPolys.isNotEmpty) {
                   if (points.isNotEmpty) {
                     final first = validStepPolys.first;
                     final lastExisting = points.last;
-                    if (!(lastExisting.latitude == first.latitude && lastExisting.longitude == first.longitude)) {
+                    if (!(lastExisting.latitude == first.latitude &&
+                        lastExisting.longitude == first.longitude)) {
                       points.addAll(validStepPolys);
                     } else {
                       points.addAll(validStepPolys.skip(1));
@@ -352,11 +406,19 @@ Future<void> openMapOsm(
     }
 
     // Filter combined points defensively
-    final combinedValid = points.where((p) => p.latitude >= -90 && p.latitude <= 90 && p.longitude >= -180 && p.longitude <= 180).toList();
+    final combinedValid = points
+        .where((p) =>
+            p.latitude >= -90 &&
+            p.latitude <= 90 &&
+            p.longitude >= -180 &&
+            p.longitude <= 180)
+        .toList();
     // ignore: avoid_print
     print('[openMapOsm] final valid combined points: ${combinedValid.length}');
     if (combinedValid.length < 2) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Karte: Keine gültigen Routensegmente.')));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Karte: Keine gültigen Routensegmente.')));
       return;
     }
 
@@ -366,7 +428,8 @@ Future<void> openMapOsm(
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => MapOsmView(start: startLatLng, dest: destLatLng, route: combinedValid),
+          builder: (_) => MapOsmView(
+              start: startLatLng, dest: destLatLng, route: combinedValid),
         ),
       );
     }
@@ -389,11 +452,15 @@ Future<void> openMapOsm(
   );
 
   if (!mapsDirectCallsAllowed()) {
-    addLog('⚠️ Web routing via direct Google REST request is blocked in browser');
+    addLog(
+        '⚠️ Web routing via direct Google REST request is blocked in browser');
     // ignore: avoid_print
     print('[openMapOsm] waypoints=$stops');
 
-    if (startLat != null && startLng != null && destLat != null && destLng != null) {
+    if (startLat != null &&
+        startLng != null &&
+        destLat != null &&
+        destLng != null) {
       // ignore: avoid_print
       print('[openMapOsm] using coordinate route for web fallback');
       final coordParts = <String>[];
@@ -405,7 +472,9 @@ Future<void> openMapOsm(
         }
       }
       coordParts.add('${destLat},${destLng}');
-      final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' + coordParts.join(';');
+      final mapUrl =
+          'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' +
+              coordParts.join(';');
       // ignore: avoid_print
       print('[openMapOsm] final coordinate map URL: $mapUrl');
       try {
@@ -430,7 +499,9 @@ Future<void> openMapOsm(
       }
     }
     parts.add('${Uri.encodeComponent(d)}');
-    final mapUrl = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' + parts.join(';');
+    final mapUrl =
+        'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' +
+            parts.join(';');
     // ignore: avoid_print
     print('[openMapOsm] final map URL with waypoints: $mapUrl');
     try {
@@ -458,19 +529,30 @@ Future<void> openMapOsm(
     final lastLeg = legs.last;
     final sl = firstLeg['start_location'] as Map<String, dynamic>;
     final dl = lastLeg['end_location'] as Map<String, dynamic>;
-    final poly = (route['overview_polyline'] as Map<String, dynamic>)['points'] as String;
+    final poly = (route['overview_polyline'] as Map<String, dynamic>)['points']
+        as String;
 
-    final start = LatLng((sl['lat'] as num).toDouble(), (sl['lng'] as num).toDouble());
-    final dest = LatLng((dl['lat'] as num).toDouble(), (dl['lng'] as num).toDouble());
+    final start =
+        LatLng((sl['lat'] as num).toDouble(), (sl['lng'] as num).toDouble());
+    final dest =
+        LatLng((dl['lat'] as num).toDouble(), (dl['lng'] as num).toDouble());
     final coords = decodePolyline(poly);
     // debug counts for decoded polyline
     // ignore: avoid_print
     print('[openMapOsm] decoded route points: ${coords.length}');
-    final validCoords = coords.where((p) => p.latitude >= -90 && p.latitude <= 90 && p.longitude >= -180 && p.longitude <= 180).toList();
+    final validCoords = coords
+        .where((p) =>
+            p.latitude >= -90 &&
+            p.latitude <= 90 &&
+            p.longitude >= -180 &&
+            p.longitude <= 180)
+        .toList();
     // ignore: avoid_print
     print('[openMapOsm] valid route points: ${validCoords.length}');
     if (validCoords.length < 2) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Karte: Ungültige Routenpunkte.')));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Karte: Ungültige Routenpunkte.')));
       return;
     }
 
@@ -483,7 +565,8 @@ Future<void> openMapOsm(
       }
     }
     coordParts.add('${dest.latitude},${dest.longitude}');
-    final mapUrl = Uri.encodeFull('https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${coordParts.join(';')}');
+    final mapUrl = Uri.encodeFull(
+        'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${coordParts.join(';')}');
     // ignore: avoid_print
     print('[openMapOsm] waypoints=$stops');
     // ignore: avoid_print
@@ -499,7 +582,8 @@ Future<void> openMapOsm(
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => MapOsmView(start: start, dest: dest, route: coords),
+              builder: (_) =>
+                  MapOsmView(start: start, dest: dest, route: coords),
             ),
           );
         }

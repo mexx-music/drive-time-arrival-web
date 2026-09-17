@@ -506,6 +506,54 @@ class _Planner {
 }
 
 class EtaCalculator {
+  static EtaResult computeTwoShortFerries({
+    required DateTime start,
+    required int alreadyDrivenMin,
+    int? alreadyDrivenSinceBreakMin,
+    required int dutyTimeOffsetMin,
+    required double avgKmh,
+    required DriveRulesConfig rules,
+    required double kmBefore,
+    required double kmBetween,
+    required double kmAfter,
+    required String firstDeparturePort,
+    required String firstFerry,
+    required int firstFerryMinutes,
+    required String secondDeparturePort,
+    required String secondFerry,
+    required int secondFerryMinutes,
+    String startLabel = '',
+    String destinationLabel = '',
+  }) {
+    final planner = _Planner(
+      start: start,
+      alreadyDrivenMin: alreadyDrivenMin,
+      continuousDrivenMin: alreadyDrivenSinceBreakMin ?? alreadyDrivenMin,
+      dutyTimeOffsetMin: dutyTimeOffsetMin,
+      avgKmh: avgKmh,
+      rules: rules,
+    );
+    planner.addStart(startLabel);
+    planner.planLeg(driveMinutes: _minsFromKm(kmBefore, avgKmh), km: kmBefore);
+    planner.addPortArrival(firstDeparturePort);
+    planner.addFerry(
+      label: firstFerry,
+      durationMinutes: firstFerryMinutes,
+      restEligible: false,
+    );
+    planner.planLeg(
+        driveMinutes: _minsFromKm(kmBetween, avgKmh), km: kmBetween);
+    planner.addPortArrival(secondDeparturePort);
+    planner.addFerry(
+      label: secondFerry,
+      durationMinutes: secondFerryMinutes,
+      restEligible: false,
+    );
+    planner.planLeg(driveMinutes: _minsFromKm(kmAfter, avgKmh), km: kmAfter);
+    planner.addDestination(destinationLabel);
+    return planner.finish(kmBefore + kmBetween + kmAfter);
+  }
+
   static EtaResult compute({
     required DateTime start,
     required int alreadyDrivenMin,

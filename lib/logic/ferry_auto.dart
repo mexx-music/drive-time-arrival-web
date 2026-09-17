@@ -261,6 +261,9 @@ extension FerryAutoEta on FerryAutoDetect {
     DateTime? manualDeparture,
     List<String> waypoints = const [],
     double? fallbackKm,
+    double? verifiedKm,
+    double? ferryRoadKmBefore,
+    double? ferryRoadKmAfter,
     bool ferryRestEligible = false,
     // Optional context-sensitive guard callbacks. If provided, use these instead of a global guard.
     bool Function()? ferryPlannedGet,
@@ -271,7 +274,8 @@ extension FerryAutoEta on FerryAutoDetect {
     final bool alreadyPlanned =
         ferryPlannedGet != null ? ferryPlannedGet() : false;
     if (alreadyPlanned) {
-      var km = await _distanceSingle(
+      var km = verifiedKm ??
+          await _distanceSingle(
             origin: startAddress,
             destination: endAddress,
             waypoints: waypoints,
@@ -298,9 +302,9 @@ extension FerryAutoEta on FerryAutoDetect {
 
     // If no ferry is requested, do the normal single-segment computation (do NOT set the guard)
     if (autoOrManualFerry == null) {
-      var fullKm =
+      var fullKm = verifiedKm ??
           await _approxKm(startAddress, endAddress, waypoints: waypoints) ??
-              0.0;
+          0.0;
       if (fullKm <= 0 && fallbackKm != null && fallbackKm > 0) {
         fullKm = fallbackKm;
       }
@@ -329,13 +333,14 @@ extension FerryAutoEta on FerryAutoDetect {
       final toPort = autoOrManualFerry.to;
 
       // kmBefore: Start -> fromPort
-      double kmBefore = await dist.fetchKmDistance(
+      double kmBefore = ferryRoadKmBefore ??
+          await dist.fetchKmDistance(
               origin: startAddress, destination: fromPort) ??
           0.0;
-      if (kmBefore == 0.0) {
+      if (kmBefore == 0.0 && ferryRoadKmBefore == null) {
         kmBefore = await _approxKm(startAddress, fromPort) ?? 0.0;
       }
-      if (kmBefore <= 0) {
+      if (kmBefore < 0 || (kmBefore == 0 && ferryRoadKmBefore == null)) {
         throw StateError(
             'Distanz zum Abfahrtshafen konnte nicht ermittelt werden');
       }
@@ -344,16 +349,18 @@ extension FerryAutoEta on FerryAutoDetect {
 
       // kmAfter: toPort -> Ziel (Retry and fallback for Sindos)
       String effectiveEnd = endAddress;
-      double? kmAfter =
+      double? kmAfter = ferryRoadKmAfter ??
           await dist.fetchKmDistance(origin: toPort, destination: endAddress);
-      if (kmAfter == null || kmAfter == 0) {
+      if ((kmAfter == null || kmAfter == 0) && ferryRoadKmAfter == null) {
         if (endAddress.toLowerCase().contains('sindos')) {
           effectiveEnd = 'Sindos, Thessaloniki, Greece';
           kmAfter = await dist.fetchKmDistance(
               origin: toPort, destination: effectiveEnd);
         }
       }
-      if (kmAfter == null || kmAfter == 0) {
+      if (kmAfter == null ||
+          kmAfter < 0 ||
+          (kmAfter == 0 && ferryRoadKmAfter == null)) {
         throw StateError(
             'Distanz vom Ankunftshafen zum Ziel konnte nicht ermittelt werden');
       }
@@ -377,7 +384,9 @@ extension FerryAutoEta on FerryAutoDetect {
         rules: rules,
         ferryLabel: ferryLabel,
         ferryDurationMin: (autoOrManualFerry.durationHours * 60).round(),
-        departuresHHmm: autoOrManualFerry.departuresLocal,
+        // Stored times are not a live booking. Without an entered booking,
+        // show the earliest theoretical ETA with no assumed harbour wait.
+        departuresHHmm: const [],
         manualDeparture: manualDeparture,
         startLabel: startAddress,
         destinationLabel: endAddress,

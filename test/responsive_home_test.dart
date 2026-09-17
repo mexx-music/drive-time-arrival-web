@@ -43,4 +43,153 @@ void main() {
     expect(find.text('Deine Tourübersicht'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('Mehrere Zwischenstopps lassen sich hinzufügen und sortieren',
+      (tester) async {
+    await pumpAtSize(tester, width: 390, height: 844);
+    await tester.ensureVisible(find.text('Zwischenstopps'));
+    await tester.tap(find.text('Zwischenstopps'));
+    await tester.pumpAndSettle();
+
+    final stopField = find.byWidgetPredicate((widget) =>
+        widget is TextField &&
+        widget.decoration?.labelText == 'Adresse oder Ort eingeben');
+    final addButton = find.text('Zwischenstopp hinzufügen');
+
+    await tester.enterText(stopField, 'Sofia, Bulgarien');
+    await tester.ensureVisible(addButton);
+    await tester.tap(addButton);
+    await tester.pumpAndSettle();
+    expect(find.text('1. Sofia, Bulgarien'), findsOneWidget);
+
+    await tester.enterText(stopField, 'Sibiu, Rumänien');
+    await tester.ensureVisible(addButton);
+    await tester.tap(addButton);
+    await tester.pumpAndSettle();
+    expect(find.text('2. Sibiu, Rumänien'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('2. Sibiu, Rumänien'));
+    await tester.tap(find.byTooltip('Nach oben').last);
+    await tester.pumpAndSettle();
+    expect(find.text('1. Sibiu, Rumänien'), findsOneWidget);
+    expect(find.text('2. Sofia, Bulgarien'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Serbien-Sperre ist optional und zunächst ausgeschaltet',
+      (tester) async {
+    await pumpAtSize(tester, width: 390, height: 844);
+    await tester.scrollUntilVisible(
+      find.text('Serbien für die Route sperren'),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.text('Serbien für die Route sperren'));
+    await tester.pumpAndSettle();
+
+    final tile = find.ancestor(
+      of: find.text('Serbien für die Route sperren'),
+      matching: find.byType(SwitchListTile),
+    );
+    expect(tester.widget<SwitchListTile>(tile).value, isFalse);
+    await tester.tap(find.text('Serbien für die Route sperren'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(tile).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'Zeitbudget ist sichtbar und Abfahrt erst bei Aktivierung editierbar',
+      (tester) async {
+    await pumpAtSize(tester, width: 390, height: 844);
+    await tester.scrollUntilVisible(
+      find.text('Abfahrt und verbleibende Zeit'),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.text('Abfahrt und verbleibende Zeit'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Abfahrt und verbleibende Zeit'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Verbleibende Fahrzeit'), findsOneWidget);
+    expect(find.text('Verbleibende Einsatzzeit'), findsOneWidget);
+    expect(find.textContaining('Abfahrtszeit '), findsNothing);
+
+    await tester.scrollUntilVisible(
+      find.text('Manuelle Abfahrt'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.text('Manuelle Abfahrt'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Manuelle Abfahrt'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Abfahrtszeit '), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'Fähre ist automatisch aktiv und Uhrzeit hat keinen Zahlenrad-Picker',
+      (tester) async {
+    await pumpAtSize(tester, width: 390, height: 844);
+    await tester.scrollUntilVisible(
+      find.text('Fähre'),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('Fähre'));
+    await tester.pumpAndSettle();
+
+    final tile = find.ancestor(
+      of: find.text('Fähre automatisch vorschlagen'),
+      matching: find.byType(SwitchListTile),
+    );
+    expect(tester.widget<SwitchListTile>(tile).value, isTrue);
+    expect(find.text('Fähre wählen (Test)'), findsNothing);
+    await tester.scrollUntilVisible(
+      find.text('Uhrzeit wählen'),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.text('Uhrzeit wählen'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Uhrzeit wählen'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TimePickerDialog), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Dänemark-Alternative schaltet automatische Fähre aus',
+      (tester) async {
+    await pumpAtSize(tester, width: 390, height: 844);
+    await tester.scrollUntilVisible(
+      find.text('Fähre'),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('Fähre'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Alternative über Dänemark: 2 Fähren'),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.text('Alternative über Dänemark: 2 Fähren'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Alternative über Dänemark: 2 Fähren'));
+    await tester.pumpAndSettle();
+
+    final automatic = find.ancestor(
+      of: find.text('Fähre automatisch vorschlagen'),
+      matching: find.byType(SwitchListTile),
+    );
+    final denmark = find.ancestor(
+      of: find.text('Alternative über Dänemark: 2 Fähren'),
+      matching: find.byType(SwitchListTile),
+    );
+    expect(tester.widget<SwitchListTile>(automatic).value, isFalse);
+    expect(tester.widget<SwitchListTile>(denmark).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
 }

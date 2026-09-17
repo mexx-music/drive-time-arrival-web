@@ -8,20 +8,25 @@ import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-import 'package:flutter/cupertino.dart';
 
 import 'models/ferry_route.dart';
 import 'services/ferry_schedule_loader.dart';
 import 'logic/eta_calculator.dart';
 import 'logic/ferry_auto.dart';
+import 'logic/ferry_route_suggester.dart';
+import 'logic/denmark_ferry_route.dart';
 import 'logic/port_aliases.dart';
 import 'logic/speed_profile.dart';
+import 'logic/time_budget.dart';
+import 'logic/serbia_avoidance.dart';
 import 'package:driverroute_eta/secrets.dart';
 import 'widgets/places_autocomplete.dart' as places_auto;
 import 'services/geocoding_service.dart';
+import 'services/distance_service.dart';
 import 'widgets/place_input.dart';
-import 'widgets/route_input_widget.dart';
+import 'widgets/duration_input.dart';
 import 'widgets/tour_result_view.dart';
+import 'ui/map_osm_view.dart';
 import 'utils/open_in_tab.dart';
 import 'services/map_launcher.dart' as map_launcher;
 
@@ -141,13 +146,21 @@ class _HomeScreenState extends State<HomeScreen> {
   final List<String> _stops = [];
   final List<LatLng?> _stopCoords =
       []; // parallel storage for resolved stop coordinates
-  bool _optimizeStops = true;
+  bool _addingStop = false;
+  final bool _optimizeStops = false;
+  bool _avoidSerbia = false;
+  List<String> _resultRouteStops = [];
+  String? _resultRoutePolyline;
+  String? _countryRouteNote;
+  String? _ferryRouteNote;
+  FerryRoute? _resultFerry;
+  bool _resultViaDenmark = false;
 
   double _avgKmh = 80;
   SpeedProfile _speedProfile = SpeedProfile.automatic;
-  int _drivenMin = 0;
+  int _remainingDrivingMin = 600;
   int _continuousDrivenMin = 0;
-  int _dutyOffsetMin = 0;
+  int _remainingDutyMin = 900;
 
   // Lenk-/Ruhezeit & Tankpause
   bool _ten1 = true; // 10h-Tag #1 verfügbar?
@@ -159,7 +172,19 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _splitBreak = false;
   bool _weeklyRestDue = false;
 
-  bool _autoFerry = false;
+  int get _dailyDrivingLimit => _ten1 || _ten2 ? 600 : 540;
+  int get _dailyDutyLimit => _nine1 || _nine2 || _nine3 ? 900 : 780;
+  int get _drivenMin => TimeBudget.elapsedFromRemaining(
+        _remainingDrivingMin,
+        _dailyDrivingLimit,
+      );
+  int get _dutyOffsetMin => TimeBudget.elapsedFromRemaining(
+        _remainingDutyMin,
+        _dailyDutyLimit,
+      );
+
+  bool _autoFerry = true;
+  bool _viaDenmarkFerries = false;
   bool _showDetails = false;
   FerryRoute? _manualFerry;
   DateTime? _manualFerryDeparture;
@@ -202,68 +227,83 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  Future<void> _addStop() async {
+    final raw = _stopCtl.text.trim();
+    if (raw.isEmpty || _addingStop) return;
+    if (_stops.length >= 10) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Höchstens 10 Zwischenstopps sind möglich.')),
+      );
+      return;
+    }
+    setState(() => _addingStop = true);
+    String label = raw;
+    LatLng? coordinate;
+    try {
+      final resolved = await GeocodingService.resolve(raw);
+      label = resolved.description;
+      coordinate = LatLng(resolved.lat, resolved.lng);
+    } catch (error) {
+      debugPrint('Zwischenstopp konnte nicht vorab aufgelöst werden: $error');
+    }
+    if (!mounted) return;
+    setState(() {
+      _stops.add(label);
+      _stopCoords.add(coordinate);
+      _stopCtl.clear();
+      _addingStop = false;
+      _etaResult = null;
+    });
+  }
+
+  void _moveStop(int from, int to) {
+    if (to < 0 || to >= _stops.length) return;
+    setState(() {
+      final stop = _stops.removeAt(from);
+      final coordinate = _stopCoords.removeAt(from);
+      _stops.insert(to, stop);
+      _stopCoords.insert(to, coordinate);
+      _etaResult = null;
+    });
+  }
+
+  void _removeStop(int index) {
+    setState(() {
+      _stops.removeAt(index);
+      _stopCoords.removeAt(index);
+      _etaResult = null;
+    });
+  }
+
+  void _changeDrivingLimit(void Function() updateRule) {
+    final elapsed = _drivenMin;
+    setState(() {
+      updateRule();
+      _remainingDrivingMin = (_dailyDrivingLimit - elapsed).clamp(
+        0,
+        _dailyDrivingLimit,
+      );
+    });
+  }
+
+  void _changeDutyLimit(void Function() updateRule) {
+    final elapsed = _dutyOffsetMin;
+    setState(() {
+      updateRule();
+      _remainingDutyMin = (_dailyDutyLimit - elapsed).clamp(
+        0,
+        _dailyDutyLimit,
+      );
+    });
+  }
+
   Future<void> _loadFerries() async {
     final (source, routes) = await FerryScheduleLoader.load();
     setState(() {
       _routes = routes.where((r) => r.active).toList();
       _source = source;
     });
-  }
-
-  // Reusable wheel picker (Cupertino-style)
-  Future<int?> _showWheelPicker(
-      BuildContext ctx, int initial, int maxInclusive) async {
-    int temp = initial.clamp(0, maxInclusive);
-    final res = await showModalBottomSheet<int>(
-      context: ctx,
-      useRootNavigator: true,
-      isScrollControlled: false,
-      builder: (mc) {
-        return Container(
-          height: 320,
-          padding: const EdgeInsets.only(top: 8),
-          child: Column(
-            children: [
-              SizedBox(
-                height: 220,
-                child: CupertinoPicker(
-                  itemExtent: 32,
-                  scrollController:
-                      FixedExtentScrollController(initialItem: temp),
-                  onSelectedItemChanged: (i) => temp = i,
-                  children: List.generate(
-                    maxInclusive + 1,
-                    (i) => Center(
-                      child: Text(
-                        i.toString().padLeft(2, '0'),
-                        style: const TextStyle(fontSize: 18),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () => Navigator.of(mc).pop(),
-                      child: const Text('Abbrechen'),
-                    ),
-                  ),
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () => Navigator.of(mc).pop(temp),
-                      child: const Text('OK'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
-    );
-    return res;
   }
 
   // ---- Google Directions: Distanz in km holen ----
@@ -489,8 +529,17 @@ class _HomeScreenState extends State<HomeScreen> {
     return matched;
   }
 
-  Future<(double km, RoadMixAnalysis? roadMix, FerryRoute? ferry, String note)>
-      _planDistanceAndFerryAuto(
+  Future<
+      (
+        double km,
+        RoadMixAnalysis? roadMix,
+        FerryRoute? ferry,
+        String note,
+        List<String> routedWaypoints,
+        String? encodedPolyline,
+        FerryRouteSuggestion? ferrySuggestion,
+        DenmarkFerryRoute? denmarkRoute,
+      )> _planDistanceAndFerryAuto(
     String origin,
     String destination,
     List<String> wps,
@@ -498,12 +547,112 @@ class _HomeScreenState extends State<HomeScreen> {
   ) async {
     final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
 
-    final normal = await det.fetchDirections(
+    if (_viaDenmarkFerries) {
+      if (_avoidSerbia || wps.isNotEmpty) {
+        throw const FerryRouteException(
+          'Die Dänemark-Variante ist derzeit nur ohne Serbien-Sperre und eigene Zwischenstopps verfügbar.',
+        );
+      }
+      final route = await DenmarkFerryRoute.plan(
+        origin: origin,
+        destination: destination,
+        roadDistance: (from, to) => const DistanceService()
+            .fetchKmDistance(origin: from, destination: to),
+      );
+      if (route == null) {
+        throw const FerryRouteException(
+          'Die zwei Fährstrecken über Dänemark konnten für diese Route nicht geprüft werden. Bitte Start und Ziel in Schweden bzw. Deutschland wählen.',
+        );
+      }
+      return (
+        route.roadKm,
+        null,
+        null,
+        'Über Dänemark mit zwei kurzen Fähren; Wartezeiten noch nicht enthalten.',
+        <String>[],
+        null,
+        null,
+        route,
+      );
+    }
+
+    if (_autoFerry && _manualFerry == null && !_avoidSerbia && wps.isEmpty) {
+      final suggestion = await FerryRouteSuggester.suggest(
+        origin: origin,
+        destination: destination,
+        routes: _routes,
+        roadDistance: (from, to) => const DistanceService()
+            .fetchKmDistance(origin: from, destination: to),
+      );
+      if (suggestion != null) {
+        return (
+          suggestion.roadKm,
+          null,
+          suggestion.route,
+          'Fähre automatisch vorgeschlagen: ${suggestion.route.name}. Fahrplan vor Buchung prüfen.',
+          <String>[],
+          null,
+          suggestion,
+          null,
+        );
+      }
+      if (FerryRouteSuggester.supportsTrip(origin, destination)) {
+        throw const FerryRouteException(
+          'Für diese Strecke konnte keine erreichbare Fähre geprüft werden. Bitte Verbindung prüfen oder eine Fähre manuell wählen.',
+        );
+      }
+    }
+
+    var normal = await det.fetchDirections(
       origin: origin,
       destination: destination,
       waypoints: wps,
       optimize: optimize,
     );
+    var routedWaypoints = List<String>.of(wps);
+    var countryNote = '';
+    if (_avoidSerbia) {
+      if (!normal.ok) {
+        throw const CountryRouteException(
+          'Die Route konnte nicht auf Serbien geprüft werden. Bitte später erneut versuchen.',
+        );
+      }
+      final crossesSerbia = SerbiaAvoidance.routeCrossesSerbia(normal.raw);
+      if (crossesSerbia == null) {
+        throw const CountryRouteException(
+          'Die Kartenroute enthält keine prüfbare Streckenlinie. Serbien kann nicht sicher ausgeschlossen werden.',
+        );
+      }
+      if (crossesSerbia) {
+        if (wps.isNotEmpty) {
+          throw const CountryRouteException(
+            'Diese Zwischenstopps führen durch Serbien. Bitte Stopps anpassen oder für die automatische Umfahrung entfernen.',
+          );
+        }
+        final corridor = SerbiaAvoidance.corridorFor(origin, destination);
+        if (corridor == null) {
+          throw const CountryRouteException(
+            'Eine automatische Serbien-Umfahrung ist derzeit für Griechenland–Österreich verfügbar. Für diese Strecke bitte eigene Zwischenstopps wählen.',
+          );
+        }
+        routedWaypoints = corridor;
+        normal = await det.fetchDirections(
+          origin: origin,
+          destination: destination,
+          waypoints: routedWaypoints,
+        );
+        if (!normal.ok ||
+            SerbiaAvoidance.routeCrossesSerbia(normal.raw) != false) {
+          throw const CountryRouteException(
+            'Google konnte keine überprüfte Route ohne Serbien liefern. Es wird keine ETA aus einer Strecke durch Serbien berechnet.',
+          );
+        }
+        countryNote =
+            'Serbien gemieden · automatisch über Bulgarien, Rumänien und Ungarn';
+      } else {
+        countryNote = 'Serbien gemieden · Route geprüft';
+      }
+    }
     if (!normal.ok) {
       final errMsg = (normal.raw['error_message'] ?? '').toString();
       final note = errMsg.isNotEmpty
@@ -518,6 +667,10 @@ class _HomeScreenState extends State<HomeScreen> {
         null,
         null,
         note,
+        routedWaypoints,
+        null,
+        null,
+        null,
       );
     }
 
@@ -525,7 +678,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final avoid = await det.fetchDirections(
       origin: origin,
       destination: destination,
-      waypoints: wps,
+      waypoints: routedWaypoints,
       optimize: optimize,
       avoidFerries: true,
     );
@@ -608,7 +761,15 @@ class _HomeScreenState extends State<HomeScreen> {
       km,
       roadMix,
       matched,
-      hasFerry ? '🛳️ Fähre erkannt ($why)' : '',
+      [
+        if (countryNote.isNotEmpty) countryNote,
+        if (hasFerry) '🛳️ Fähre erkannt ($why)'
+      ].join(' · '),
+      routedWaypoints,
+      ((normal.raw['routes'] as List?)?.firstOrNull
+          as Map<String, dynamic>?)?['overview_polyline']?['points'] as String?,
+      null,
+      null,
     );
   }
 
@@ -641,10 +802,22 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       return;
     }
+    if (_dutyOffsetMin < _drivenMin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Die bereits verbrauchte Einsatzzeit muss mindestens der heute gefahrenen Zeit entsprechen. Bitte verbleibende Zeiten prüfen.',
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       _calculating = true;
       _log.clear();
       _etaResult = null;
+      _countryRouteNote = null;
+      _ferryRouteNote = null;
     });
 
     try {
@@ -780,8 +953,16 @@ class _HomeScreenState extends State<HomeScreen> {
       // ignore: avoid_print
       print('[Validation] waypoints=${_stops}');
 
-      final (distKm, roadMix, matchedFerry, note) =
-          await _planDistanceAndFerryAuto(s, d, _stops, _optimizeStops);
+      final (
+        distKm,
+        roadMix,
+        matchedFerry,
+        note,
+        routedWaypoints,
+        encodedPolyline,
+        ferrySuggestion,
+        denmarkRoute,
+      ) = await _planDistanceAndFerryAuto(s, d, _stops, _optimizeStops);
 
       final speedPlan = SpeedProfileResolver.resolve(
         profile: _speedProfile,
@@ -802,7 +983,7 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       }
 
-      if (distKm > 0) {
+      if (distKm > 0 || matchedFerry != null || denmarkRoute != null) {
         km = distKm;
         if (_showDetails) {
           _log.add(
@@ -837,24 +1018,54 @@ class _HomeScreenState extends State<HomeScreen> {
       final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
       final FerryRoute? ferryCandidate =
           _manualFerry ?? (_autoFerry ? matchedFerry : null);
-      final etaRes = await det.computeEtaWithOptionalFerry(
-        startTime: start,
-        alreadyDrivenMin: _drivenMin,
-        alreadyDrivenSinceBreakMin: _continuousDrivenMin,
-        dutyOffsetMin: _dutyOffsetMin,
-        avgKmh: speedPlan.kmh,
-        rules: driveRules,
-        startAddress: s,
-        endAddress: d,
-        autoOrManualFerry: ferryCandidate,
-        manualDeparture: _manualFerryDeparture,
-        waypoints: _stops,
-        fallbackKm: km,
-        ferryRestEligible: _ferryRestEligible,
-      );
-      res = etaRes;
+      if (_avoidSerbia && ferryCandidate != null) {
+        throw const CountryRouteException(
+          'Serbien-Sperre und Fährplanung können derzeit nicht gemeinsam geprüft werden. Bitte Fähre deaktivieren.',
+        );
+      }
+      res = denmarkRoute != null
+          ? EtaCalculator.computeTwoShortFerries(
+              start: start,
+              alreadyDrivenMin: _drivenMin,
+              alreadyDrivenSinceBreakMin: _continuousDrivenMin,
+              dutyTimeOffsetMin: _dutyOffsetMin,
+              avgKmh: speedPlan.kmh,
+              rules: driveRules,
+              kmBefore: denmarkRoute.kmBefore,
+              kmBetween: denmarkRoute.kmBetween,
+              kmAfter: denmarkRoute.kmAfter,
+              firstDeparturePort: denmarkRoute.firstDeparturePort,
+              firstFerry: denmarkRoute.firstFerry,
+              firstFerryMinutes: denmarkRoute.firstFerryMinutes,
+              secondDeparturePort: denmarkRoute.secondDeparturePort,
+              secondFerry: denmarkRoute.secondFerry,
+              secondFerryMinutes: denmarkRoute.secondFerryMinutes,
+              startLabel: s,
+              destinationLabel: d,
+            )
+          : await det.computeEtaWithOptionalFerry(
+              startTime: start,
+              alreadyDrivenMin: _drivenMin,
+              alreadyDrivenSinceBreakMin: _continuousDrivenMin,
+              dutyOffsetMin: _dutyOffsetMin,
+              avgKmh: speedPlan.kmh,
+              rules: driveRules,
+              startAddress: s,
+              endAddress: d,
+              autoOrManualFerry: ferryCandidate,
+              manualDeparture: _manualFerryDeparture,
+              waypoints: routedWaypoints,
+              verifiedKm: _avoidSerbia ? distKm : null,
+              ferryRoadKmBefore: ferrySuggestion?.kmBefore,
+              ferryRoadKmAfter: ferrySuggestion?.kmAfter,
+              fallbackKm: km,
+              ferryRestEligible: _ferryRestEligible,
+            );
       _log.addAll(res.steps.map((e) => e.text));
-      if (res.summary == null || res.summary!.distanceKm <= 0) {
+      if (res.summary == null ||
+          (res.summary!.distanceKm <= 0 &&
+              ferryCandidate == null &&
+              denmarkRoute == null)) {
         throw StateError('Keine verwertbare Routendistanz vorhanden');
       }
       if (!mounted) return;
@@ -863,14 +1074,30 @@ class _HomeScreenState extends State<HomeScreen> {
         _resultOrigin = s;
         _resultDestination = d;
         _resultRoadMix = roadMix;
+        _resultRouteStops = routedWaypoints;
+        _resultRoutePolyline = encodedPolyline;
+        _countryRouteNote = _avoidSerbia ? note.split(' · 🛳️').first : null;
+        _resultFerry = ferryCandidate;
+        _resultViaDenmark = denmarkRoute != null;
+        _ferryRouteNote = denmarkRoute != null
+            ? 'Über Dänemark: zwei kurze Fähren eingeplant. ETA ohne Hafenwartezeit oder Buchungsabfahrt; vor der Fahrt bei beiden Betreibern prüfen.'
+            : ferryCandidate == null
+                ? null
+                : _manualFerryDeparture == null
+                    ? 'Fähre ${ferryCandidate.name}: frühestmögliche ETA ohne Hafenwartezeit. Gebuchte Abfahrt bitte im Fähre-Feld eintragen.'
+                    : 'Fähre ${ferryCandidate.name}: Eingetragene Abfahrtszeit in der ETA berücksichtigt. Buchung und Verfügbarkeit beim Betreiber prüfen.';
       });
     } catch (error, stackTrace) {
       debugPrint('ETA-Berechnung fehlgeschlagen: $error\n$stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'Route konnte nicht berechnet werden. Bitte Adressen, Distanz und Verbindung prüfen.',
+              error is CountryRouteException
+                  ? error.message
+                  : error is FerryRouteException
+                      ? error.message
+                      : 'Route konnte nicht berechnet werden. Bitte Adressen, Distanz und Verbindung prüfen.',
             ),
           ),
         );
@@ -896,134 +1123,33 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _durationField(
-    String label,
-    int minutes,
-    void Function(int) onChanged, {
-    bool showLabel = true,
-  }) {
-    return LayoutBuilder(builder: (context, c) {
-      const gap = 4.0;
-      const narrowThreshold = 180.0; // etwas großzügiger gegen Overflows
-
-      final h = minutes ~/ 60;
-      final m = minutes % 60;
-
-      Future<void> _pickHour() async {
-        final sel = await _showWheelPicker(context, h, 99);
-        if (sel != null) onChanged(sel * 60 + m);
-      }
-
-      Future<void> _pickMinute() async {
-        final sel = await _showWheelPicker(context, m, 59);
-        if (sel != null) onChanged(h * 60 + sel);
-      }
-
-      // Basis-Button
-      Widget _buildButton(Widget child, VoidCallback onTap) {
-        return OutlinedButton(
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-          ),
-          onPressed: onTap,
-          child: child,
-        );
-      }
-
-      final hourChild = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.access_time, size: 18),
-          const SizedBox(width: 6),
-          Text(h.toString().padLeft(2, '0'),
-              style: const TextStyle(fontSize: 18)),
-        ],
-      );
-
-      final minuteChild = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(m.toString().padLeft(2, '0'),
-              style: const TextStyle(fontSize: 18)),
-        ],
-      );
-
-      final isNarrow = c.maxWidth < narrowThreshold;
-
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (showLabel) Text(label),
-          if (showLabel) const SizedBox(height: 6),
-          Container(
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                  color: Theme.of(context).dividerColor.withValues(alpha: 0.6)),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: isNarrow
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      SizedBox(
-                        width: double.infinity,
-                        height: 48,
-                        child:
-                            _buildButton(Center(child: hourChild), _pickHour),
-                      ),
-                      const SizedBox(height: gap),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 48,
-                        child: _buildButton(
-                            Center(child: minuteChild), _pickMinute),
-                      ),
-                    ],
-                  )
-                : Wrap(
-                    spacing: gap,
-                    runSpacing: 6,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      ConstrainedBox(
-                        constraints:
-                            const BoxConstraints(minWidth: 60, maxWidth: 140),
-                        child: SizedBox(
-                          height: 48,
-                          child:
-                              _buildButton(Center(child: hourChild), _pickHour),
-                        ),
-                      ),
-                      ConstrainedBox(
-                        constraints:
-                            const BoxConstraints(minWidth: 60, maxWidth: 140),
-                        child: SizedBox(
-                          height: 48,
-                          child: _buildButton(
-                              Center(child: minuteChild), _pickMinute),
-                        ),
-                      ),
-                    ],
-                  ),
-          ),
-        ],
-      );
-    });
-  }
-
   // Google encoded polyline -> List<LatLng>
   List<LatLng> _decodePolyline(String encoded) =>
       map_launcher.decodePolyline(encoded);
 
   Future<void> _openMapOsm() async {
+    if (_avoidSerbia && _etaResult != null && _resultRoutePolyline != null) {
+      final points = map_launcher.decodePolyline(_resultRoutePolyline!);
+      if (points.length >= 2) {
+        await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => MapOsmView(
+            start: points.first,
+            dest: points.last,
+            route: points,
+          ),
+        ));
+        return;
+      }
+    }
+    final routedStops = _etaResult == null ? _stops : _resultRouteStops;
     await map_launcher.openMapOsm(
       context,
       s: _startCtl.text.trim(),
       d: _destCtl.text.trim(),
-      stops: _stops,
-      stopCoords: _stopCoords,
+      stops: routedStops,
+      stopCoords: routedStops.length == _stopCoords.length
+          ? _stopCoords
+          : List<LatLng?>.filled(routedStops.length, null),
       startLat: _startLat,
       startLng: _startLng,
       destLat: _destLat,
@@ -1176,78 +1302,75 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: ExpansionTile(
                   leading: const Icon(Icons.add_location_alt_rounded),
                   title: const Text(
-                    'Zwischenstopp',
+                    'Zwischenstopps',
                     style: TextStyle(fontWeight: FontWeight.w800),
                   ),
                   subtitle: const Text(
-                    'Optional einen Ort zwischen Start und Ziel einplanen',
+                    'Mehrere Orte in Fahrreihenfolge hinzufügen',
                   ),
                   children: [
                     Padding(
                       padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-                      child: PlaceInput(
-                        inlineAutocomplete: true,
-                        label: '📍 Zwischenziel',
-                        hint: 'Adresse/Ort für Zwischenziel',
-                        controller: _stopCtl,
-                        initialText: _stopCtl.text,
-                        onChanged: (v) => _stopCtl.text = v,
-                        onConfirmed: (txt) async {
-                          final t = txt.trim();
-                          if (t.isEmpty) return;
-
-                          try {
-                            final res = await GeocodingService.resolve(t);
-                            setState(() {
-                              _stopCtl.text = res.description;
-
-                              if (_stops.isEmpty) {
-                                _stops.add(res.description);
-                              } else {
-                                _stops[0] = res.description;
-                              }
-
-                              final coord = LatLng(res.lat, res.lng);
-                              if (_stopCoords.isEmpty) {
-                                _stopCoords.add(coord);
-                              } else {
-                                _stopCoords[0] = coord;
-                              }
-                            });
-
-                            debugPrint(
-                                'intermediate stop resolved: ${res.description}');
-                            debugPrint(
-                                'intermediate stop applied to field: ${res.description}');
-                          } catch (e) {
-                            setState(() {
-                              _stopCtl.text = t;
-
-                              if (_stops.isEmpty) {
-                                _stops.add(t);
-                              } else {
-                                _stops[0] = t;
-                              }
-
-                              if (_stopCoords.isEmpty) {
-                                _stopCoords.add(null);
-                              } else {
-                                _stopCoords[0] = null;
-                              }
-                            });
-
-                            debugPrint(
-                                'intermediate stop applied to field (raw): $t');
-
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                    content: Text(
-                                        'Zwischenziel konnte nicht aufgelöst werden: $e')),
-                              );
-                            }
-                          }
-                        },
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          PlaceInput(
+                            inlineAutocomplete: true,
+                            label: '📍 Weiterer Zwischenstopp',
+                            hint: 'Adresse oder Ort eingeben',
+                            controller: _stopCtl,
+                            initialText: _stopCtl.text,
+                          ),
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: OutlinedButton.icon(
+                              onPressed: _addingStop ? null : _addStop,
+                              icon: _addingStop
+                                  ? const SizedBox.square(
+                                      dimension: 16,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.add_rounded),
+                              label: const Text('Zwischenstopp hinzufügen'),
+                            ),
+                          ),
+                          for (var index = 0; index < _stops.length; index++)
+                            Card(
+                              child: ListTile(
+                                title: Text('${index + 1}. ${_stops[index]}'),
+                                trailing: Wrap(
+                                  spacing: 0,
+                                  children: [
+                                    IconButton(
+                                      tooltip: 'Nach oben',
+                                      onPressed: index == 0
+                                          ? null
+                                          : () => _moveStop(index, index - 1),
+                                      icon: const Icon(Icons.arrow_upward),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Nach unten',
+                                      onPressed: index == _stops.length - 1
+                                          ? null
+                                          : () => _moveStop(index, index + 1),
+                                      icon: const Icon(Icons.arrow_downward),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Zwischenstopp entfernen',
+                                      onPressed: () => _removeStop(index),
+                                      icon: const Icon(Icons.close),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          if (_stops.isNotEmpty)
+                            const Text(
+                              'Die Stopps werden in dieser Reihenfolge angefahren.',
+                            ),
+                        ],
                       ),
                     ),
                   ],
@@ -1255,10 +1378,29 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               Padding(
                 padding: pad,
+                child: Card(
+                  child: SwitchListTile.adaptive(
+                    secondary: const Icon(Icons.block_rounded),
+                    title: const Text('Serbien für die Route sperren'),
+                    subtitle: const Text(
+                      'Optional. Für Griechenland–Österreich wird bei Bedarf automatisch über Bulgarien, Rumänien und Ungarn geplant. Die gelieferte Route wird geprüft.',
+                    ),
+                    value: _avoidSerbia,
+                    onChanged: (value) => setState(() {
+                      _avoidSerbia = value;
+                      _etaResult = null;
+                      _countryRouteNote = null;
+                      _ferryRouteNote = null;
+                    }),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: pad,
                 child: ExpansionTile(
                   leading: const Icon(Icons.schedule_rounded),
                   title: const Text(
-                    'Abfahrt und bisherige Lenkzeit',
+                    'Abfahrt und verbleibende Zeit',
                     style: TextStyle(fontWeight: FontWeight.w800),
                   ),
                   children: [
@@ -1270,41 +1412,82 @@ class _HomeScreenState extends State<HomeScreen> {
                         final leftWidget = Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 12),
-                          child: ExpansionTile(
-                            title: Text(
-                              'Bereits gefahren / Einsatzzeit',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            initiallyExpanded: false,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              // "Bereits gefahren" block
+                              Text(
+                                'Zeitbudget für heute',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleMedium
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                              ),
+                              const SizedBox(height: 12),
                               Container(
                                 decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainerHighest,
-                                  borderRadius: BorderRadius.circular(8),
+                                  color: const Color(0xFFEAF4FF),
+                                  borderRadius: BorderRadius.circular(16),
                                   border: Border.all(
-                                    color: Theme.of(context)
-                                        .dividerColor
-                                        .withValues(alpha: 0.6),
+                                    color: const Color(0xFFC9E1FA),
                                   ),
                                 ),
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 8),
+                                    horizontal: 16, vertical: 14),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text('Heute bereits gefahren',
+                                    Text('Verbleibende Fahrzeit',
                                         style: Theme.of(context)
                                             .textTheme
-                                            .titleSmall),
+                                            .titleMedium),
+                                    const SizedBox(height: 4),
+                                    const Text(
+                                      'Bis zur nächsten Tagesruhe; eine Lenkpause kann früher nötig sein.',
+                                    ),
                                     const SizedBox(height: 8),
-                                    _durationField(
-                                      'Heute bereits gefahren',
-                                      _drivenMin,
-                                      (v) => setState(() => _drivenMin = v),
-                                      showLabel: false,
+                                    DurationInput(
+                                      minutes: _remainingDrivingMin.clamp(
+                                          0, _dailyDrivingLimit),
+                                      maxMinutes: _dailyDrivingLimit,
+                                      onChanged: (v) => setState(
+                                          () => _remainingDrivingMin = v),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEAF8F3),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: const Color(0xFFC7E7D9),
+                                  ),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 14),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Verbleibende Einsatzzeit',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleMedium),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Bis zur Tagesruhe (derzeit höchstens ${_dailyDutyLimit ~/ 60} Stunden).',
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    DurationInput(
+                                      minutes: _remainingDutyMin.clamp(
+                                          0, _dailyDutyLimit),
+                                      maxMinutes: _dailyDutyLimit,
+                                      onChanged: (v) =>
+                                          setState(() => _remainingDutyMin = v),
                                     ),
                                   ],
                                 ),
@@ -1312,18 +1495,14 @@ class _HomeScreenState extends State<HomeScreen> {
                               const SizedBox(height: 8),
                               Container(
                                 decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainerHighest,
-                                  borderRadius: BorderRadius.circular(8),
+                                  color: Theme.of(context).colorScheme.surface,
+                                  borderRadius: BorderRadius.circular(16),
                                   border: Border.all(
-                                    color: Theme.of(context)
-                                        .dividerColor
-                                        .withValues(alpha: 0.6),
+                                    color: Theme.of(context).dividerColor,
                                   ),
                                 ),
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 8),
+                                    horizontal: 16, vertical: 14),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -1332,56 +1511,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                             .textTheme
                                             .titleSmall),
                                     const SizedBox(height: 4),
-                                    Text(
-                                      'Zeit seit der letzten vollständigen 45-Minuten-Pause',
-                                      style:
-                                          Theme.of(context).textTheme.bodySmall,
+                                    const Text(
+                                      'Nur falls heute bereits gefahren wurde.',
                                     ),
                                     const SizedBox(height: 8),
-                                    _durationField(
-                                      'Seit der letzten Lenkpause',
-                                      _continuousDrivenMin,
-                                      (v) => setState(
+                                    DurationInput(
+                                      minutes: _continuousDrivenMin,
+                                      maxMinutes: 270,
+                                      onChanged: (v) => setState(
                                           () => _continuousDrivenMin = v),
-                                      showLabel: false,
                                     ),
                                   ],
                                 ),
                               ),
-                              const SizedBox(height: 8),
-                              // "Einsatzzeit bisher" block
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainerHighest,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: Theme.of(context)
-                                        .dividerColor
-                                        .withValues(alpha: 0.6),
-                                  ),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 8),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('Einsatzzeit bisher',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleSmall),
-                                    const SizedBox(height: 8),
-                                    _durationField(
-                                      'Einsatzzeit bisher',
-                                      _dutyOffsetMin,
-                                      (v) => setState(() => _dutyOffsetMin = v),
-                                      showLabel: false,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 8),
                               const SizedBox(height: 8),
                               _speedProfileInput(),
                             ],
@@ -1389,148 +1531,91 @@ class _HomeScreenState extends State<HomeScreen> {
                         );
 
                         final rightWidget = Container(
-                          padding: const EdgeInsets.all(12),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surface,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color:
+                                  Theme.of(context).colorScheme.outlineVariant,
+                            ),
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('🕓 Manuelle Abfahrt',
-                                  style:
-                                      Theme.of(context).textTheme.titleMedium),
-                              Row(
-                                children: [
-                                  Switch(
-                                    value: _manualDepartureActive,
-                                    onChanged: (v) => setState(
-                                        () => _manualDepartureActive = v),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      'Manuelle Abfahrt aktivieren',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 6),
-                              GestureDetector(
-                                onTap: () async {
-                                  final selectedDate = await showDatePicker(
-                                    context: context,
-                                    initialDate: _manualDepartureDate,
-                                    firstDate: DateTime.now()
-                                        .subtract(const Duration(days: 365)),
-                                    lastDate: DateTime.now()
-                                        .add(const Duration(days: 365)),
-                                  );
-                                  if (selectedDate != null) {
-                                    setState(() =>
-                                        _manualDepartureDate = selectedDate);
-                                  }
-                                },
-                                child: InputDecorator(
-                                  decoration: InputDecoration(
-                                    labelText: '📅 Datum',
-                                    border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8)),
-                                    contentPadding: const EdgeInsets.symmetric(
-                                        vertical: 12, horizontal: 12),
-                                  ),
-                                  child: Text(DateFormat('yyyy-MM-dd')
-                                      .format(_manualDepartureDate)),
+                              SwitchListTile.adaptive(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Manuelle Abfahrt'),
+                                subtitle: const Text(
+                                  'Ausschalten für Abfahrt ab jetzt',
                                 ),
+                                value: _manualDepartureActive,
+                                onChanged: (v) =>
+                                    setState(() => _manualDepartureActive = v),
                               ),
-                              const SizedBox(height: 8),
-                              Text('🕓 Abfahrtszeit',
-                                  style:
-                                      Theme.of(context).textTheme.titleMedium),
-                              const SizedBox(height: 6),
-                              Builder(
-                                builder: (ctx) {
-                                  final hourPicker = OutlinedButton(
-                                    style: OutlinedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 10, horizontal: 8)),
-                                    onPressed: () async {
-                                      final sel = await _showWheelPicker(
-                                          ctx, _manualDepartureHour, 23);
-                                      if (sel != null) {
-                                        setState(
-                                            () => _manualDepartureHour = sel);
-                                      }
-                                    },
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.access_time, size: 18),
-                                        const SizedBox(width: 6),
-                                        Flexible(
-                                          fit: FlexFit.loose,
-                                          child: Text(
-                                            _manualDepartureHour
-                                                .toString()
-                                                .padLeft(2, '0'),
-                                            style:
-                                                const TextStyle(fontSize: 18),
-                                            textAlign: TextAlign.center,
-                                          ),
-                                        ),
-                                      ],
+                              if (_manualDepartureActive) ...[
+                                const SizedBox(height: 10),
+                                InkWell(
+                                  onTap: () async {
+                                    final selectedDate = await showDatePicker(
+                                      context: context,
+                                      initialDate: _manualDepartureDate,
+                                      firstDate: DateTime.now()
+                                          .subtract(const Duration(days: 365)),
+                                      lastDate: DateTime.now()
+                                          .add(const Duration(days: 365)),
+                                    );
+                                    if (selectedDate != null) {
+                                      setState(() =>
+                                          _manualDepartureDate = selectedDate);
+                                    }
+                                  },
+                                  child: InputDecorator(
+                                    decoration: InputDecoration(
+                                      labelText: '📅 Datum',
+                                      border: OutlineInputBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(8)),
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                              vertical: 12, horizontal: 12),
                                     ),
-                                  );
-
-                                  final minutePicker = OutlinedButton(
-                                    style: OutlinedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 10, horizontal: 8)),
-                                    onPressed: () async {
-                                      final sel = await _showWheelPicker(
-                                          ctx, _manualDepartureMinute, 59);
-                                      if (sel != null) {
-                                        setState(
-                                            () => _manualDepartureMinute = sel);
-                                      }
-                                    },
-                                    child: Row(
-                                      children: [
-                                        const SizedBox(width: 4),
-                                        Flexible(
-                                          fit: FlexFit.loose,
-                                          child: Text(
-                                            _manualDepartureMinute
-                                                .toString()
-                                                .padLeft(2, '0'),
-                                            style:
-                                                const TextStyle(fontSize: 18),
-                                            textAlign: TextAlign.center,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-
-                                  return Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.center,
-                                    children: [
-                                      Flexible(
-                                          fit: FlexFit.tight,
-                                          child: hourPicker),
-                                      const SizedBox(width: 8),
-                                      Flexible(
-                                          fit: FlexFit.tight,
-                                          child: minutePicker),
-                                    ],
-                                  );
-                                },
-                              ),
-                              const SizedBox(height: 8),
-                              if (_manualDepartureActive)
-                                Text(
-                                  '🕓 Manuelle Abfahrt gesetzt: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime(_manualDepartureDate.year, _manualDepartureDate.month, _manualDepartureDate.day, _manualDepartureHour, _manualDepartureMinute))}',
-                                  style: const TextStyle(color: Colors.black54),
+                                    child: Text(DateFormat('yyyy-MM-dd')
+                                        .format(_manualDepartureDate)),
+                                  ),
                                 ),
+                                const SizedBox(height: 12),
+                                OutlinedButton.icon(
+                                  icon: const Icon(Icons.access_time_rounded),
+                                  label: Text(
+                                    'Abfahrtszeit ${_manualDepartureHour.toString().padLeft(2, '0')}:${_manualDepartureMinute.toString().padLeft(2, '0')}',
+                                  ),
+                                  onPressed: () async {
+                                    final selected = await showTimePicker(
+                                      context: context,
+                                      initialTime: TimeOfDay(
+                                        hour: _manualDepartureHour,
+                                        minute: _manualDepartureMinute,
+                                      ),
+                                      initialEntryMode:
+                                          TimePickerEntryMode.input,
+                                      builder: (context, child) => MediaQuery(
+                                        data: MediaQuery.of(context).copyWith(
+                                          alwaysUse24HourFormat: true,
+                                        ),
+                                        child: child!,
+                                      ),
+                                    );
+                                    if (selected != null && mounted) {
+                                      setState(() {
+                                        _manualDepartureHour = selected.hour;
+                                        _manualDepartureMinute =
+                                            selected.minute;
+                                      });
+                                    }
+                                  },
+                                ),
+                              ],
                             ],
                           ),
                         );
@@ -1583,27 +1668,29 @@ class _HomeScreenState extends State<HomeScreen> {
                         FilterChip(
                           label: const Text('10h-Tag #1'),
                           selected: _ten1,
-                          onSelected: (v) => setState(() => _ten1 = v),
+                          onSelected: (v) =>
+                              _changeDrivingLimit(() => _ten1 = v),
                         ),
                         FilterChip(
                           label: const Text('10h-Tag #2'),
                           selected: _ten2,
-                          onSelected: (v) => setState(() => _ten2 = v),
+                          onSelected: (v) =>
+                              _changeDrivingLimit(() => _ten2 = v),
                         ),
                         FilterChip(
                           label: const Text('9h-Ruhe #1'),
                           selected: _nine1,
-                          onSelected: (v) => setState(() => _nine1 = v),
+                          onSelected: (v) => _changeDutyLimit(() => _nine1 = v),
                         ),
                         FilterChip(
                           label: const Text('9h-Ruhe #2'),
                           selected: _nine2,
-                          onSelected: (v) => setState(() => _nine2 = v),
+                          onSelected: (v) => _changeDutyLimit(() => _nine2 = v),
                         ),
                         FilterChip(
                           label: const Text('9h-Ruhe #3'),
                           selected: _nine3,
-                          onSelected: (v) => setState(() => _nine3 = v),
+                          onSelected: (v) => _changeDutyLimit(() => _nine3 = v),
                         ),
                         FilterChip(
                           label: const Text('⛽ Tankpause +30 min'),
@@ -1638,10 +1725,32 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   children: [
                     SwitchListTile(
-                      title: const Text(
-                          '🚢 Automatische Erkennung aktivieren (MVP Anzeige)'),
+                      title: const Text('Fähre automatisch vorschlagen'),
+                      subtitle: const Text(
+                        'Für Griechenland–Italien sowie Deutschland/Österreich–Schweden/Norwegen werden erreichbare Häfen ohne Zwischenstopp verglichen. Buchung separat beim Anbieter prüfen.',
+                      ),
                       value: _autoFerry,
-                      onChanged: (v) => setState(() => _autoFerry = v),
+                      onChanged: (v) => setState(() {
+                        _autoFerry = v;
+                        if (v) _viaDenmarkFerries = false;
+                        _etaResult = null;
+                      }),
+                    ),
+                    SwitchListTile(
+                      title: const Text('Alternative über Dänemark: 2 Fähren'),
+                      subtitle: const Text(
+                        'Helsingborg–Helsingør und Rødby–Puttgarden. Nur Deutschland–Schweden; Wartezeiten und Buchungen separat.',
+                      ),
+                      value: _viaDenmarkFerries,
+                      onChanged: (v) => setState(() {
+                        _viaDenmarkFerries = v;
+                        if (v) {
+                          _autoFerry = false;
+                          _manualFerry = null;
+                          _manualFerryDeparture = null;
+                        }
+                        _etaResult = null;
+                      }),
                     ),
                     SwitchListTile(
                       title: const Text('Schlafkabine/Liegeplatz verfügbar'),
@@ -1661,6 +1770,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           Expanded(
                             child: DropdownButtonFormField<FerryRoute>(
+                              key: ValueKey(selectedFerry?.id ?? 'no-ferry'),
                               isExpanded: true,
                               initialValue: selectedFerry,
                               hint: const Text('Keine'),
@@ -1673,8 +1783,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                         child: Text(r.name),
                                       ))
                                   .toList(),
-                              onChanged: (v) =>
-                                  setState(() => _manualFerry = v),
+                              onChanged: (v) => setState(() {
+                                _manualFerry = v;
+                                if (v != null) _viaDenmarkFerries = false;
+                                _etaResult = null;
+                              }),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -1683,33 +1796,31 @@ class _HomeScreenState extends State<HomeScreen> {
                             onPressed: () => setState(() {
                               _manualFerry = null;
                               _manualFerryDeparture = null;
+                              _etaResult = null;
                             }),
                             icon: const Icon(Icons.clear),
                           ),
                         ],
                       );
                     }),
-                    const SizedBox(height: 8),
-                    // Test widget: liefert ein FerryRoute-Objekt an die RouteInputWidget-Instanz
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                      child: RouteInputWidget(
-                        detectedRoute: _manualFerry ??
-                            (_routes.isNotEmpty ? _routes.first : null),
-                      ),
-                    ),
-                    if (_manualFerry != null)
+                    if (_manualFerry != null || _autoFerry)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 8.0),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('🕓 Manuelle Abfahrtszeit für Fähre',
+                            Text('Gebuchte Fährabfahrt',
                                 style: Theme.of(context).textTheme.titleMedium),
+                            const Text(
+                              'Datum und Uhrzeit nach der Buchung eintragen. Ohne Eingabe ist die ETA nur vorläufig.',
+                            ),
                             const SizedBox(height: 6),
-                            Row(
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
                               children: [
-                                Expanded(
+                                SizedBox(
+                                  width: 176,
                                   child: GestureDetector(
                                     onTap: () async {
                                       final now = DateTime.now();
@@ -1731,6 +1842,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                             d.day,
                                             prev.hour,
                                             prev.minute);
+                                        _etaResult = null;
                                       });
                                     },
                                     child: InputDecorator(
@@ -1750,93 +1862,49 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                   ),
                                 ),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: OutlinedButton(
-                                    style: OutlinedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 10, horizontal: 8),
-                                    ),
-                                    onPressed: () async {
-                                      final now = DateTime.now();
-                                      final initial =
-                                          _manualFerryDeparture?.hour ??
-                                              now.hour;
-                                      final sel = await _showWheelPicker(
-                                          context, initial, 23);
-                                      if (sel != null) {
-                                        setState(() {
-                                          final prev = _manualFerryDeparture ??
-                                              DateTime.now();
-                                          _manualFerryDeparture = DateTime(
-                                              prev.year,
-                                              prev.month,
-                                              prev.day,
-                                              sel,
-                                              prev.minute);
-                                        });
-                                      }
-                                    },
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const Icon(Icons.access_time, size: 18),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          _manualFerryDeparture == null
-                                              ? 'Stunde'
-                                              : _manualFerryDeparture!.hour
-                                                  .toString()
-                                                  .padLeft(2, '0'),
-                                          style: const TextStyle(fontSize: 16),
+                                OutlinedButton.icon(
+                                  icon: const Icon(Icons.access_time_rounded),
+                                  label: Text(_manualFerryDeparture == null
+                                      ? 'Uhrzeit wählen'
+                                      : DateFormat('HH:mm')
+                                          .format(_manualFerryDeparture!)),
+                                  onPressed: () async {
+                                    final initial =
+                                        _manualFerryDeparture ?? DateTime.now();
+                                    final selected = await showTimePicker(
+                                      context: context,
+                                      initialTime:
+                                          TimeOfDay.fromDateTime(initial),
+                                      initialEntryMode:
+                                          TimePickerEntryMode.input,
+                                      builder: (context, child) => MediaQuery(
+                                        data: MediaQuery.of(context).copyWith(
+                                          alwaysUse24HourFormat: true,
                                         ),
-                                      ],
-                                    ),
-                                  ),
+                                        child: child!,
+                                      ),
+                                    );
+                                    if (selected == null || !mounted) return;
+                                    setState(() {
+                                      _manualFerryDeparture = DateTime(
+                                        initial.year,
+                                        initial.month,
+                                        initial.day,
+                                        selected.hour,
+                                        selected.minute,
+                                      );
+                                      _etaResult = null;
+                                    });
+                                  },
                                 ),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: OutlinedButton(
-                                    style: OutlinedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 10, horizontal: 8),
-                                    ),
-                                    onPressed: () async {
-                                      final now = DateTime.now();
-                                      final initial =
-                                          _manualFerryDeparture?.minute ??
-                                              now.minute;
-                                      final sel = await _showWheelPicker(
-                                          context, initial, 59);
-                                      if (sel != null) {
-                                        setState(() {
-                                          final prev = _manualFerryDeparture ??
-                                              DateTime.now();
-                                          _manualFerryDeparture = DateTime(
-                                              prev.year,
-                                              prev.month,
-                                              prev.day,
-                                              prev.hour,
-                                              sel);
-                                        });
-                                      }
-                                    },
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          _manualFerryDeparture == null
-                                              ? 'Minute'
-                                              : _manualFerryDeparture!.minute
-                                                  .toString()
-                                                  .padLeft(2, '0'),
-                                          style: const TextStyle(fontSize: 16),
-                                        ),
-                                      ],
-                                    ),
+                                if (_manualFerryDeparture != null)
+                                  TextButton(
+                                    onPressed: () => setState(() {
+                                      _manualFerryDeparture = null;
+                                      _etaResult = null;
+                                    }),
+                                    child: const Text('Zeit zurücksetzen'),
                                   ),
-                                ),
                               ],
                             ),
                             const SizedBox(height: 6),
@@ -1879,27 +1947,58 @@ class _HomeScreenState extends State<HomeScreen> {
                     roadMix: _resultRoadMix,
                   ),
                 ),
+              if (_etaResult != null && _countryRouteNote != null)
+                Padding(
+                  padding: pad,
+                  child: Card(
+                    color: const Color(0xFFE5F6EF),
+                    child: ListTile(
+                      leading: const Icon(Icons.verified_rounded,
+                          color: Color(0xFF087F5B)),
+                      title: Text(_countryRouteNote!),
+                      subtitle: const Text(
+                        'Karten- und Grenzdaten sind eine Planungshilfe; Grenzverlauf vor der Fahrt prüfen.',
+                      ),
+                    ),
+                  ),
+                ),
+              if (!wideLayout && _etaResult != null && _ferryRouteNote != null)
+                Padding(
+                  padding: pad,
+                  child: _ferryNoticeCard(),
+                ),
               const SizedBox(height: 8),
               Padding(
                 padding: pad,
                 child: OutlinedButton.icon(
                   icon: const Icon(Icons.map),
-                  label: const Text('Karte anzeigen'),
-                  onPressed: () {
-                    // Ensure window.open is triggered synchronously from user gesture to avoid popup blocking on web
-                    if (kIsWeb) {
-                      if (_stops.isEmpty) {
-                        // ignore: avoid_print
-                        print('[MapButton] using external web tab');
-                        openInNewTabWithName('about:blank', 'driverroute_map');
-                      } else {
-                        // ignore: avoid_print
-                        print(
-                            '[MapButton] using in-app map because waypoints are present');
-                      }
-                    }
-                    _openMapOsm();
-                  },
+                  label: Text(_etaResult != null &&
+                          (_resultFerry != null || _resultViaDenmark)
+                      ? 'Fährroute: Karte derzeit nicht verfügbar'
+                      : 'Karte anzeigen'),
+                  onPressed: (_avoidSerbia && _etaResult == null) ||
+                          (_etaResult != null &&
+                              (_resultFerry != null || _resultViaDenmark))
+                      ? null
+                      : () {
+                          // Ensure window.open is triggered synchronously from user gesture to avoid popup blocking on web
+                          if (kIsWeb) {
+                            if ((_etaResult == null
+                                    ? _stops
+                                    : _resultRouteStops)
+                                .isEmpty) {
+                              // ignore: avoid_print
+                              print('[MapButton] using external web tab');
+                              openInNewTabWithName(
+                                  'about:blank', 'driverroute_map');
+                            } else {
+                              // ignore: avoid_print
+                              print(
+                                  '[MapButton] using in-app map because waypoints are present');
+                            }
+                          }
+                          _openMapOsm();
+                        },
                 ),
               ),
               if (kDebugMode)
@@ -1973,10 +2072,23 @@ class _HomeScreenState extends State<HomeScreen> {
             destination: _resultDestination,
             roadMix: _resultRoadMix,
           ),
+          if (_ferryRouteNote != null) ...[
+            const SizedBox(height: 12),
+            _ferryNoticeCard(),
+          ],
         ],
       ),
     );
   }
+
+  Widget _ferryNoticeCard() => Card(
+        color: const Color(0xFFFFF4E8),
+        child: ListTile(
+          leading: const Icon(Icons.directions_boat_rounded,
+              color: Color(0xFFB45309)),
+          title: Text(_ferryRouteNote!),
+        ),
+      );
 
   Widget _slider(
     String label,

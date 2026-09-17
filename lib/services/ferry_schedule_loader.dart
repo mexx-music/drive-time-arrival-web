@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/ferry_route.dart';
 
 class FerryScheduleLoader {
-  static const _cacheKey = 'ferries_json_cache_v1';
+  static const _cacheKey = 'ferries_json_cache_v2';
   static const _assetPath = 'assets/fahrplaene/ferries.json';
 
   static Future<(String source, List<FerryRoute> routes)> load() async {
