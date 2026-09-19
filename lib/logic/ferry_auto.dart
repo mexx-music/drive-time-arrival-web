@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import '../logic/eta_calculator.dart';
 import '../models/ferry_route.dart';
+import '../models/route_candidate.dart';
 import '../services/distance_service.dart';
 import '../services/maps_proxy.dart';
 
@@ -16,6 +17,10 @@ class DirectionsFetchResult {
   final List<String> warnings;
   final Map<String, dynamic> raw;
 
+  /// Alle von Google gelieferten Routenvarianten inkl. Geometrie.
+  /// Bei `alternatives=false` genau eine; km/sec/steps spiegeln candidates.first.
+  final List<RouteCandidate> candidates;
+
   DirectionsFetchResult({
     required this.ok,
     required this.status,
@@ -24,7 +29,48 @@ class DirectionsFetchResult {
     required this.steps,
     required this.warnings,
     required this.raw,
+    this.candidates = const [],
   });
+
+  /// Baut das Ergebnis aus einer kompletten Directions-Antwort.
+  static DirectionsFetchResult fromResponse(Map<String, dynamic> data) {
+    final status = (data['status'] ?? 'UNKNOWN').toString();
+    final candidates = RouteCandidate.allFromResponse(data);
+    if (status != 'OK' || candidates.isEmpty) {
+      return DirectionsFetchResult(
+        ok: false,
+        status: candidates.isEmpty && status == 'OK' ? 'ZERO_RESULTS' : status,
+        km: 0,
+        sec: 0,
+        steps: const [],
+        warnings: _extractWarnings(data),
+        raw: data,
+      );
+    }
+    final first = candidates.first;
+    return DirectionsFetchResult(
+      ok: true,
+      status: status,
+      km: first.km,
+      sec: first.sec,
+      steps: first.steps,
+      warnings: _extractWarnings(data),
+      raw: data,
+      candidates: candidates,
+    );
+  }
+
+  static List<String> _extractWarnings(Map<String, dynamic> data) {
+    try {
+      final routes = (data['routes'] as List);
+      if (routes.isEmpty) return const [];
+      final w = (routes.first as Map<String, dynamic>)['warnings'];
+      if (w is List) return w.map((e) => e.toString()).toList();
+      return const [];
+    } catch (_) {
+      return const [];
+    }
+  }
 
   static DirectionsFetchResult error(String status) => DirectionsFetchResult(
         ok: false,
@@ -47,6 +93,7 @@ class FerryAutoDetect {
     List<String> waypoints = const [],
     bool optimize = false,
     bool avoidFerries = false,
+    bool alternatives = false,
   }) async {
     // In browsers, direct calls to Google Directions REST endpoints are blocked by CORS.
     // Surface a clear error and avoid making the request; future work should proxy these requests via a backend.
@@ -54,51 +101,24 @@ class FerryAutoDetect {
       if (mapsProxyConfigured()) {
         try {
           final data = await proxyDirections(
-              origin: origin,
-              destination: destination,
-              waypoints: waypoints,
-              mode: 'driving',
-              departureTime: 'now');
-          final status = (data['status'] ?? 'UNKNOWN').toString();
-          if (status != 'OK') {
-            if (kDebugMode) {
-              print('[FerryAutoDetect] Proxy Directions status: $status');
-              if (data.containsKey('error_message'))
-                print(
-                    '[FerryAutoDetect] proxy error_message: ${data['error_message']}');
-            }
-            return DirectionsFetchResult(
-              ok: false,
-              status: status,
-              km: 0,
-              sec: 0,
-              steps: const [],
-              warnings: _extractWarnings(data),
-              raw: data,
-            );
-          }
-          final route = (data['routes'] as List).first as Map<String, dynamic>;
-          final legs = (route['legs'] as List).cast<Map<String, dynamic>>();
-
-          double meters = 0;
-          double seconds = 0;
-          final List<Map<String, dynamic>> steps = [];
-          for (final l in legs) {
-            meters += (l['distance']['value'] as num).toDouble();
-            seconds += (l['duration']['value'] as num).toDouble();
-            final s = (l['steps'] as List).cast<Map<String, dynamic>>();
-            steps.addAll(s);
-          }
-          final warnings = _extractWarnings(data);
-          return DirectionsFetchResult(
-            ok: true,
-            status: status,
-            km: meters / 1000.0,
-            sec: seconds,
-            steps: steps,
-            warnings: warnings,
-            raw: data,
+            origin: origin,
+            destination: destination,
+            waypoints: waypoints,
+            mode: 'driving',
+            departureTime: 'now',
+            optimize: optimize,
+            avoidFerries: avoidFerries,
+            alternatives: alternatives,
           );
+          final res = DirectionsFetchResult.fromResponse(data);
+          if (!res.ok && kDebugMode) {
+            print('[FerryAutoDetect] Proxy Directions status: ${res.status}');
+            if (data.containsKey('error_message')) {
+              print(
+                  '[FerryAutoDetect] proxy error_message: ${data['error_message']}');
+            }
+          }
+          return res;
         } catch (e, st) {
           if (kDebugMode) {
             print('[FerryAutoDetect] Proxy exception: $e');
@@ -134,7 +154,7 @@ class FerryAutoDetect {
           'mode=driving',
           'units=metric',
           'language=en', // stabil fürs Parsing
-          'alternatives=false',
+          'alternatives=${alternatives ? 'true' : 'false'}',
           'departure_time=now',
           if (avoidFerries) 'avoid=ferries',
           'key=$apiKey',
@@ -144,9 +164,6 @@ class FerryAutoDetect {
     final uri = Uri.parse(
         'https://maps.googleapis.com/maps/api/directions/json?$params');
 
-    // debug
-    // ignore: avoid_print
-    // print('[FerryAutoDetect] GET $uri');
     // print masked URL (do not print API key)
     // ignore: avoid_print
     print(
@@ -165,71 +182,30 @@ class FerryAutoDetect {
     }
 
     final data = jsonDecode(res.body) as Map<String, dynamic>;
-    final status = (data['status'] ?? 'UNKNOWN').toString();
+    final parsed = DirectionsFetchResult.fromResponse(data);
 
-    // log non-OK status
-    if (status != 'OK') {
+    if (!parsed.ok) {
       // ignore: avoid_print
       print(
-          '[FerryAutoDetect] Directions status: $status for ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
-      // ignore: avoid_print
-      print('[FerryAutoDetect] Response body: ${res.body}');
+          '[FerryAutoDetect] Directions status: ${parsed.status} for ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
       if (data.containsKey('error_message')) {
         // ignore: avoid_print
         print('[FerryAutoDetect] error_message: ${data['error_message']}');
       }
-      return DirectionsFetchResult(
-        ok: false,
-        status: status,
-        km: 0,
-        sec: 0,
-        steps: const [],
-        warnings: _extractWarnings(data),
-        raw: data,
-      );
     }
-
-    final route = (data['routes'] as List).first as Map<String, dynamic>;
-    final legs = (route['legs'] as List).cast<Map<String, dynamic>>();
-
-    double meters = 0;
-    double seconds = 0;
-    final List<Map<String, dynamic>> steps = [];
-    for (final l in legs) {
-      meters += (l['distance']['value'] as num).toDouble();
-      seconds += (l['duration']['value'] as num).toDouble();
-      final s = (l['steps'] as List).cast<Map<String, dynamic>>();
-      steps.addAll(s);
-    }
-
-    final warnings = _extractWarnings(data);
-    return DirectionsFetchResult(
-      ok: true,
-      status: status,
-      km: meters / 1000.0,
-      sec: seconds,
-      steps: steps,
-      warnings: warnings,
-      raw: data,
-    );
-  }
-
-  static List<String> _extractWarnings(Map<String, dynamic> data) {
-    try {
-      final routes = (data['routes'] as List);
-      if (routes.isEmpty) return const [];
-      final w = (routes.first as Map<String, dynamic>)['warnings'];
-      if (w is List) return w.map((e) => e.toString()).toList();
-      return const [];
-    } catch (_) {
-      return const [];
-    }
+    return parsed;
   }
 
   // Warnings + Steps prüfen
-  bool routeHasFerry(DirectionsFetchResult r) {
-    if (r.warnings.any((w) => w.toLowerCase().contains('ferry'))) return true;
-    for (final st in r.steps) {
+  bool routeHasFerry(DirectionsFetchResult r) =>
+      hasFerryIn(r.warnings, r.steps);
+
+  /// Wie [routeHasFerry], aber direkt auf einer einzelnen Routenvariante.
+  bool candidateHasFerry(RouteCandidate c) => hasFerryIn(c.warnings, c.steps);
+
+  bool hasFerryIn(List<String> warnings, List<Map<String, dynamic>> steps) {
+    if (warnings.any((w) => w.toLowerCase().contains('ferry'))) return true;
+    for (final st in steps) {
       final instr =
           _stripHtml((st['html_instructions'] ?? '').toString()).toLowerCase();
       final man = (st['maneuver'] ?? '').toString().toLowerCase();

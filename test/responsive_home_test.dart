@@ -77,25 +77,34 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Serbien-Sperre ist optional und zunächst ausgeschaltet',
+  testWidgets('Ländersperre ist kompakt, optional und mehrfach wählbar',
       (tester) async {
     await pumpAtSize(tester, width: 390, height: 844);
     await tester.scrollUntilVisible(
-      find.text('Serbien für die Route sperren'),
+      find.text('Länder vermeiden · Keine'),
       250,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.ensureVisible(find.text('Serbien für die Route sperren'));
+    await tester.ensureVisible(find.text('Länder vermeiden · Keine'));
     await tester.pumpAndSettle();
 
-    final tile = find.ancestor(
-      of: find.text('Serbien für die Route sperren'),
-      matching: find.byType(SwitchListTile),
-    );
-    expect(tester.widget<SwitchListTile>(tile).value, isFalse);
-    await tester.tap(find.text('Serbien für die Route sperren'));
+    // Zugeklappt: keine Länderliste, kein Eingabefeld für Umfahrungspunkte.
+    expect(find.text('Schweiz 🇨🇭'), findsNothing);
+
+    await tester.tap(find.text('Länder vermeiden · Keine'));
     await tester.pumpAndSettle();
-    expect(tester.widget<SwitchListTile>(tile).value, isTrue);
+    expect(find.text('Schweiz 🇨🇭'), findsOneWidget);
+    expect(find.text('Serbien 🇷🇸'), findsOneWidget);
+
+    await tester.tap(find.text('Schweiz 🇨🇭'));
+    await tester.pumpAndSettle();
+    expect(find.text('Länder vermeiden · Schweiz'), findsOneWidget);
+
+    // Mehrfachauswahl
+    await tester.tap(find.text('Serbien 🇷🇸'));
+    await tester.pumpAndSettle();
+    expect(find.text('Länder vermeiden · 2 aktiv'), findsOneWidget);
+
     expect(tester.takeException(), isNull);
   });
 

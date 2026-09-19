@@ -104,6 +104,9 @@ Future<Map<String, dynamic>> proxyDirections({
   List<String>? waypoints,
   String mode = 'driving',
   String departureTime = 'now',
+  bool optimize = false,
+  bool avoidFerries = false,
+  bool alternatives = false,
 }) async {
   if (!mapsProxyConfigured()) throw Exception(webBlockedMessage);
   final base = mapsProxyBase.endsWith('/')
@@ -116,6 +119,9 @@ Future<Map<String, dynamic>> proxyDirections({
     'waypoints': waypoints ?? [],
     'mode': mode,
     'departure_time': departureTime,
+    'optimize': optimize,
+    'alternatives': alternatives,
+    if (avoidFerries) 'avoid': 'ferries',
   };
   final res = await http.post(uri,
       headers: {'Content-Type': 'application/json'}, body: jsonEncode(payload));

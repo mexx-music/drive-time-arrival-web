@@ -1,6 +1,5 @@
 // lib/services/map_launcher.dart
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -9,52 +8,11 @@ import 'package:latlong2/latlong.dart';
 import '../logic/ferry_auto.dart';
 import '../ui/map_osm_view.dart';
 import '../utils/open_in_tab.dart';
+import '../utils/polyline.dart' as poly;
 
-// Standard Google polyline decode with factor 1e5
-List<LatLng> decodePolyline(String encoded) {
-  final points = <LatLng>[];
-  int index = 0;
-  int lat = 0;
-  int lng = 0;
-  final len = encoded.length;
-  while (index < len) {
-    int b;
-    int shift = 0;
-    int result = 0;
-    do {
-      b = encoded.codeUnitAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    final dlat = result.isOdd ? -(result ~/ 2) - 1 : result ~/ 2;
-    lat += dlat;
-
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.codeUnitAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    final dlng = result.isOdd ? -(result ~/ 2) - 1 : result ~/ 2;
-    lng += dlng;
-
-    points.add(LatLng(lat / 1e5, lng / 1e5));
-  }
-
-  // debug: basic info
-  try {
-    // ignore: avoid_print
-    print(
-        '[decodePolyline] encoded.length=${encoded.length}, points=${points.length}');
-    final first5 =
-        points.take(5).map((p) => '${p.latitude},${p.longitude}').toList();
-    // ignore: avoid_print
-    print('[decodePolyline] first5: $first5');
-  } catch (_) {}
-
-  return points;
-}
+// Re-Export: der Decoder liegt jetzt in utils/polyline.dart, damit ihn auch
+// Modelle ohne Flutter-/UI-Abhängigkeit benutzen können.
+List<LatLng> decodePolyline(String encoded) => poly.decodePolyline(encoded);
 
 /// Open a map (OSM) for the given start/destination and optional waypoints.
 ///

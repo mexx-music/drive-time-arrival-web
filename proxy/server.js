@@ -74,7 +74,7 @@ const handleDirections = async (req, res) => {
   try {
     const params = req.method === 'GET' ? req.query : req.body;
 
-    const { origin, destination, waypoints, mode, departure_time } = params;
+    const { origin, destination, waypoints, mode, departure_time, alternatives, avoid, optimize } = params;
 
     if (!origin || !destination) {
       return res.status(400).json({ error: 'Missing origin or destination' });
@@ -90,10 +90,19 @@ const handleDirections = async (req, res) => {
     url.searchParams.append('departure_time', departure_time || 'now');
     url.searchParams.append('key', apiKey);
 
+    // Alternativrouten werden fuer die automatische Laendersperre gebraucht:
+    // ohne sie kann die App nur eine einzige Variante gegen die gesperrten
+    // Laender pruefen. Default bleibt false, damit sich nichts anderes aendert.
+    const wantAlternatives = alternatives === true || alternatives === 'true';
+    url.searchParams.append('alternatives', wantAlternatives ? 'true' : 'false');
+
+    if (avoid) url.searchParams.append('avoid', String(avoid));
+
     if (waypoints && waypoints.length > 0) {
       // support both array and single-string waypoint formats
       const wpValue = Array.isArray(waypoints) ? waypoints.join('|') : waypoints;
-      url.searchParams.append('waypoints', wpValue);
+      const wantOptimize = optimize === true || optimize === 'true';
+      url.searchParams.append('waypoints', wantOptimize ? `optimize:true|${wpValue}` : wpValue);
     }
 
     const response = await fetch(url.toString());
