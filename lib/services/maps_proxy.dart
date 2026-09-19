@@ -16,6 +16,12 @@ const String mapsProxyBase =
     String.fromEnvironment('MAPS_PROXY_BASE', defaultValue: '');
 bool mapsProxyConfigured() => mapsProxyBase.isNotEmpty;
 
+/// Obergrenze für eine einzelne Proxy-Anfrage. Ohne Timeout bleibt ein
+/// hängender Request für immer offen und die App zeigt endlos
+/// "Route wird berechnet". Großzügig gewählt, weil der Proxy nach Leerlauf
+/// erst hochfahren muss.
+const Duration proxyRequestTimeout = Duration(seconds: 45);
+
 /// Debug helper - call this from a runtime location if you need to log the proxy config.
 void _logMapsProxyConfig() {
   if (kDebugMode) {
@@ -38,9 +44,11 @@ Future<Map<String, dynamic>> proxyGeocode(String address) async {
       ? mapsProxyBase.substring(0, mapsProxyBase.length - 1)
       : mapsProxyBase;
   final uri = Uri.parse('$base/api/geocode');
-  final res = await http.post(uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'address': address}));
+  final res = await http
+      .post(uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'address': address}))
+      .timeout(proxyRequestTimeout);
   if (res.statusCode != 200)
     throw Exception('Proxy error HTTP ${res.statusCode}');
   return jsonDecode(res.body) as Map<String, dynamic>;
@@ -59,7 +67,7 @@ Future<Map<String, dynamic>> proxyReverseGeocode(
     uri,
     headers: {'Content-Type': 'application/json'},
     body: jsonEncode({'lat': latitude, 'lng': longitude}),
-  );
+  ).timeout(proxyRequestTimeout);
   if (res.statusCode != 200) {
     throw Exception('Proxy error HTTP ${res.statusCode}');
   }
@@ -90,7 +98,7 @@ Future<Map<String, dynamic>> proxyAutocomplete({
         'location': '$latitude,$longitude',
       if (radiusMeters != null) 'radius': radiusMeters,
     }),
-  );
+  ).timeout(proxyRequestTimeout);
   if (res.statusCode != 200) {
     throw Exception('Proxy error HTTP ${res.statusCode}');
   }
@@ -123,8 +131,11 @@ Future<Map<String, dynamic>> proxyDirections({
     'alternatives': alternatives,
     if (avoidFerries) 'avoid': 'ferries',
   };
-  final res = await http.post(uri,
-      headers: {'Content-Type': 'application/json'}, body: jsonEncode(payload));
+  final res = await http
+      .post(uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload))
+      .timeout(proxyRequestTimeout);
   if (res.statusCode != 200)
     throw Exception('Proxy error HTTP ${res.statusCode}');
   return jsonDecode(res.body) as Map<String, dynamic>;

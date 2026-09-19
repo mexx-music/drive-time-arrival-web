@@ -169,7 +169,7 @@ class FerryAutoDetect {
     print(
         '[FerryAutoDetect] GET ${uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***')}');
 
-    final res = await http.get(uri);
+    final res = await http.get(uri).timeout(proxyRequestTimeout);
 
     // log HTTP problems to help diagnose API key restrictions on Android
     if (res.statusCode != 200) {

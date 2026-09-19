@@ -83,7 +83,7 @@ class DistanceService {
         final s = uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***');
         debugPrint('[DistanceService] GET $s');
       }
-      final res = await http.get(uri);
+      final res = await http.get(uri).timeout(proxyRequestTimeout);
       if (res.statusCode != 200) {
         if (kDebugMode) {
           final s = uri.toString().replaceAll(RegExp(r'key=[^&]+'), 'key=***');

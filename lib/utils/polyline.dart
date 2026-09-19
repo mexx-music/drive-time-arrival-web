@@ -16,7 +16,10 @@ List<LatLng> decodePolyline(String encoded) {
       result |= (b & 0x1f) << shift;
       shift += 5;
     } while (b >= 0x20);
-    final dlat = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
+    // ~n entspricht -(n+1). Die ~-Variante liefert unter dart2js (Web) ein
+    // vorzeichenloses 32-Bit-Ergebnis und damit völlig falsche Koordinaten;
+    // diese Schreibweise verhält sich auf VM und Web identisch.
+    final dlat = ((result & 1) != 0) ? -((result >> 1) + 1) : (result >> 1);
     lat += dlat;
 
     shift = 0;
@@ -26,7 +29,7 @@ List<LatLng> decodePolyline(String encoded) {
       result |= (b & 0x1f) << shift;
       shift += 5;
     } while (b >= 0x20);
-    final dlng = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
+    final dlng = ((result & 1) != 0) ? -((result >> 1) + 1) : (result >> 1);
     lng += dlng;
 
     points.add(LatLng(lat / 1e5, lng / 1e5));

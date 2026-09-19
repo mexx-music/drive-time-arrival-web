@@ -625,25 +625,39 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    // --- Routenplanung mit automatischer Ländersperre ------------------
-    // Der Fahrer wählt nur, welches Land er meidet. Welche Umfahrung dafür
-    // nötig ist, ermittelt CountryAvoidancePlanner aus Routengeometrie und
-    // Ländergrenzen – ohne hartkodierte Orte und ohne Eingabe des Fahrers.
-    final plan = await _makeAvoidancePlanner(det).plan(
-      origin: origin,
-      destination: destination,
-      stops: wps,
-      optimize: optimize,
-      avoided: _avoidedCountries,
-    );
-    for (final line in plan.log) {
-      _log.add(line);
-    }
-
+    // --- Routenplanung -------------------------------------------------
+    // OHNE Ländersperre exakt der bewährte Pfad: eine Anfrage, keine
+    // Alternativrouten, keine Ländergeometrie, keine Umfahrungssuche.
+    // Nur wenn der Fahrer wirklich ein Land gesperrt hat, übernimmt der
+    // CountryAvoidancePlanner.
     var routedWaypoints = List<String>.of(wps);
     var countryNote = '';
+    RouteCandidate? route;
+    String planStatus;
 
-    if (_avoidedCountries.isNotEmpty) {
+    if (_avoidedCountries.isEmpty) {
+      final res = await det.fetchDirections(
+        origin: origin,
+        destination: destination,
+        waypoints: wps,
+        optimize: optimize,
+      );
+      planStatus = res.status;
+      route = res.ok && res.candidates.isNotEmpty ? res.candidates.first : null;
+    } else {
+      final plan = await _makeAvoidancePlanner(det).plan(
+        origin: origin,
+        destination: destination,
+        stops: wps,
+        optimize: optimize,
+        avoided: _avoidedCountries,
+      );
+      for (final line in plan.log) {
+        _log.add(line);
+      }
+      planStatus = plan.status;
+      route = plan.route;
+
       final label = _avoidedCountriesLabel();
       if (!plan.ok || plan.route == null) {
         throw CountryRouteException(
@@ -668,16 +682,13 @@ class _HomeScreenState extends State<HomeScreen> {
           ? '$label gemieden · Route geprüft'
           : '$label gemieden · automatisch umfahren über '
               '${_detourCountryNames(plan.autoDetours)}';
-    } else if (plan.ok && plan.route != null) {
-      routedWaypoints = plan.effectiveWaypoints;
     }
 
     // Ab hier ist genau diese eine Route die Grundlage für alles Weitere:
     // km, Fahrzeit, Straßenmix, ETA, Timeline, Karte und Export.
-    final RouteCandidate? route = plan.route;
     final DirectionsFetchResult normal = DirectionsFetchResult(
-      ok: plan.ok && route != null,
-      status: plan.status,
+      ok: route != null,
+      status: planStatus,
       km: route?.km ?? 0,
       sec: route?.sec ?? 0,
       steps: route?.steps ?? const [],

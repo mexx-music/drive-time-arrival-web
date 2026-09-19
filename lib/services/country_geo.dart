@@ -67,6 +67,19 @@ class CountryGeo {
     return null;
   }
 
+  /// Welches der angegebenen Länder enthält den Punkt? (null = keines)
+  /// Deutlich billiger als [countryAt], weil nur wenige Polygone geprüft werden.
+  static String? firstMatch(LatLng p, Set<String> isoCodes) {
+    final d = _data;
+    if (d == null || isoCodes.isEmpty) return null;
+    if (!_isPlausible(p)) return null;
+    for (final iso in isoCodes) {
+      final c = d[iso];
+      if (c != null && c.contains(p.longitude, p.latitude)) return iso;
+    }
+    return null;
+  }
+
   /// Liegt der Punkt in einem der angegebenen Länder?
   static bool isInAny(LatLng p, Set<String> isoCodes) {
     final d = _data;
@@ -93,9 +106,14 @@ class CountryGeo {
     if (path.length < 2) return out;
     for (var i = 0; i < path.length - 1; i++) {
       final a = path[i], b = path[i + 1];
+      if (!_isPlausible(a) || !_isPlausible(b)) continue;
       final segKm = distanceKm(a, b);
-      if (segKm <= 0) continue;
-      final parts = math.max(1, (segKm / sampleKm).ceil());
+      if (segKm <= 0 || !segKm.isFinite) continue;
+      // Harte Obergrenze: die Zahl der Abtastpunkte ergibt sich aus den Daten.
+      // Ein einziger fehlerhafter Geometriepunkt darf daraus keine Milliarden
+      // Schleifendurchläufe machen, die den UI-Thread blockieren.
+      final parts = math.min(_maxPartsPerSegment,
+          math.max(1, (segKm / sampleKm).ceil()));
       final partKm = segKm / parts;
       for (var k = 0; k < parts; k++) {
         final t = (k + 0.5) / parts;
@@ -126,6 +144,17 @@ class CountryGeo {
     hits.sort((a, b) => (km[b] ?? 0).compareTo(km[a] ?? 0));
     return hits;
   }
+
+  /// Mehr Abtastpunkte pro Teilstück ergeben nie Sinn (entspricht ~1000 km
+  /// bei 2-km-Abtastung) und schützen vor kaputter Geometrie.
+  static const int _maxPartsPerSegment = 500;
+
+  /// Liegt der Punkt überhaupt im gültigen Koordinatenbereich?
+  static bool _isPlausible(LatLng p) =>
+      p.latitude.isFinite &&
+      p.longitude.isFinite &&
+      p.latitude.abs() <= 90 &&
+      p.longitude.abs() <= 180;
 
   // --- Geometrie-Helfer (equirektangulare Näherung, für Europa ausreichend) ---
 

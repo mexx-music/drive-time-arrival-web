@@ -357,8 +357,9 @@ class CountryAvoidancePlanner {
           (pts[i].latitude + pts[i + 1].latitude) / 2,
           (pts[i].longitude + pts[i + 1].longitude) / 2,
         );
-        final iso = CountryGeo.countryAt(mid);
-        final isBlocked = iso != null && avoided.contains(iso);
+        // Nur gegen die gesperrten Länder testen – nicht gegen alle 41.
+        final iso = CountryGeo.firstMatch(mid, avoided);
+        final isBlocked = iso != null;
         if (isBlocked && iso == runIso) {
           runKm += segKm;
         } else {
