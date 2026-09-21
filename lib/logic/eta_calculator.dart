@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:intl/intl.dart';
 
+import 'ferry_schedule.dart';
+
 /// Verfügbare Ausnahmen und optionale Stopps für die Planung.
 ///
 /// Die Schalter beschreiben noch verfügbare Kontingente innerhalb der
@@ -83,6 +85,11 @@ class EtaSummary {
   final int restMinutes;
   final int waitingMinutes;
   final int ferryMinutes;
+
+  /// Anteil der Fährzeit, der als Ruhezeit gewertet wurde. Steckt bereits in
+  /// [ferryMinutes] – separat ausgewiesen, damit "Ruhe" nicht fälschlich als
+  /// 0 erscheint, wenn die Ruhe an Bord stattfand.
+  final int ferryRestMinutes;
   final int tankMinutes;
   final int tenHourDaysUsed;
   final int reducedDailyRestsUsed;
@@ -95,6 +102,7 @@ class EtaSummary {
     required this.restMinutes,
     required this.waitingMinutes,
     required this.ferryMinutes,
+    this.ferryRestMinutes = 0,
     required this.tankMinutes,
     required this.tenHourDaysUsed,
     required this.reducedDailyRestsUsed,
@@ -111,6 +119,13 @@ class EtaResult {
 
   const EtaResult(this.steps, this.arrival, {this.summary});
 }
+
+/// Zulässige Unterbrechung der Ruhezeit je Auf- bzw. Abfahrvorgang.
+const int ferryInterruptionMin = 30;
+
+/// Fehlt zur Tagesruhe höchstens so viel, wird sie nach der Ankunft im Hafen
+/// stehend vollendet, statt sie ganz zu verwerfen.
+const int ferryRestCompletionWindowMin = 180;
 
 class _DriveState {
   DateTime current;
@@ -309,55 +324,112 @@ class _Planner {
     ));
   }
 
-  void addWait(DateTime departure) {
-    if (!departure.isAfter(state.current)) return;
-    final eventStart = state.current;
-    state.current = departure;
-    final minutes = departure.difference(eventStart).inMinutes;
-    state.dutyElapsedMin += minutes;
-    steps.add(EtaStep(
-      '⏱ Wartezeit ${_fmtHm(minutes)} · Abfahrt ${_fmt(departure)}',
-      type: EtaEventType.wait,
-      title: 'Wartezeit am Hafen',
-      detail:
-          'Abfahrt der Fähre: ${DateFormat('EEE HH:mm', 'de').format(departure)}',
-      start: eventStart,
-      end: departure,
-    ));
-  }
-
-  void addFerry({
+  /// Fährblock nach Art. 9 VO (EG) 561/2006.
+  ///
+  /// Wartezeit am Hafen, Überfahrt und – falls nötig – Standzeit nach der
+  /// Ankunft bilden ZUSAMMEN die tägliche Ruhezeit. Auffahren und Abfahren
+  /// dürfen sie höchstens zweimal unterbrechen, zusammen höchstens eine
+  /// Stunde; diese Unterbrechungen zählen selbst nicht als Ruhe.
+  ///
+  /// Vorher wurde nur die reine Überfahrt geprüft – damit fiel die Ruhezeit
+  /// durch, obwohl Warten plus Überfahrt längst gereicht hätten.
+  void addFerryPassage({
     required String label,
-    required int durationMinutes,
-    required bool restEligible,
+    required DateTime departure,
+    required int crossingMinutes,
   }) {
-    final eventStart = state.current;
-    state.current = state.current.add(Duration(minutes: durationMinutes));
-    final requiredRest = state.reducedRestsRemaining > 0 ? 540 : 660;
-    final restSatisfied = restEligible && durationMinutes >= requiredRest;
+    final portArrival = state.current;
+    final waitMinutes = departure.isAfter(portArrival)
+        ? departure.difference(portArrival).inMinutes
+        : 0;
 
+    final boardingMinutes = math.min(ferryInterruptionMin, waitMinutes);
+    final restBeforeMinutes = waitMinutes - boardingMinutes;
+
+    final requiredRest = state.reducedRestsRemaining > 0 ? 540 : 660;
+    final restUntilArrival = restBeforeMinutes + crossingMinutes;
+
+    var restAfterMinutes = 0;
+    var dailyRestSatisfied = false;
+    if (restUntilArrival >= requiredRest) {
+      dailyRestSatisfied = true;
+    } else if (restUntilArrival >=
+        requiredRest - ferryRestCompletionWindowMin) {
+      restAfterMinutes = requiredRest - restUntilArrival;
+      dailyRestSatisfied = true;
+    }
+    final totalRest = restUntilArrival + restAfterMinutes;
+    final restLabel = requiredRest == 540 ? 'verkürzte' : 'reguläre';
+
+    if (waitMinutes > 0) {
+      state.current = departure;
+      steps.add(EtaStep(
+        '${dailyRestSatisfied ? '🌙' : '⏱'} Wartezeit am Hafen '
+        '${_fmtHm(waitMinutes)} · Abfahrt ${_fmt(departure)}',
+        type: dailyRestSatisfied ? EtaEventType.dailyRest : EtaEventType.wait,
+        title: dailyRestSatisfied
+            ? 'Ruhezeit am Hafen · ${_fmtHm(restBeforeMinutes)}'
+            : 'Wartezeit am Hafen',
+        detail: dailyRestSatisfied
+            ? 'Zählt zur Ruhezeit; ${_fmtHm(boardingMinutes)} fürs Auffahren '
+                'sind zulässige Unterbrechung.'
+            : 'Abfahrt der Fähre: '
+                '${DateFormat('EEE HH:mm', 'de').format(departure)}',
+        start: portArrival,
+        end: departure,
+        restSatisfied: dailyRestSatisfied,
+      ));
+      if (!dailyRestSatisfied) state.dutyElapsedMin += waitMinutes;
+    }
+
+    final crossingStart = state.current;
+    state.current = state.current.add(Duration(minutes: crossingMinutes));
     steps.add(EtaStep(
-      '⛴ Fähre $label · ${_fmtHm(durationMinutes)} · Ankunft ${_fmt(state.current)}',
+      '⛴ Fähre $label · ${_fmtHm(crossingMinutes)} · '
+      'Ankunft ${_fmt(state.current)}',
       type: EtaEventType.ferry,
       title: 'Fähre $label',
-      detail: restSatisfied
-          ? 'Tägliche Ruhezeit mit Schlafkabine/Liegeplatz erfüllt'
-          : restEligible
-              ? 'Noch keine vollständige tägliche Ruhezeit'
-              : 'Nicht als Ruhezeit gewertet: Schlafkabine/Liegeplatz nicht bestätigt',
-      start: eventStart,
+      detail: dailyRestSatisfied
+          ? '${_fmtHm(totalRest)} Ruhezeit insgesamt: Warten '
+              '${_fmtHm(restBeforeMinutes)} + Überfahrt '
+              '${_fmtHm(crossingMinutes)}'
+              '${restAfterMinutes > 0 ? ' + Standzeit danach ${_fmtHm(restAfterMinutes)}' : ''}'
+              ' → $restLabel Tagesruhe erfüllt'
+          : 'Warten + Überfahrt ergeben ${_fmtHm(restUntilArrival)} – '
+              'für die $restLabel Tagesruhe fehlen '
+              '${_fmtHm(requiredRest - restUntilArrival)}.',
+      start: crossingStart,
       end: state.current,
-      restSatisfied: restSatisfied,
+      restSatisfied: dailyRestSatisfied,
     ));
 
-    if (restSatisfied) {
+    if (restAfterMinutes > 0) {
+      final afterStart = state.current;
+      state.current = state.current.add(Duration(minutes: restAfterMinutes));
+      steps.add(EtaStep(
+        '🌙 Standzeit nach der Fähre ${_fmtHm(restAfterMinutes)} · '
+        'weiter ${_fmt(state.current)}',
+        type: EtaEventType.dailyRest,
+        title: 'Standzeit nach der Fähre · ${_fmtHm(restAfterMinutes)}',
+        detail: 'Vollendet die $restLabel Tagesruhe von '
+            '${_fmtHm(requiredRest)}. ${_fmtHm(ferryInterruptionMin)} fürs '
+            'Abfahren sind zulässige Unterbrechung.',
+        start: afterStart,
+        end: state.current,
+        restSatisfied: true,
+      ));
+    }
+
+    if (dailyRestSatisfied) {
       if (requiredRest == 540) {
         state.reducedRestsRemaining -= 1;
         state.reducedRestsUsed += 1;
       }
       _resetDailyState();
     } else {
-      state.dutyElapsedMin += durationMinutes;
+      // Keine Tagesruhe, aber Stehen an Bord ist mindestens eine Lenkpause.
+      if (restUntilArrival >= 45) state.continuousDriveMin = 0;
+      state.dutyElapsedMin += crossingMinutes;
     }
   }
 
@@ -374,6 +446,20 @@ class _Planner {
 
   void addNotice(String text) {
     steps.add(EtaStep(text, technical: true));
+  }
+
+  /// Hinweis, der in der Timeline sichtbar bleibt. [addNotice] setzt
+  /// `technical`, und genau solche Schritte blendet die Touransicht aus –
+  /// für Fahrerhinweise ist das die falsche Ablage.
+  void addInfo(String title, String detail) {
+    steps.add(EtaStep(
+      'ℹ️ $title',
+      type: EtaEventType.notice,
+      title: title,
+      detail: detail,
+      start: state.current,
+      end: state.current,
+    ));
   }
 
   void _addBreak(int minutes, {String title = 'Lenkpause'}) {
@@ -462,6 +548,7 @@ class _Planner {
     int rests = 0;
     int waiting = 0;
     int ferry = 0;
+    int ferryRest = 0;
     int tank = 0;
     for (final step in steps) {
       final minutes = step.duration.inMinutes;
@@ -477,6 +564,7 @@ class _Planner {
           waiting += minutes;
         case EtaEventType.ferry:
           ferry += minutes;
+          if (step.restSatisfied == true) ferryRest += minutes;
         case EtaEventType.tank:
           tank += minutes;
         case EtaEventType.start:
@@ -497,6 +585,7 @@ class _Planner {
         restMinutes: rests,
         waitingMinutes: waiting,
         ferryMinutes: ferry,
+        ferryRestMinutes: ferryRest,
         tankMinutes: tank,
         tenHourDaysUsed: state.tenHourDaysUsed,
         reducedDailyRestsUsed: state.reducedRestsUsed,
@@ -536,18 +625,18 @@ class EtaCalculator {
     planner.addStart(startLabel);
     planner.planLeg(driveMinutes: _minsFromKm(kmBefore, avgKmh), km: kmBefore);
     planner.addPortArrival(firstDeparturePort);
-    planner.addFerry(
+    planner.addFerryPassage(
       label: firstFerry,
-      durationMinutes: firstFerryMinutes,
-      restEligible: false,
+      departure: planner.state.current,
+      crossingMinutes: firstFerryMinutes,
     );
     planner.planLeg(
         driveMinutes: _minsFromKm(kmBetween, avgKmh), km: kmBetween);
     planner.addPortArrival(secondDeparturePort);
-    planner.addFerry(
+    planner.addFerryPassage(
       label: secondFerry,
-      durationMinutes: secondFerryMinutes,
-      restEligible: false,
+      departure: planner.state.current,
+      crossingMinutes: secondFerryMinutes,
     );
     planner.planLeg(driveMinutes: _minsFromKm(kmAfter, avgKmh), km: kmAfter);
     planner.addDestination(destinationLabel);
@@ -591,11 +680,12 @@ class EtaCalculator {
     required String ferryLabel,
     required int ferryDurationMin,
     List<String>? departuresHHmm,
+    Map<int, List<String>> departuresByWeekday = const {},
+    String departureTz = '',
     DateTime? manualDeparture,
     String startLabel = '',
     String destinationLabel = '',
     String departurePort = '',
-    bool ferryRestEligible = false,
   }) {
     final planner = _Planner(
       start: start,
@@ -621,16 +711,28 @@ class EtaCalculator {
       planner.addNotice(
           '⚠️ Die manuelle Fährabfahrt lag vor der Hafenankunft und wurde auf „sofort“ gesetzt.');
     } else {
-      departure = _nextDepartureFromList(
+      final scheduled = FerrySchedule.nextDeparture(
         planner.state.current,
         departuresHHmm ?? const [],
+        departureTz,
+        departuresByWeekday: departuresByWeekday,
       );
+      if (scheduled == null) {
+        // Ohne hinterlegten Fahrplan lieber offen sagen, dass hier keine
+        // Wartezeit eingeplant ist, als eine Abfahrt zu erfinden.
+        planner.addInfo(
+          'Kein Fahrplan hinterlegt',
+          'Für diese Verbindung sind keine Abfahrtszeiten gespeichert. '
+              'Gerechnet ohne Hafenwartezeit – die tatsächliche Abfahrt bitte '
+              'beim Betreiber prüfen.',
+        );
+      }
+      departure = scheduled ?? planner.state.current;
     }
-    planner.addWait(departure);
-    planner.addFerry(
+    planner.addFerryPassage(
       label: ferryLabel,
-      durationMinutes: ferryDurationMin,
-      restEligible: ferryRestEligible,
+      departure: departure,
+      crossingMinutes: ferryDurationMin,
     );
     planner.planLeg(
       driveMinutes: _minsFromKm(kmAfter, avgKmh),
@@ -643,32 +745,6 @@ class EtaCalculator {
   static int _minsFromKm(double km, double avgKmh) {
     if (km <= 0 || avgKmh <= 0) return 0;
     return (km / avgKmh * 60).round();
-  }
-
-  static DateTime _nextDepartureFromList(DateTime now, List<String> values) {
-    final parsed = <TimeOfDayLite>[];
-    for (final value in values) {
-      final match = RegExp(r'^(\d{1,2}):(\d{2})$').firstMatch(value.trim());
-      if (match == null) continue;
-      final hour = int.parse(match.group(1)!);
-      final minute = int.parse(match.group(2)!);
-      if (hour <= 23 && minute <= 59) {
-        parsed.add(TimeOfDayLite(hour, minute));
-      }
-    }
-    parsed.sort((a, b) => a.hour != b.hour
-        ? a.hour.compareTo(b.hour)
-        : a.minute.compareTo(b.minute));
-    if (parsed.isEmpty) return now;
-
-    for (final time in parsed) {
-      final candidate =
-          DateTime(now.year, now.month, now.day, time.hour, time.minute);
-      if (!candidate.isBefore(now)) return candidate;
-    }
-    final first = parsed.first;
-    return DateTime(now.year, now.month, now.day, first.hour, first.minute)
-        .add(const Duration(days: 1));
   }
 }
 

@@ -240,7 +240,6 @@ extension FerryAutoEta on FerryAutoDetect {
     double? verifiedKm,
     double? ferryRoadKmBefore,
     double? ferryRoadKmAfter,
-    bool ferryRestEligible = false,
     // Optional context-sensitive guard callbacks. If provided, use these instead of a global guard.
     bool Function()? ferryPlannedGet,
     void Function(bool)? ferryPlannedSet,
@@ -360,14 +359,16 @@ extension FerryAutoEta on FerryAutoDetect {
         rules: rules,
         ferryLabel: ferryLabel,
         ferryDurationMin: (autoOrManualFerry.durationHours * 60).round(),
-        // Stored times are not a live booking. Without an entered booking,
-        // show the earliest theoretical ETA with no assumed harbour wait.
-        departuresHHmm: const [],
+        // Automatik: die erste planmäßige Abfahrt nach der Hafenankunft.
+        // Die Zeiten stammen aus dem hinterlegten Fahrplan (Ortszeit des
+        // Hafens) und sind ein Richtwert, keine Buchung.
+        departuresHHmm: autoOrManualFerry.departuresLocal,
+        departuresByWeekday: autoOrManualFerry.departuresByWeekday,
+        departureTz: autoOrManualFerry.tz,
         manualDeparture: manualDeparture,
         startLabel: startAddress,
         destinationLabel: endAddress,
         departurePort: autoOrManualFerry.from,
-        ferryRestEligible: ferryRestEligible,
       );
 
       // Combine dist logs + result steps

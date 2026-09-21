@@ -1,6 +1,7 @@
 import 'package:driverroute_eta/logic/ferry_route_suggester.dart';
 import 'package:driverroute_eta/models/ferry_route.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
 
 FerryRoute route(String from, String to, double hours) => FerryRoute(
       id: '$from-$to',
@@ -17,6 +18,7 @@ FerryRoute route(String from, String to, double hours) => FerryRoute(
     );
 
 void main() {
+  setUpAll(() => tz_data.initializeTimeZones());
   final routes = [
     route('Igoumenitsa', 'Bari', 10),
     route('Igoumenitsa', 'Ancona', 20),
@@ -121,5 +123,43 @@ void main() {
       roadDistance: (a, b) async => distances['$a|$b'],
     );
     expect(suggestion?.route.name, 'Rostock–Trelleborg');
+  });
+
+  // --- Auswahl zwischen mehreren Betreibern derselben Strecke -------------
+
+  FerryRoute rostock(String name, List<String> deps) => FerryRoute(
+        id: name,
+        name: name,
+        from: 'Rostock',
+        to: 'Trelleborg',
+        operators: const ['x'],
+        durationHours: 6.5,
+        departuresLocal: deps,
+        tz: 'Europe/Berlin',
+        region: 'Nordeuropa',
+        active: true,
+        notes: '',
+      );
+
+  test('ohne Startzeit entscheidet weiterhin allein die Überfahrtsdauer', () async {
+    final result = await FerryRouteSuggester.suggest(
+      origin: 'Hamburg, Deutschland',
+      destination: 'Göteborg, Schweden',
+      routes: [rostock('spaet', const ['23:00']), rostock('frueh', const ['15:00'])],
+      roadDistance: (a, b) async => 200,
+    );
+    expect(result!.route.name, 'spaet', reason: 'erste passende Verbindung');
+  });
+
+  test('mit Startzeit gewinnt die tatsächlich frühere Abfahrt', () async {
+    // Hafenankunft ca. 08:30 → 15:00 schlägt 23:00 deutlich.
+    final result = await FerryRouteSuggester.suggest(
+      origin: 'Hamburg, Deutschland',
+      destination: 'Göteborg, Schweden',
+      routes: [rostock('spaet', const ['23:00']), rostock('frueh', const ['15:00'])],
+      roadDistance: (a, b) async => 200,
+      startTime: DateTime(2026, 7, 6, 6),
+    );
+    expect(result!.route.name, 'frueh');
   });
 }

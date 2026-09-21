@@ -1,4 +1,5 @@
 import '../models/ferry_route.dart';
+import 'ferry_schedule.dart';
 
 typedef RoadDistanceLookup = Future<double?> Function(
   String origin,
@@ -122,6 +123,13 @@ class FerryRouteSuggester {
     required List<FerryRoute> routes,
     required RoadDistanceLookup roadDistance,
     double assumedKmh = 80,
+
+    /// Abfahrtszeitpunkt der Tour. Ist er bekannt, entscheidet die tatsächlich
+    /// nächste Abfahrt – sonst nur die Überfahrtsdauer. Auf Strecken mit
+    /// mehreren Betreibern (z. B. Rostock–Trelleborg) hing die Wahl sonst
+    /// allein an der Reihenfolge im Fahrplan, obwohl die andere Reederei
+    /// Stunden früher ablegt.
+    DateTime? startTime,
   }) async {
     if (!supportsTrip(origin, destination)) return null;
     final southern = isGreekItalianTrip(origin, destination);
@@ -165,7 +173,25 @@ class FerryRouteSuggester {
       final kmBefore = before[route.from];
       final kmAfter = after[route.to];
       if (kmBefore == null || kmAfter == null) continue;
-      final hours = route.durationHours + (kmBefore + kmAfter) / assumedKmh;
+      var hours = route.durationHours + (kmBefore + kmAfter) / assumedKmh;
+
+      // Mit bekanntem Startzeitpunkt zählt die Wartezeit bis zur nächsten
+      // planmäßigen Abfahrt mit – damit gewinnt die Verbindung, die den
+      // Fahrer wirklich am frühesten ans Ziel bringt.
+      if (startTime != null) {
+        final portArrival = startTime
+            .add(Duration(minutes: (kmBefore / assumedKmh * 60).round()));
+        final departure = FerrySchedule.nextDeparture(
+          portArrival,
+          route.departuresLocal,
+          route.tz,
+          departuresByWeekday: route.departuresByWeekday,
+        );
+        if (departure != null) {
+          final waitHours = departure.difference(portArrival).inMinutes / 60.0;
+          if (waitHours >= 0) hours += waitHours;
+        }
+      }
       if (hours < bestHours) {
         bestHours = hours;
         best = FerryRouteSuggestion(route, kmBefore, kmAfter);

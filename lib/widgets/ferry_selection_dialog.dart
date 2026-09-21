@@ -18,6 +18,15 @@ class _FerrySelectionDialogState extends State<FerrySelectionDialog> {
   late String _selectedDirection;
   late String _selectedDeparture;
 
+  List<String> _allDepartures(FerryRoute route) {
+    final values = <String>{
+      ...route.departuresLocal,
+      ...route.departuresByWeekday.values.expand((times) => times),
+    }.toList()
+      ..sort();
+    return values;
+  }
+
   // --- helper: build two directions from route.from/to or fallback to name ---
   List<String> _buildDirections(FerryRoute r) {
     String from = r.from.trim();
@@ -43,14 +52,14 @@ class _FerrySelectionDialogState extends State<FerrySelectionDialog> {
     super.initState();
     final dirs = _buildDirections(widget.route);
     _selectedDirection = dirs.isNotEmpty ? dirs.first : '';
-    final deps = widget.route.departuresLocal;
+    final deps = _allDepartures(widget.route);
     _selectedDeparture = deps.isNotEmpty ? deps.first : '';
   }
 
   @override
   Widget build(BuildContext context) {
     final directions = _buildDirections(widget.route);
-    final departures = List<String>.from(widget.route.departuresLocal)..sort();
+    final departures = _allDepartures(widget.route);
 
     // If no directions were found, show a simple dialog telling the user.
     if (directions.isEmpty) {
@@ -99,7 +108,7 @@ class _FerrySelectionDialogState extends State<FerrySelectionDialog> {
                     ? _selectedDeparture
                     : null,
                 isExpanded: true,
-                items: (List<String>.from(widget.route.departuresLocal)..sort())
+                items: departures
                     .map((d) => DropdownMenuItem(value: d, child: Text(d)))
                     .toList(),
                 onChanged: (v) {

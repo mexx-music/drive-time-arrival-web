@@ -6,6 +6,7 @@ import 'services/maps_proxy.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
@@ -38,6 +39,8 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('de');
   await initializeDateFormatting('en');
+  // Fahrplanzeiten gelten in der Ortszeit des Hafens.
+  tz_data.initializeTimeZones();
   // Debug: print presence/length of Google Maps API key (never the key itself)
   // This helps confirm the web build reads the key from lib/secrets.dart
   // and avoids leaking the key.
@@ -194,7 +197,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _showDetails = false;
   FerryRoute? _manualFerry;
   DateTime? _manualFerryDeparture;
-  bool _ferryRestEligible = false;
 
   List<FerryRoute> _routes = [];
   String _source = '…';
@@ -612,6 +614,7 @@ class _HomeScreenState extends State<HomeScreen> {
     String destination,
     List<String> wps,
     bool optimize,
+    DateTime departureTime,
   ) async {
     final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
 
@@ -651,6 +654,7 @@ class _HomeScreenState extends State<HomeScreen> {
         routes: _routes,
         roadDistance: (from, to) => const DistanceService()
             .fetchKmDistance(origin: from, destination: to),
+        startTime: departureTime,
       );
       if (suggestion != null) {
         return (
@@ -1005,7 +1009,13 @@ class _HomeScreenState extends State<HomeScreen> {
         encodedPolyline,
         ferrySuggestion,
         denmarkRoute,
-      ) = await _planDistanceAndFerryAuto(s, d, _stops, _optimizeStops);
+      ) = await _planDistanceAndFerryAuto(
+        s,
+        d,
+        _stops,
+        _optimizeStops,
+        start,
+      );
 
       final speedPlan = SpeedProfileResolver.resolve(
         profile: _speedProfile,
@@ -1100,7 +1110,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ferryRoadKmBefore: ferrySuggestion?.kmBefore,
               ferryRoadKmAfter: ferrySuggestion?.kmAfter,
               fallbackKm: km,
-              ferryRestEligible: _ferryRestEligible,
             );
       _log.addAll(res.steps.map((e) => e.text));
       if (res.summary == null ||
@@ -1125,7 +1134,7 @@ class _HomeScreenState extends State<HomeScreen> {
             : ferryCandidate == null
                 ? null
                 : _manualFerryDeparture == null
-                    ? 'Fähre ${ferryCandidate.name}: frühestmögliche ETA ohne Hafenwartezeit. Gebuchte Abfahrt bitte im Fähre-Feld eintragen.'
+                    ? 'Fähre ${ferryCandidate.name}: gerechnet mit der ersten planmäßigen Abfahrt nach der Hafenankunft (Ortszeit des Hafens). Fahrplan ist ein Richtwert – gebuchte Abfahrt bitte im Fähre-Feld eintragen.'
                     : 'Fähre ${ferryCandidate.name}: Eingetragene Abfahrtszeit in der ETA berücksichtigt. Buchung und Verfügbarkeit beim Betreiber prüfen.';
       });
     } catch (error, stackTrace) {
@@ -1784,15 +1793,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         }
                         _etaResult = null;
                       }),
-                    ),
-                    SwitchListTile(
-                      title: const Text('Schlafkabine/Liegeplatz verfügbar'),
-                      subtitle: const Text(
-                        'Nur dann kann die Zeit an Bord als Ruhezeit gewertet werden.',
-                      ),
-                      value: _ferryRestEligible,
-                      onChanged: (value) =>
-                          setState(() => _ferryRestEligible = value),
                     ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),

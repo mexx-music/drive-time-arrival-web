@@ -230,7 +230,12 @@ void main() {
     expect(result.arrival, DateTime(2026, 3, 18, 4));
   });
 
-  test('lange Fähre erfüllt die tägliche Ruhezeit', () {
+  // --- Fährblock nach Art. 9 VO (EG) 561/2006 ---------------------------
+  // Wartezeit am Hafen + Überfahrt + ggf. Standzeit danach ergeben ZUSAMMEN
+  // die Tagesruhe. Auf- und Abfahren dürfen sie zweimal um je 30 min
+  // unterbrechen.
+
+  test('Warten und Überfahrt ergeben zusammen die verkürzte Tagesruhe', () {
     final result = EtaCalculator.computeTwoLegsWithFerry(
       start: start,
       alreadyDrivenMin: 0,
@@ -243,18 +248,21 @@ void main() {
       ferryDurationMin: 540,
       manualDeparture: DateTime(2026, 3, 16, 8),
       departurePort: 'Rostock',
-      ferryRestEligible: true,
     );
 
-    final ferry = result.steps.singleWhere(
-      (step) => step.type == EtaEventType.ferry,
-    );
+    final ferry =
+        result.steps.singleWhere((step) => step.type == EtaEventType.ferry);
     expect(ferry.restSatisfied, isTrue);
-    expect(result.summary!.waitingMinutes, 60);
+    // 60 min Warten: 30 fürs Auffahren, 30 zählen als Ruhe → 30 + 540 = 570
+    // und damit über den 540 der verkürzten Tagesruhe.
+    expect(result.summary!.waitingMinutes, 0,
+        reason: 'die Wartezeit zählt jetzt als Ruhe, nicht als Warten');
+    expect(result.summary!.restMinutes, greaterThanOrEqualTo(60));
     expect(result.arrival, DateTime(2026, 3, 16, 18));
   });
 
-  test('zu kurze Fähre meldet nicht erfüllte Ruhezeit', () {
+  test('knapp zu kurz wird nach der Ankunft stehend vollendet', () {
+    // 8 h Überfahrt + 1 h Warten = 8,5 h anrechenbar → 30 min fehlen auf 9 h.
     final result = EtaCalculator.computeTwoLegsWithFerry(
       start: start,
       alreadyDrivenMin: 0,
@@ -266,13 +274,62 @@ void main() {
       ferryLabel: 'Kurzstrecke',
       ferryDurationMin: 480,
       manualDeparture: DateTime(2026, 3, 16, 8),
-      ferryRestEligible: true,
     );
 
-    final ferry = result.steps.singleWhere(
-      (step) => step.type == EtaEventType.ferry,
+    final ferry =
+        result.steps.singleWhere((step) => step.type == EtaEventType.ferry);
+    expect(ferry.restSatisfied, isTrue);
+    expect(
+      result.steps.any((s) => s.title?.contains('Standzeit nach der Fähre') ?? false),
+      isTrue,
     );
+    // 07:00 Hafen + 1 h Warten + 8 h Fähre + 30 min Standzeit + 1 h Fahrt
+    expect(result.arrival, DateTime(2026, 3, 16, 17, 30));
+  });
+
+  test('ohne verkürzte Ruhen zählt die 11-Stunden-Grenze', () {
+    // Nur reguläre Tagesruhe möglich → 660 min nötig.
+    final result = EtaCalculator.computeTwoLegsWithFerry(
+      start: start,
+      alreadyDrivenMin: 0,
+      dutyTimeOffsetMin: 0,
+      kmBefore: 80,
+      kmAfter: 80,
+      avgKmh: 80,
+      rules: rules(nine1: false, nine2: false, nine3: false),
+      ferryLabel: 'Lange Überfahrt',
+      ferryDurationMin: 660,
+      manualDeparture: DateTime(2026, 3, 16, 8),
+    );
+
+    final ferry =
+        result.steps.singleWhere((step) => step.type == EtaEventType.ferry);
+    expect(ferry.restSatisfied, isTrue);
+    expect(ferry.detail, contains('reguläre'));
+  });
+
+  test('kurze Fähre ist keine Tagesruhe, aber eine Lenkpause', () {
+    final result = EtaCalculator.computeTwoLegsWithFerry(
+      start: start,
+      alreadyDrivenMin: 0,
+      dutyTimeOffsetMin: 0,
+      kmBefore: 80,
+      kmAfter: 80,
+      avgKmh: 80,
+      rules: rules(),
+      ferryLabel: 'Kurzfähre',
+      ferryDurationMin: 90,
+      manualDeparture: DateTime(2026, 3, 16, 7),
+    );
+
+    final ferry =
+        result.steps.singleWhere((step) => step.type == EtaEventType.ferry);
     expect(ferry.restSatisfied, isFalse);
+    expect(ferry.detail, contains('fehlen'));
+    expect(
+      result.steps.any((s) => s.title?.contains('Standzeit nach der Fähre') ?? false),
+      isFalse,
+    );
   });
 
   test('UTC-Zeitbasis bleibt bei der gesamten Berechnung erhalten', () {
