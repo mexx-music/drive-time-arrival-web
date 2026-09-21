@@ -37,4 +37,3 @@ flutter:
   uses-material-design: true
   assets:
     - assets/fahrplaene/ferries.json
-    - assets/geo/countries_eu.json

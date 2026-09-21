@@ -19,11 +19,10 @@ import 'logic/denmark_ferry_route.dart';
 import 'logic/port_aliases.dart';
 import 'logic/speed_profile.dart';
 import 'logic/time_budget.dart';
-import 'logic/avoidable_countries.dart';
-import 'logic/country_avoidance.dart';
 import 'models/route_candidate.dart';
-import 'services/country_geo.dart';
-import 'widgets/avoid_countries_selector.dart';
+import 'models/route_preset.dart';
+import 'services/route_preset_store.dart';
+import 'widgets/route_preset_selector.dart';
 import 'package:driverroute_eta/secrets.dart';
 import 'widgets/places_autocomplete.dart' as places_auto;
 import 'services/geocoding_service.dart';
@@ -154,9 +153,8 @@ class _HomeScreenState extends State<HomeScreen> {
       []; // parallel storage for resolved stop coordinates
   bool _addingStop = false;
   final bool _optimizeStops = false;
-  /// Vom Fahrer gesperrte Länder (ISO-2). Er wählt nur *was* gemieden wird –
-  /// *wie* umfahren wird, ermittelt die App automatisch (country_avoidance.dart).
-  Set<String> _avoidedCountries = {};
+  /// Gespeicherte Wegpunkt-Folgen für wiederkehrende Strecken.
+  List<RoutePreset> _presets = [];
   List<String> _resultRouteStops = [];
   String? _resultRoutePolyline;
   String? _countryRouteNote;
@@ -224,6 +222,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadFerries();
+    _loadPresets();
   }
 
   @override
@@ -264,6 +263,66 @@ class _HomeScreenState extends State<HomeScreen> {
       _addingStop = false;
       _etaResult = null;
     });
+  }
+
+  Future<void> _loadPresets() async {
+    final loaded = await RoutePresetStore.load();
+    if (!mounted) return;
+    setState(() => _presets = loaded);
+  }
+
+  /// Übernimmt eine Vorlage als Zwischenstopps. Die bisherigen Stopps werden
+  /// ersetzt – eine Vorlage beschreibt die ganze Durchfahrt, nicht einen
+  /// Zusatz.
+  void _applyPreset(RoutePreset preset, {required bool reverse}) {
+    final applied = reverse ? preset.reversed : preset;
+    setState(() {
+      _stops
+        ..clear()
+        ..addAll(applied.stops);
+      _stopCoords
+        ..clear()
+        ..addAll(List<LatLng?>.filled(applied.stops.length, null));
+      _etaResult = null;
+      _ferryRouteNote = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${applied.name}${reverse ? ' (umgekehrt)' : ''}: '
+            '${applied.stops.length} Stopps übernommen.'),
+      ),
+    );
+  }
+
+  Future<void> _saveCurrentAsPreset(String name) async {
+    if (_stops.isEmpty) return;
+    if (_presets.length >= RoutePresetStore.maxPresets) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Höchstens ${RoutePresetStore.maxPresets} Vorlagen '
+              'sind möglich.'),
+        ),
+      );
+      return;
+    }
+    final preset = RoutePreset(
+      id: 'p${DateTime.now().microsecondsSinceEpoch}',
+      name: name,
+      stops: List<String>.of(_stops),
+    );
+    final next = [..._presets, preset];
+    setState(() => _presets = next);
+    await RoutePresetStore.save(next);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Vorlage "$name" gespeichert.')),
+    );
+  }
+
+  Future<void> _deletePreset(RoutePreset preset) async {
+    final next = _presets.where((p) => p.id != preset.id).toList();
+    setState(() => _presets = next);
+    await RoutePresetStore.save(next);
   }
 
   void _moveStop(int from, int to) {
@@ -557,9 +616,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
 
     if (_viaDenmarkFerries) {
-      if (_avoidedCountries.isNotEmpty || wps.isNotEmpty) {
+      if (wps.isNotEmpty) {
         throw const FerryRouteException(
-          'Die Dänemark-Variante ist derzeit nur ohne Ländersperre und ohne eigene Zwischenstopps verfügbar.',
+          'Die Dänemark-Variante ist derzeit nur ohne eigene Zwischenstopps verfügbar.',
         );
       }
       final route = await DenmarkFerryRoute.plan(
@@ -594,27 +653,14 @@ class _HomeScreenState extends State<HomeScreen> {
             .fetchKmDistance(origin: from, destination: to),
       );
       if (suggestion != null) {
-        // Mit aktiver Ländersperre müssen auch die beiden Straßenabschnitte
-        // (Start → Abfahrtshafen, Ankunftshafen → Ziel) geprüft sein, sonst
-        // käme die ETA aus ungeprüften Teilstrecken.
-        var checked = suggestion;
-        var ferryNote =
-            'Fähre automatisch vorgeschlagen: ${suggestion.route.name}. Fahrplan vor Buchung prüfen.';
-        if (_avoidedCountries.isNotEmpty) {
-          final before = await _planCleanLeg(det, origin, suggestion.route.from);
-          final after = await _planCleanLeg(det, suggestion.route.to, destination);
-          checked = FerryRouteSuggestion(suggestion.route, before.km, after.km);
-          ferryNote = '$ferryNote ${_avoidedCountriesLabel()} auch auf beiden '
-              'Straßenabschnitten geprüft.';
-        }
         return (
-          checked.roadKm,
+          suggestion.roadKm,
           null,
-          checked.route,
-          ferryNote,
+          suggestion.route,
+          'Fähre automatisch vorgeschlagen: ${suggestion.route.name}. Fahrplan vor Buchung prüfen.',
           <String>[],
           null,
-          checked,
+          suggestion,
           null,
         );
       }
@@ -626,63 +672,18 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     // --- Routenplanung -------------------------------------------------
-    // OHNE Ländersperre exakt der bewährte Pfad: eine Anfrage, keine
-    // Alternativrouten, keine Ländergeometrie, keine Umfahrungssuche.
-    // Nur wenn der Fahrer wirklich ein Land gesperrt hat, übernimmt der
-    // CountryAvoidancePlanner.
-    var routedWaypoints = List<String>.of(wps);
-    var countryNote = '';
-    RouteCandidate? route;
-    String planStatus;
-
-    if (_avoidedCountries.isEmpty) {
-      final res = await det.fetchDirections(
-        origin: origin,
-        destination: destination,
-        waypoints: wps,
-        optimize: optimize,
-      );
-      planStatus = res.status;
-      route = res.ok && res.candidates.isNotEmpty ? res.candidates.first : null;
-    } else {
-      final plan = await _makeAvoidancePlanner(det).plan(
-        origin: origin,
-        destination: destination,
-        stops: wps,
-        optimize: optimize,
-        avoided: _avoidedCountries,
-      );
-      for (final line in plan.log) {
-        _log.add(line);
-      }
-      planStatus = plan.status;
-      route = plan.route;
-
-      final label = _avoidedCountriesLabel();
-      if (!plan.ok || plan.route == null) {
-        throw CountryRouteException(
-          'Die Route konnte nicht auf $label geprüft werden. Bitte später erneut versuchen.',
-        );
-      }
-      if (plan.stillBlocked.isNotEmpty) {
-        final blocked =
-            plan.stillBlocked.map(avoidableCountryNameDe).join(', ');
-        // Lieber gar keine ETA als eine ETA aus einer Strecke durch ein
-        // gesperrtes Land.
-        throw CountryRouteException(
-          plan.status == 'BLOCKED_ENDPOINT'
-              ? '$blocked kann nicht umfahren werden: Start, Ziel oder ein '
-                  'Zwischenstopp liegt in diesem Land.'
-              : 'Es konnte keine geprüfte Route ohne $blocked gefunden werden. '
-                  'Es wird keine ETA aus einer Strecke durch $blocked berechnet.',
-        );
-      }
-      routedWaypoints = plan.effectiveWaypoints;
-      countryNote = plan.autoDetours.isEmpty
-          ? '$label gemieden · Route geprüft'
-          : '$label gemieden · automatisch umfahren über '
-              '${_detourCountryNames(plan.autoDetours)}';
-    }
+    // Eine Anfrage mit genau den Wegpunkten, die der Fahrer gesetzt hat –
+    // direkt oder über eine gespeicherte Routen-Vorlage.
+    final routedWaypoints = List<String>.of(wps);
+    final res = await det.fetchDirections(
+      origin: origin,
+      destination: destination,
+      waypoints: wps,
+      optimize: optimize,
+    );
+    final planStatus = res.status;
+    final RouteCandidate? route =
+        res.ok && res.candidates.isNotEmpty ? res.candidates.first : null;
 
     // Ab hier ist genau diese eine Route die Grundlage für alles Weitere:
     // km, Fahrzeit, Straßenmix, ETA, Timeline, Karte und Export.
@@ -804,79 +805,15 @@ class _HomeScreenState extends State<HomeScreen> {
       km,
       roadMix,
       matched,
-      [
-        if (countryNote.isNotEmpty) countryNote,
-        if (hasFerry) '🛳️ Fähre erkannt ($why)'
-      ].join(' · '),
+      hasFerry ? '🛳️ Fähre erkannt ($why)' : '',
       routedWaypoints,
       // Geometrie GENAU der Route, aus der oben km, Fahrzeit und Straßenmix
-      // stammen – inklusive der automatisch gesetzten Umfahrung.
+      // stammen – Grundlage für Karte, Timeline und Export.
       (route?.raw['overview_polyline'] as Map<String, dynamic>?)?['points']
           as String?,
       null,
       null,
     );
-  }
-
-  /// Baut den Planer für die automatische Ländersperre. Das Routing wird
-  /// injiziert, damit die Logik testbar bleibt.
-  CountryAvoidancePlanner _makeAvoidancePlanner(FerryAutoDetect det) =>
-      CountryAvoidancePlanner(
-        fetch: ({
-          required String origin,
-          required String destination,
-          List<String> waypoints = const [],
-          bool optimize = false,
-          bool avoidFerries = false,
-          bool alternatives = false,
-        }) =>
-            det.fetchDirections(
-              origin: origin,
-              destination: destination,
-              waypoints: waypoints,
-              optimize: optimize,
-              avoidFerries: avoidFerries,
-              alternatives: alternatives,
-            ),
-      );
-
-  String _avoidedCountriesLabel() =>
-      _avoidedCountries.map(avoidableCountryNameDe).join(', ');
-
-  String _detourCountryNames(List<LatLng> detours) => detours
-      .map((p) => CountryGeo.nameOf(CountryGeo.countryAt(p) ?? '?'))
-      .toSet()
-      .join(', ');
-
-  /// Prüft eine einzelne Teilstrecke (z. B. Start → Abfahrtshafen) gegen die
-  /// Ländersperre und liefert die geprüften Kilometer zurück.
-  Future<({double km, List<String> waypoints})> _planCleanLeg(
-    FerryAutoDetect det,
-    String origin,
-    String destination,
-  ) async {
-    final plan = await _makeAvoidancePlanner(det).plan(
-      origin: origin,
-      destination: destination,
-      avoided: _avoidedCountries,
-    );
-    for (final line in plan.log) {
-      _log.add(line);
-    }
-    if (!plan.ok || plan.route == null) {
-      throw CountryRouteException(
-        'Die Teilstrecke $origin → $destination konnte nicht auf '
-        '${_avoidedCountriesLabel()} geprüft werden.',
-      );
-    }
-    if (plan.stillBlocked.isNotEmpty) {
-      final blocked = plan.stillBlocked.map(avoidableCountryNameDe).join(', ');
-      throw CountryRouteException(
-        'Die Teilstrecke $origin → $destination führt durch $blocked und '
-        'konnte nicht umfahren werden.',
-      );
-    }
-    return (km: plan.route!.km, waypoints: plan.effectiveWaypoints);
   }
 
   Future<void> _compute() async {
@@ -1124,19 +1061,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
       final FerryRoute? ferryCandidate =
           _manualFerry ?? (_autoFerry ? matchedFerry : null);
-      // Fähre + Ländersperre: die beiden Straßenabschnitte um die Fähre
-      // herum werden einzeln gegen die Sperre geprüft, damit auch hier die
-      // ETA aus geprüften Strecken entsteht.
-      var ferryKmBefore = ferrySuggestion?.kmBefore;
-      var ferryKmAfter = ferrySuggestion?.kmAfter;
-      if (ferryCandidate != null &&
-          _avoidedCountries.isNotEmpty &&
-          ferryKmBefore == null) {
-        final before = await _planCleanLeg(det, s, ferryCandidate.from);
-        final after = await _planCleanLeg(det, ferryCandidate.to, d);
-        ferryKmBefore = before.km;
-        ferryKmAfter = after.km;
-      }
+
       res = denmarkRoute != null
           ? EtaCalculator.computeTwoShortFerries(
               start: start,
@@ -1172,9 +1097,8 @@ class _HomeScreenState extends State<HomeScreen> {
               // Bei aktiver Sperre ist distKm die km-Zahl der validierten
               // Route; sie darf nicht durch eine ungeprüfte Neuabfrage ersetzt
               // werden.
-              verifiedKm: _avoidedCountries.isNotEmpty ? distKm : null,
-              ferryRoadKmBefore: ferryKmBefore,
-              ferryRoadKmAfter: ferryKmAfter,
+              ferryRoadKmBefore: ferrySuggestion?.kmBefore,
+              ferryRoadKmAfter: ferrySuggestion?.kmAfter,
               fallbackKm: km,
               ferryRestEligible: _ferryRestEligible,
             );
@@ -1193,8 +1117,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _resultRoadMix = roadMix;
         _resultRouteStops = routedWaypoints;
         _resultRoutePolyline = encodedPolyline;
-        _countryRouteNote =
-            _avoidedCountries.isEmpty ? null : note.split(' · 🛳️').first;
+        _countryRouteNote = null;
         _resultFerry = ferryCandidate;
         _resultViaDenmark = denmarkRoute != null;
         _ferryRouteNote = denmarkRoute != null
@@ -1211,11 +1134,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              error is CountryRouteException
+              error is FerryRouteException
                   ? error.message
-                  : error is FerryRouteException
-                      ? error.message
-                      : 'Route konnte nicht berechnet werden. Bitte Adressen, Distanz und Verbindung prüfen.',
+                  : 'Route konnte nicht berechnet werden. Bitte Adressen, Distanz und Verbindung prüfen.',
             ),
           ),
         );
@@ -1246,9 +1167,7 @@ class _HomeScreenState extends State<HomeScreen> {
       map_launcher.decodePolyline(encoded);
 
   Future<void> _openMapOsm() async {
-    if (_avoidedCountries.isNotEmpty &&
-        _etaResult != null &&
-        _resultRoutePolyline != null) {
+    if (_etaResult != null && _resultRoutePolyline != null) {
       final points = map_launcher.decodePolyline(_resultRoutePolyline!);
       if (points.length >= 2) {
         await Navigator.of(context).push(MaterialPageRoute(
@@ -1496,18 +1415,16 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
-              // 🌍 Ländersperre: der Fahrer wählt nur, welches Land er meidet.
-              // Wie umfahren wird, ermittelt die App automatisch.
+              // 🛣️ Routen-Vorlagen: eigene Wegpunkt-Folgen für Strecken,
+              // die der Fahrer besser kennt als jeder Routenplaner.
               Padding(
                 padding: pad,
-                child: AvoidCountriesSelector(
-                  selected: _avoidedCountries,
-                  onChanged: (value) => setState(() {
-                    _avoidedCountries = value;
-                    _etaResult = null;
-                    _countryRouteNote = null;
-                    _ferryRouteNote = null;
-                  }),
+                child: RoutePresetSelector(
+                  presets: _presets,
+                  currentStopCount: _stops.length,
+                  onApply: _applyPreset,
+                  onDelete: _deletePreset,
+                  onSaveCurrent: _saveCurrentAsPreset,
                 ),
               ),
               Padding(
@@ -2143,9 +2060,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           (_resultFerry != null || _resultViaDenmark)
                       ? 'Fährroute: Karte derzeit nicht verfügbar'
                       : 'Karte anzeigen'),
-                  onPressed: (_avoidedCountries.isNotEmpty &&
-                              _etaResult == null) ||
-                          (_etaResult != null &&
+                  onPressed: (_etaResult != null &&
                               (_resultFerry != null || _resultViaDenmark))
                       ? null
                       : () {

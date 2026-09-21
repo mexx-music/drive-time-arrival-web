@@ -77,33 +77,40 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Ländersperre ist kompakt, optional und mehrfach wählbar',
+  testWidgets('Routen-Vorlage: einsetzen und umgekehrt einsetzen',
       (tester) async {
+    SharedPreferences.setMockInitialValues({});
     await pumpAtSize(tester, width: 390, height: 844);
+    await tester.pumpAndSettle();
+
     await tester.scrollUntilVisible(
-      find.text('Länder vermeiden · Keine'),
+      find.textContaining('Routen-Vorlage ·'),
       250,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.ensureVisible(find.text('Länder vermeiden · Keine'));
+    await tester.ensureVisible(find.textContaining('Routen-Vorlage ·'));
     await tester.pumpAndSettle();
 
-    // Zugeklappt: keine Länderliste, kein Eingabefeld für Umfahrungspunkte.
-    expect(find.text('Schweiz 🇨🇭'), findsNothing);
+    // Zugeklappt ist die Liste unsichtbar.
+    expect(find.textContaining('Kulata → Botevgrad'), findsNothing);
 
-    await tester.tap(find.text('Länder vermeiden · Keine'));
+    await tester.tap(find.textContaining('Routen-Vorlage ·'));
     await tester.pumpAndSettle();
-    expect(find.text('Schweiz 🇨🇭'), findsOneWidget);
-    expect(find.text('Serbien 🇷🇸'), findsOneWidget);
+    expect(find.textContaining('Kulata → Botevgrad → Calafat → Nadlac'),
+        findsOneWidget);
 
-    await tester.tap(find.text('Schweiz 🇨🇭'));
+    // Einsetzen übernimmt die Stopps in Fahrtreihenfolge.
+    await tester.ensureVisible(find.text('Einsetzen').first);
+    await tester.tap(find.text('Einsetzen').first);
     await tester.pumpAndSettle();
-    expect(find.text('Länder vermeiden · Schweiz'), findsOneWidget);
+    expect(find.textContaining('Aktuelle 4 Stopps'), findsOneWidget);
 
-    // Mehrfachauswahl
-    await tester.tap(find.text('Serbien 🇷🇸'));
+    // Auch "Umgekehrt" setzt die Strecke ein, nur in Gegenrichtung.
+    // (Die Reihenfolge selbst deckt route_preset_test.dart ab.)
+    await tester.ensureVisible(find.text('Umgekehrt').first);
+    await tester.tap(find.text('Umgekehrt').first);
     await tester.pumpAndSettle();
-    expect(find.text('Länder vermeiden · 2 aktiv'), findsOneWidget);
+    expect(find.textContaining('Aktuelle 4 Stopps'), findsOneWidget);
 
     expect(tester.takeException(), isNull);
   });
