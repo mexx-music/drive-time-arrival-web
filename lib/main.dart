@@ -701,12 +701,13 @@ class _HomeScreenState extends State<HomeScreen> {
     // Manuell gewählte Fähre: dieselben zwei Landwege, damit Kilometer und
     // Karte zur gewählten Verbindung passen statt zu Googles eigener.
     final manual = _manualFerry;
-    if (manual != null && wps.isEmpty) {
+    if (manual != null) {
       return _withFerryLegs(
         det,
         origin,
         destination,
         manual,
+        stops: wps,
         note: 'Fähre manuell gewählt: ${manual.name}.',
       );
     }
@@ -902,12 +903,15 @@ class _HomeScreenState extends State<HomeScreen> {
     FerryRoute ferry, {
     FerryRouteSuggestion? fallback,
     required String note,
+    List<String> stops = const [],
   }) async {
     final plan = await FerryLegPlan.plan(
       origin: origin,
       destination: destination,
       ferry: ferry,
       det: det,
+      stops: stops,
+      stopCoords: _stopCoords,
     );
 
     if (plan == null) {
@@ -937,6 +941,13 @@ class _HomeScreenState extends State<HomeScreen> {
           '${plan.ferry.from}, ${plan.legB.km.toStringAsFixed(0)} km ab '
           '${plan.ferry.to} – zusammen ${plan.roadKm.toStringAsFixed(0)} km '
           'ohne Seestrecke.');
+      if (plan.routedStops.isNotEmpty) {
+        _log.add('📍 Zwischenstopps: '
+            '${plan.stopsBefore.isEmpty ? "keine" : plan.stopsBefore.join(", ")} '
+            'vor der Fähre, '
+            '${plan.stopsAfter.isEmpty ? "keine" : plan.stopsAfter.join(", ")} '
+            'danach.');
+      }
     }
 
     return (
@@ -944,7 +955,7 @@ class _HomeScreenState extends State<HomeScreen> {
       RoadMixAnalysis.fromDirectionsSteps(plan.steps),
       plan.ferry,
       note,
-      <String>[],
+      plan.routedStops,
       null,
       FerryRouteSuggestion(plan.ferry, plan.legA.km, plan.legB.km),
       null,

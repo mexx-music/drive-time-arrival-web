@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:latlong2/latlong.dart';
 
 import 'package:driverroute_eta/logic/ferry_auto.dart';
 import 'package:driverroute_eta/logic/ferry_leg_plan.dart';
@@ -120,5 +121,71 @@ void main() {
       det: _FakeDet(failSecondLeg: true),
     );
     expect(plan, isNull);
+  });
+
+  // --- Zwischenstopps auf die beiden Landwege verteilen -------------------
+
+  const bari = LatLng(41.117, 16.872);      // Abfahrtshafen
+  const igoumenitsa = LatLng(39.506, 20.266); // Ankunftshafen
+
+  test('Stopp vor der Fähre bleibt auf dem ersten Landweg', () {
+    // Ancona liegt nahe Bari, weit weg von Igoumenitsa.
+    final split = FerryLegPlan.splitStops(
+      stops: const ['Ancona, Italien'],
+      stopCoords: const [LatLng(43.616, 13.518)],
+      portFrom: bari,
+      portTo: igoumenitsa,
+    );
+    expect(split.before, ['Ancona, Italien']);
+    expect(split.after, isEmpty);
+  });
+
+  test('Stopp hinter der Fähre landet auf dem zweiten Landweg', () {
+    final split = FerryLegPlan.splitStops(
+      stops: const ['Ioannina, Griechenland'],
+      stopCoords: const [LatLng(39.665, 20.853)],
+      portFrom: bari,
+      portTo: igoumenitsa,
+    );
+    expect(split.before, isEmpty);
+    expect(split.after, ['Ioannina, Griechenland']);
+  });
+
+  test('Reihenfolge des Fahrers bleibt erhalten', () {
+    final split = FerryLegPlan.splitStops(
+      stops: const ['Bologna', 'Ancona', 'Ioannina', 'Lamia'],
+      stopCoords: const [
+        LatLng(44.494, 11.343),
+        LatLng(43.616, 13.518),
+        LatLng(39.665, 20.853),
+        LatLng(38.900, 22.434),
+      ],
+      portFrom: bari,
+      portTo: igoumenitsa,
+    );
+    expect(split.before, ['Bologna', 'Ancona']);
+    expect(split.after, ['Ioannina', 'Lamia']);
+  });
+
+  test('ohne Koordinaten bleibt der Stopp vor der Fähre', () {
+    final split = FerryLegPlan.splitStops(
+      stops: const ['Irgendwo'],
+      stopCoords: const [null],
+      portFrom: bari,
+      portTo: igoumenitsa,
+    );
+    expect(split.before, ['Irgendwo']);
+    expect(split.after, isEmpty);
+  });
+
+  test('ohne Hafenkoordinaten wird nicht geraten', () {
+    final split = FerryLegPlan.splitStops(
+      stops: const ['A', 'B'],
+      stopCoords: const [LatLng(0, 0), LatLng(1, 1)],
+      portFrom: null,
+      portTo: null,
+    );
+    expect(split.before, ['A', 'B']);
+    expect(split.after, isEmpty);
   });
 }
