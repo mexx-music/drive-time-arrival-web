@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'services/maps_proxy.dart';
+import 'services/catlab_trace.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -646,6 +647,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'Die Dänemark-Variante ist derzeit nur ohne eigene Zwischenstopps verfügbar.',
         );
       }
+      CatLabTrace.markFerry();
       final route = await DenmarkFerryRoute.plan(
         origin: origin,
         destination: destination,
@@ -905,6 +907,11 @@ class _HomeScreenState extends State<HomeScreen> {
     required String note,
     List<String> stops = const [],
   }) async {
+    // Eine Faehrroute kostet mehr Google-Aufrufe als eine durchgehende
+    // Strecke: zwei getrennte Landwege statt einem. Damit die Auswertung
+    // spaeter nicht Aepfel mit Birnen vergleicht, wird sie eigens vermerkt.
+    CatLabTrace.markFerry();
+
     final plan = await FerryLegPlan.plan(
       origin: origin,
       destination: destination,
@@ -1009,6 +1016,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _countryRouteNote = null;
       _ferryRouteNote = null;
     });
+
+    // Ab hier gehoeren alle Google-Aufrufe zu dieser einen Berechnung.
+    CatLabTrace.begin();
 
     try {
       final now = DateTime.now();
@@ -1309,6 +1319,7 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       }
     } finally {
+      CatLabTrace.end();
       if (mounted) setState(() => _calculating = false);
     }
   }

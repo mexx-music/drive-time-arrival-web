@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'catlab_trace.dart';
+
 /// Small abstraction for map REST calls. In browsers direct calls to Google
 /// REST endpoints are blocked by CORS and should be proxied via a backend.
 /// This file centralizes the guard so callers can be migrated later.
@@ -47,7 +49,7 @@ Future<Map<String, dynamic>> proxyGeocode(String address) async {
   final res = await http
       .post(uri,
           headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'address': address}))
+          body: jsonEncode({'address': address, ...CatLabTrace.requestFields}))
       .timeout(proxyRequestTimeout);
   if (res.statusCode != 200)
     throw Exception('Proxy error HTTP ${res.statusCode}');
@@ -66,7 +68,9 @@ Future<Map<String, dynamic>> proxyReverseGeocode(
   final res = await http.post(
     uri,
     headers: {'Content-Type': 'application/json'},
-    body: jsonEncode({'lat': latitude, 'lng': longitude}),
+    body: jsonEncode(
+      {'lat': latitude, 'lng': longitude, ...CatLabTrace.requestFields},
+    ),
   ).timeout(proxyRequestTimeout);
   if (res.statusCode != 200) {
     throw Exception('Proxy error HTTP ${res.statusCode}');
@@ -97,6 +101,7 @@ Future<Map<String, dynamic>> proxyAutocomplete({
       if (latitude != null && longitude != null)
         'location': '$latitude,$longitude',
       if (radiusMeters != null) 'radius': radiusMeters,
+      ...CatLabTrace.requestFields,
     }),
   ).timeout(proxyRequestTimeout);
   if (res.statusCode != 200) {
@@ -130,6 +135,9 @@ Future<Map<String, dynamic>> proxyDirections({
     'optimize': optimize,
     'alternatives': alternatives,
     if (avoidFerries) 'avoid': 'ferries',
+    // Nur die Kennung der laufenden Berechnung, damit der Proxy die Aufrufe
+    // zusammenfassen kann. Der Proxy ignoriert die Felder fuer Google.
+    ...CatLabTrace.requestFields,
   };
   final res = await http
       .post(uri,

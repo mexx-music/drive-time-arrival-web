@@ -9,6 +9,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const fetch = require('node-fetch');
+const telemetry = require('./telemetry');
 
 const app = express();
 app.use(helmet());
@@ -61,6 +62,46 @@ if (!GOOGLE_KEY) {
   console.warn('Warning: GOOGLE_MAPS_API_KEY not set. Proxy will return errors for Google requests.');
 }
 
+// Google-Adressen als Konstanten, damit die Tests einen Ersatzserver
+// vorschalten koennen. Ohne gesetzte Variable exakt wie bisher.
+const GOOGLE_MAPS_BASE =
+  process.env.GOOGLE_MAPS_BASE || 'https://maps.googleapis.com';
+const GOOGLE_PLACES_BASE =
+  process.env.GOOGLE_PLACES_BASE || 'https://places.googleapis.com';
+
+// Googles eigener Statuscode im Antwortkoerper. ZERO_RESULTS ist kein
+// Fehler: die Anfrage wurde beantwortet und wird auch berechnet - es gibt
+// nur keine Route. Fehlt das Feld ganz, gilt die HTTP-Antwort.
+function googleStatusOk(status) {
+  if (!status) return true;
+  return status === 'OK' || status === 'ZERO_RESULTS';
+}
+
+/* Einzige Stelle, an der ein Google-Aufruf verbucht wird.
+ *
+ * Jeder Aufruf laeuft hier durch, deshalb kann weder einer doppelt gezaehlt
+ * noch einer uebersehen werden. Das Verbuchen steht im finally: auch ein
+ * abgebrochener oder fehlgeschlagener Aufruf wird erfasst, und zwar mit
+ * ok=false. Der Fehler selbst wird nicht angefasst und laeuft weiter nach
+ * oben, als gaebe es dieses Modul nicht.
+ */
+async function googleCall(endpoint, trace, run) {
+  let ok = false;
+  try {
+    const out = await run();
+    ok = out.ok;
+    return out.value;
+  } finally {
+    telemetry.record({
+      service: telemetry.serviceFor(endpoint),
+      ok,
+      // Es gibt noch keinen Zwischenspeicher, also war jeder Aufruf echt.
+      cacheHit: false,
+      ...trace,
+    });
+  }
+}
+
 function forwardGet(url) {
   return fetch(url).then(async (r) => {
     const text = await r.text();
@@ -82,7 +123,8 @@ const handleDirections = async (req, res) => {
 
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
 
-    const url = new URL('https://maps.googleapis.com/maps/api/directions/json');
+    const trace = telemetry.traceFrom(params);
+    const url = new URL(`${GOOGLE_MAPS_BASE}/maps/api/directions/json`);
 
     url.searchParams.append('origin', origin);
     url.searchParams.append('destination', destination);
@@ -105,8 +147,14 @@ const handleDirections = async (req, res) => {
       url.searchParams.append('waypoints', wantOptimize ? `optimize:true|${wpValue}` : wpValue);
     }
 
-    const response = await fetch(url.toString());
-    const data = await response.json();
+    const data = await googleCall('directions', trace, async () => {
+      const response = await fetch(url.toString());
+      const body = await response.json();
+      return {
+        ok: response.ok && googleStatusOk(body.status),
+        value: body,
+      };
+    });
 
     res.json(data);
 
@@ -130,8 +178,19 @@ app.post('/api/geocode', async (req, res) => {
     const query = address
       ? `address=${encodeURIComponent(address)}`
       : `latlng=${encodeURIComponent(`${lat},${lng}`)}`;
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?${query}&key=${GOOGLE_KEY}`;
-    const r = await forwardGet(url);
+    const trace = telemetry.traceFrom(req.body);
+    const url = `${GOOGLE_MAPS_BASE}/maps/api/geocode/json?${query}&key=${GOOGLE_KEY}`;
+    const r = await googleCall('geocode', trace, async () => {
+      const res = await forwardGet(url);
+      let status = null;
+      try {
+        status = JSON.parse(res.body).status;
+      } catch (_) {
+        // Keine JSON-Antwort: dann entscheidet allein der HTTP-Status.
+      }
+      const httpOk = res.status >= 200 && res.status < 300;
+      return { ok: httpOk && googleStatusOk(status), value: res };
+    });
     res.status(r.status).type('application/json').send(r.body);
   } catch (err) {
     console.error(err);
@@ -165,9 +224,9 @@ app.post('/api/autocomplete', async (req, res) => {
       }
     }
 
-    const response = await fetch(
-      'https://places.googleapis.com/v1/places:autocomplete',
-      {
+    const trace = telemetry.traceFrom(req.body);
+    const response = await googleCall('autocomplete', trace, async () => {
+      const res = await fetch(`${GOOGLE_PLACES_BASE}/v1/places:autocomplete`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -176,8 +235,10 @@ app.post('/api/autocomplete', async (req, res) => {
             'suggestions.placePrediction.placeId,suggestions.placePrediction.text',
         },
         body: JSON.stringify(body),
-      },
-    );
+      });
+      // Places New meldet Fehler ueber den HTTP-Status, nicht im Koerper.
+      return { ok: res.ok, value: res };
+    });
     const responseBody = await response.text();
     res.status(response.status).type('application/json').send(responseBody);
   } catch (err) {
@@ -199,7 +260,10 @@ const startServer = (port) => {
       process.exit(1);
     }
   });
+  return server;
 };
 
 const port = process.env.PORT || 3000;
-startServer(port);
+const server = startServer(port);
+
+module.exports = { app, server, telemetry };
