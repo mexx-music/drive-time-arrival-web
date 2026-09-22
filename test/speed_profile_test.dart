@@ -97,4 +97,49 @@ void main() {
     expect(analysis.mainRoadPercent, 31);
     expect(analysis.slowPercent, 6);
   });
+
+  // --- Zuschlag für schwere Ladung ---------------------------------------
+
+  test('schwere Ladung rechnet mehr Fahrzeit', () {
+    const km = 800.0;
+    final normal = SpeedProfileResolver.resolve(
+      profile: SpeedProfile.standard80,
+      customKmh: 80,
+    );
+    final beladen = SpeedProfileResolver.resolve(
+      profile: SpeedProfile.standard80,
+      customKmh: 80,
+      heavyLoad: true,
+    );
+    expect(beladen.kmh, lessThan(normal.kmh));
+    final minutenNormal = km / normal.kmh * 60;
+    final minutenBeladen = km / beladen.kmh * 60;
+    expect(minutenBeladen / minutenNormal, closeTo(heavyLoadTimeFactor, 0.01));
+    expect(beladen.reason, contains('schwere Ladung'));
+  });
+
+  test('Zuschlag wirkt auch auf die automatische Berechnung', () {
+    final normal = SpeedProfileResolver.resolve(
+      profile: SpeedProfile.automatic,
+      customKmh: 80,
+      routedKmh: 66,
+    );
+    final beladen = SpeedProfileResolver.resolve(
+      profile: SpeedProfile.automatic,
+      customKmh: 80,
+      routedKmh: 66,
+      heavyLoad: true,
+    );
+    expect(normal.kmh, closeTo(66, 0.1));
+    expect(beladen.kmh, closeTo(66 / heavyLoadTimeFactor, 0.1));
+  });
+
+  test('langsame LKW-Strecken werden nicht mehr auf 40 hochgeklammert', () {
+    final plan = SpeedProfileResolver.resolve(
+      profile: SpeedProfile.automatic,
+      customKmh: 80,
+      routedKmh: 34,
+    );
+    expect(plan.kmh, closeTo(34, 0.1));
+  });
 }

@@ -1,13 +1,9 @@
 // lib/services/map_launcher.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../logic/ferry_auto.dart';
 import '../ui/map_osm_view.dart';
-import '../utils/open_in_tab.dart';
 import '../utils/polyline.dart' as poly;
 
 // Re-Export: der Decoder liegt jetzt in utils/polyline.dart, damit ihn auch
@@ -35,6 +31,8 @@ Future<void> openMapOsm(
   required void Function(String) addLog,
   required bool Function() showDetails,
   required bool mounted,
+  /// Zusatzhinweis für die Kartenkopfzeile, z. B. die geplante Fähre.
+  String? routeNote,
 }) async {
   // ignore: avoid_print
   print('[openMapOsm] start="$s" dest="$d"');
@@ -48,11 +46,15 @@ Future<void> openMapOsm(
     return;
   }
 
-  if (stops.isNotEmpty) {
+  {
+    // Immer die App-Karte verwenden – auch ohne Zwischenstopps.
     // ignore: avoid_print
-    print('[openMapOsm] waypoint route detected, using in-app segmented map');
+    print('[openMapOsm] using in-app segmented map');
     final det = FerryAutoDetect(googleMapsApiKey);
     var points = <LatLng>[];
+    // Abschnitte für die Kartenansicht: gefahrene Strecke, Fähre, Lücke.
+    final segments = <MapSegment>[];
+    final failedLegs = <String>[];
     final places = <String>[];
     places.add(s);
     places.addAll(stops);
@@ -61,6 +63,8 @@ Future<void> openMapOsm(
     for (var i = 0; i < places.length - 1; i++) {
       final from = places[i];
       final to = places[i + 1];
+      final segmentStart = points.length;
+      var ferryLeg = false;
       // ignore: avoid_print
       print('[openMapOsm] segment ${i + 1}: $from -> $to');
       try {
@@ -69,8 +73,12 @@ Future<void> openMapOsm(
           // ignore: avoid_print
           print(
               '[openMapOsm] segment directions failed: ${res.status} for $from->$to');
+          failedLegs.add('$from → $to');
           continue;
         }
+        ferryLeg = res.candidates.isNotEmpty
+            ? det.candidateHasFerry(res.candidates.first)
+            : det.routeHasFerry(res);
         final routeRaw = res.raw;
 
         // --- Diagnostics: inspect routeRaw and its structure (minimal, safe)
@@ -359,7 +367,18 @@ Future<void> openMapOsm(
         // ignore segment failure, continue
         // ignore: avoid_print
         print('[openMapOsm] segment exception for $from->$to: $e');
+        failedLegs.add('$from → $to');
         continue;
+      }
+
+      if (points.length > segmentStart) {
+        segments.add(MapSegment(
+          points: points.sublist(segmentStart),
+          label: '$from → $to',
+          isFerry: ferryLeg,
+        ));
+      } else {
+        failedLegs.add('$from → $to');
       }
     }
 
@@ -373,193 +392,49 @@ Future<void> openMapOsm(
         .toList();
     // ignore: avoid_print
     print('[openMapOsm] final valid combined points: ${combinedValid.length}');
-    if (combinedValid.length < 2) {
-      if (mounted)
+    if (failedLegs.isNotEmpty) {
+      addLog('🗺️ Karte: keine Streckenführung für ${failedLegs.join(', ')} '
+          '– als Lücke eingezeichnet.');
+    }
+
+    // Auch mit Teilstrecken zeigen, solange Start und Ziel bekannt sind.
+    final fallbackStart = (startLat != null && startLng != null)
+        ? LatLng(startLat, startLng)
+        : (combinedValid.isNotEmpty ? combinedValid.first : null);
+    final fallbackDest = (destLat != null && destLng != null)
+        ? LatLng(destLat, destLng)
+        : (combinedValid.isNotEmpty ? combinedValid.last : null);
+
+    if (fallbackStart == null || fallbackDest == null) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Karte: Keine gültigen Routensegmente.')));
+      }
       return;
     }
 
-    final startLatLng = combinedValid.first;
-    final destLatLng = combinedValid.last;
     if (mounted) {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => MapOsmView(
-              start: startLatLng, dest: destLatLng, route: combinedValid),
+            start: fallbackStart,
+            dest: fallbackDest,
+            route: combinedValid,
+            segments: segments,
+            stops: [for (final c in stopCoords) if (c != null) c],
+            subtitle: [
+              failedLegs.isEmpty
+                  ? '${segments.length} Abschnitt(e)'
+                  : '${segments.length} Abschnitt(e), '
+                      '${failedLegs.length} ohne Streckenführung',
+              if (routeNote != null && routeNote.isNotEmpty) routeNote,
+            ].join(' · '),
+          ),
         ),
       );
     }
     return;
   }
-
-  String wp = '';
-  if (stops.isNotEmpty) {
-    final parts = stops.map((w) => Uri.encodeComponent(w)).join('|');
-    final head = optimizeStops ? 'optimize:true|' : '';
-    wp = '&waypoints=$head$parts';
-  }
-
-  final uri = Uri.parse(
-    'https://maps.googleapis.com/maps/api/directions/json'
-    '?origin=${Uri.encodeComponent(s)}'
-    '&destination=${Uri.encodeComponent(d)}'
-    '&mode=driving&units=metric&language=en'
-    '&key=$googleMapsApiKey$wp',
-  );
-
-  if (!mapsDirectCallsAllowed()) {
-    addLog(
-        '⚠️ Web routing via direct Google REST request is blocked in browser');
-    // ignore: avoid_print
-    print('[openMapOsm] waypoints=$stops');
-
-    if (startLat != null &&
-        startLng != null &&
-        destLat != null &&
-        destLng != null) {
-      // ignore: avoid_print
-      print('[openMapOsm] using coordinate route for web fallback');
-      final coordParts = <String>[];
-      coordParts.add('${startLat},${startLng}');
-      if (stopCoords.isNotEmpty) {
-        for (final c in stopCoords) {
-          if (c == null) continue;
-          coordParts.add('${c.latitude},${c.longitude}');
-        }
-      }
-      coordParts.add('${destLat},${destLng}');
-      final mapUrl =
-          'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' +
-              coordParts.join(';');
-      // ignore: avoid_print
-      print('[openMapOsm] final coordinate map URL: $mapUrl');
-      try {
-        openInNewTabWithName(mapUrl, 'driverroute_map');
-      } catch (e) {
-        // ignore, will show snack instead
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Öffne Karte in neuem Tab...'),
-        ));
-      }
-      return;
-    }
-
-    final parts = <String>[];
-    parts.add('${Uri.encodeComponent(s)}');
-    if (stops.isNotEmpty) {
-      for (final w in stops) {
-        if (w.trim().isEmpty) continue;
-        parts.add(Uri.encodeComponent(w));
-      }
-    }
-    parts.add('${Uri.encodeComponent(d)}');
-    final mapUrl =
-        'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' +
-            parts.join(';');
-    // ignore: avoid_print
-    print('[openMapOsm] final map URL with waypoints: $mapUrl');
-    try {
-      openInNewTabWithName(mapUrl, 'driverroute_map');
-    } catch (e) {
-      // ignore, will show snack instead
-    }
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Öffne Karte in neuem Tab...'),
-      ));
-    }
-    return;
-  }
-
-  try {
-    final res = await http.get(uri);
-    if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    if (data['status'] != 'OK') throw Exception('Directions ${data['status']}');
-
-    final route = (data['routes'] as List).first as Map<String, dynamic>;
-    final legs = (route['legs'] as List).cast<Map<String, dynamic>>();
-    final firstLeg = legs.first;
-    final lastLeg = legs.last;
-    final sl = firstLeg['start_location'] as Map<String, dynamic>;
-    final dl = lastLeg['end_location'] as Map<String, dynamic>;
-    final poly = (route['overview_polyline'] as Map<String, dynamic>)['points']
-        as String;
-
-    final start =
-        LatLng((sl['lat'] as num).toDouble(), (sl['lng'] as num).toDouble());
-    final dest =
-        LatLng((dl['lat'] as num).toDouble(), (dl['lng'] as num).toDouble());
-    final coords = decodePolyline(poly);
-    // debug counts for decoded polyline
-    // ignore: avoid_print
-    print('[openMapOsm] decoded route points: ${coords.length}');
-    final validCoords = coords
-        .where((p) =>
-            p.latitude >= -90 &&
-            p.latitude <= 90 &&
-            p.longitude >= -180 &&
-            p.longitude <= 180)
-        .toList();
-    // ignore: avoid_print
-    print('[openMapOsm] valid route points: ${validCoords.length}');
-    if (validCoords.length < 2) {
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Karte: Ungültige Routenpunkte.')));
-      return;
-    }
-
-    final coordParts = <String>[];
-    coordParts.add('${start.latitude},${start.longitude}');
-    if (stopCoords.isNotEmpty) {
-      for (final c in stopCoords) {
-        if (c == null) continue;
-        coordParts.add('${c.latitude},${c.longitude}');
-      }
-    }
-    coordParts.add('${dest.latitude},${dest.longitude}');
-    final mapUrl = Uri.encodeFull(
-        'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${coordParts.join(';')}');
-    // ignore: avoid_print
-    print('[openMapOsm] waypoints=$stops');
-    // ignore: avoid_print
-    print('[openMapOsm] final map URL with waypoints: $mapUrl');
-
-    if (kIsWeb) {
-      // ignore: avoid_print
-      print('[openMapOsm] final map URL: $mapUrl');
-      try {
-        openInNewTabWithName(mapUrl, 'driverroute_map');
-      } catch (e) {
-        if (mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) =>
-                  MapOsmView(start: start, dest: dest, route: coords),
-            ),
-          );
-        }
-      }
-      return;
-    }
-
-    if (!mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => MapOsmView(start: start, dest: dest, route: coords),
-      ),
-    );
-  } catch (e) {
-    if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Karte fehlgeschlagen: $e')));
-    }
-  }
 }
+

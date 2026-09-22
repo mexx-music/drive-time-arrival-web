@@ -1,135 +1,243 @@
-import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+/// Ein Abschnitt der Route auf der Karte.
+///
+/// Gefahrene Abschnitte werden durchgezogen gezeichnet, Fähr- oder
+/// Lückenabschnitte gestrichelt – dort fährt das Fahrzeug keine Kilometer.
+class MapSegment {
+  const MapSegment({
+    required this.points,
+    this.label,
+    this.isFerry = false,
+    this.isGap = false,
+  });
+
+  final List<LatLng> points;
+  final String? label;
+  final bool isFerry;
+
+  /// Teilstück, für das keine Geometrie geliefert wurde.
+  final bool isGap;
+
+  bool get isDashed => isFerry || isGap;
+}
+
+/// Kartenansicht der Route (OpenStreetMap).
 class MapOsmView extends StatefulWidget {
+  const MapOsmView({
+    super.key,
+    required this.start,
+    required this.dest,
+    required this.route,
+    this.segments = const [],
+    this.stops = const [],
+    this.title = '🗺️ Route',
+    this.subtitle,
+  });
+
   final LatLng start;
   final LatLng dest;
+
+  /// Gesamte Route am Stück (Rückwärtskompatibilität).
   final List<LatLng> route;
-  const MapOsmView(
-      {super.key,
-      required this.start,
-      required this.dest,
-      required this.route});
+
+  /// Optional: Route in Abschnitte zerlegt (Fahrt, Fähre, Lücke).
+  final List<MapSegment> segments;
+
+  /// Zwischenstopps für eigene Marker.
+  final List<LatLng> stops;
+  final String title;
+  final String? subtitle;
 
   @override
   State<MapOsmView> createState() => _MapOsmViewState();
 }
 
 class _MapOsmViewState extends State<MapOsmView> {
-  late List<LatLng> _points;
   final MapController _mapController = MapController();
+  bool _fitted = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _points = List<LatLng>.from(widget.route);
-    int retries = 0;
-    const int maxRetries = 5;
-    const Duration interval = Duration(milliseconds: 300);
-    Timer.periodic(interval, (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      // ignore: avoid_print
-      print('[MapOsmView] retry check: ${widget.route.length}');
-      if (_points.length >= 2) {
-        timer.cancel();
-        return;
-      }
-      if (widget.route.length >= 2) {
-        setState(() {
-          _points = List<LatLng>.from(widget.route);
-        });
-        // ignore: avoid_print
-        print('[MapOsmView] updated points count: ${_points.length}');
-        timer.cancel();
-        return;
-      }
-      retries++;
-      if (retries >= maxRetries) {
-        timer.cancel();
-      }
-    });
+  List<MapSegment> get _segments {
+    if (widget.segments.isNotEmpty) return widget.segments;
+    if (widget.route.length >= 2) return [MapSegment(points: widget.route)];
+    return const [];
   }
 
-  @override
-  void didUpdateWidget(covariant MapOsmView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // if parent provides more points later, update internal state
-    if (widget.route.length != oldWidget.route.length && widget.route.length >= 2) {
-      setState(() {
-        _points = List<LatLng>.from(widget.route);
-      });
-      // ignore: avoid_print
-      print('[MapOsmView] didUpdateWidget points count: ${_points.length}');
+  /// Alle Punkte der Route – Grundlage für den Kartenausschnitt.
+  List<LatLng> get _allPoints => [
+        widget.start,
+        for (final s in _segments) ...s.points,
+        ...widget.stops,
+        widget.dest,
+      ];
+
+  double get _drivenKm {
+    const distance = Distance();
+    var meters = 0.0;
+    for (final seg in _segments) {
+      if (seg.isDashed) continue;
+      for (var i = 1; i < seg.points.length; i++) {
+        meters += distance(seg.points[i - 1], seg.points[i]);
+      }
     }
+    return meters / 1000.0;
+  }
+
+  void _fit() {
+    final pts = _allPoints;
+    if (pts.length < 2) return;
+    final bounds = LatLngBounds(pts.first, pts.first);
+    for (final p in pts) {
+      bounds.extend(p);
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(32)),
+    );
+    _fitted = true;
   }
 
   @override
   Widget build(BuildContext context) {
-    // Sicherstellen, dass die Route am Start beginnt und am Ziel endet
-    final List<LatLng> fullRoute = [widget.start, ..._points];
-    if (_points.isEmpty || _points.last != widget.dest) {
-      fullRoute.add(widget.dest);
-    }
-
-    // Debug: Anzahl Punkte
-    // ignore: avoid_print
-    print('[MapOsmView] route points count: ${fullRoute.length}');
-
-    // Wenn weniger als 2 valide Punkte vorliegen, zeige eine einfache Lade-Seite
-    if (fullRoute.length < 2) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Karte wird geladen...')),
-        body: const Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    // Bounds initialisieren mit erstem Punkt
-    final bounds = LatLngBounds(fullRoute.first, fullRoute.first);
-    for (final p in fullRoute) {
-      bounds.extend(p);
-    }
+    final segments = _segments;
+    final hasRoute = segments.any((s) => s.points.length >= 2);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('🗺️ Route (OSM)')),
-      body: FlutterMap(
-        mapController: _mapController,
-        options: MapOptions(
-          initialCenter: widget.start,
-          initialZoom: 5,
-          onMapReady: () {
-            // ignore: avoid_print
-            print('[MapOsmView] using local MapController');
-            _mapController.fitCamera(CameraFit.bounds(
-                bounds: bounds, padding: const EdgeInsets.all(24)));
-          },
-        ),
-        children: [
-          TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.mexx.driverroute.eta',
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [
+          IconButton(
+            tooltip: 'Auf Route zoomen',
+            icon: const Icon(Icons.fit_screen),
+            onPressed: hasRoute ? _fit : null,
           ),
-          PolylineLayer(polylines: [
-            Polyline(points: fullRoute, strokeWidth: 4),
-          ]),
-          MarkerLayer(markers: [
-            Marker(
-                point: widget.start,
-                width: 36,
-                height: 36,
-                child: const Icon(Icons.flag, size: 28)),
-            Marker(
-                point: widget.dest,
-                width: 36,
-                height: 36,
-                child: const Icon(Icons.location_pin, size: 32)),
-          ]),
+        ],
+        bottom: widget.subtitle == null
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(24),
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 16, right: 16, bottom: 6),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(widget.subtitle!,
+                        style: Theme.of(context).textTheme.bodySmall),
+                  ),
+                ),
+              ),
+      ),
+      body: Column(
+        children: [
+          if (!hasRoute)
+            const MaterialBanner(
+              content: Text(
+                'Für diese Route liegt keine Streckenführung vor. '
+                'Angezeigt werden nur Start und Ziel.',
+              ),
+              actions: [SizedBox.shrink()],
+            ),
+          if (segments.any((s) => s.isGap))
+            const MaterialBanner(
+              content: Text(
+                'Ein Teilstück konnte nicht abgerufen werden – '
+                'es ist gestrichelt dargestellt.',
+              ),
+              actions: [SizedBox.shrink()],
+            ),
+          Expanded(
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: widget.start,
+                initialZoom: 5,
+                onMapReady: () {
+                  if (!_fitted) _fit();
+                  if (kDebugMode) {
+                    debugPrint('[MapOsmView] Abschnitte: ${segments.length}, '
+                        'Punkte: ${_allPoints.length}');
+                  }
+                },
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.mexx.driverroute.eta',
+                ),
+                PolylineLayer(
+                  polylines: [
+                    for (final seg in segments)
+                      if (seg.points.length >= 2)
+                        Polyline(
+                          points: seg.points,
+                          strokeWidth: seg.isDashed ? 3 : 5,
+                          color: seg.isFerry
+                              ? Colors.teal
+                              : (seg.isGap ? Colors.orange : Colors.indigo),
+                          pattern: seg.isDashed
+                              ? StrokePattern.dashed(segments: const [12, 10])
+                              : const StrokePattern.solid(),
+                        ),
+                  ],
+                ),
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: widget.start,
+                      width: 40,
+                      height: 40,
+                      child: const Icon(Icons.trip_origin,
+                          size: 26, color: Colors.green),
+                    ),
+                    for (final stop in widget.stops)
+                      Marker(
+                        point: stop,
+                        width: 34,
+                        height: 34,
+                        child: const Icon(Icons.circle,
+                            size: 16, color: Colors.indigo),
+                      ),
+                    Marker(
+                      point: widget.dest,
+                      width: 44,
+                      height: 44,
+                      child: const Icon(Icons.location_pin,
+                          size: 34, color: Colors.red),
+                    ),
+                  ],
+                ),
+                const RichAttributionWidget(
+                  attributions: [
+                    TextSourceAttribution('OpenStreetMap-Mitwirkende'),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ],
       ),
+      bottomNavigationBar: hasRoute
+          ? SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.straighten, size: 18),
+                    const SizedBox(width: 8),
+                    Text('Strecke auf der Karte: '
+                        '${_drivenKm.toStringAsFixed(0)} km'),
+                    if (segments.any((s) => s.isFerry)) ...[
+                      const SizedBox(width: 16),
+                      const Icon(Icons.directions_boat, size: 18),
+                      const SizedBox(width: 6),
+                      const Text('Fähre gestrichelt'),
+                    ],
+                  ],
+                ),
+              ),
+            )
+          : null,
     );
   }
 }

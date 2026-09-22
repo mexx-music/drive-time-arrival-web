@@ -38,8 +38,36 @@ class SpeedPlan {
   const SpeedPlan({required this.kmh, required this.reason});
 }
 
+/// Zuschlag für schwere Ladung.
+///
+/// Voll beladen geht am Berg und beim Beschleunigen Zeit verloren – das
+/// steckt in Googles PKW-Zeiten nicht drin. Der Zuschlag wirkt auf jedes
+/// Profil, nicht nur auf die automatische Berechnung.
+const double heavyLoadTimeFactor = 1.10;
+
 class SpeedProfileResolver {
   static SpeedPlan resolve({
+    required SpeedProfile profile,
+    required double customKmh,
+    double? routedKmh,
+    Iterable<String> routeLabels = const [],
+    bool heavyLoad = false,
+  }) {
+    final plan = _resolveBase(
+      profile: profile,
+      customKmh: customKmh,
+      routedKmh: routedKmh,
+      routeLabels: routeLabels,
+    );
+    if (!heavyLoad) return plan;
+    return SpeedPlan(
+      kmh: ((plan.kmh / heavyLoadTimeFactor) * 10).round() / 10,
+      reason: '${plan.reason} · schwere Ladung '
+          '+${((heavyLoadTimeFactor - 1) * 100).round()} % Fahrzeit',
+    );
+  }
+
+  static SpeedPlan _resolveBase({
     required SpeedProfile profile,
     required double customKmh,
     double? routedKmh,
@@ -63,10 +91,10 @@ class SpeedProfileResolver {
         final hasRouteData =
             routedKmh != null && routedKmh.isFinite && routedKmh > 0;
         final value = hasRouteData
-            ? routedKmh.clamp(40, 80).toDouble()
+            ? routedKmh.clamp(25, 80).toDouble()
             : (norway ? 60.0 : 80.0);
         final reason = hasRouteData
-            ? 'aus dem Geschwindigkeitsmix der Routenabschnitte'
+            ? 'LKW-Tempo je Streckenabschnitt'
             : norway
                 ? 'Norwegen-Fallback ohne Routendaten'
                 : 'automatischer Standardwert ohne Routendaten';

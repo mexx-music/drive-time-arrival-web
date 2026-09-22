@@ -19,6 +19,7 @@ import 'logic/ferry_route_search.dart';
 import 'logic/denmark_ferry_route.dart';
 import 'logic/port_aliases.dart';
 import 'logic/speed_profile.dart';
+import 'logic/truck_speed.dart';
 import 'logic/time_budget.dart';
 import 'models/route_candidate.dart';
 import 'models/route_preset.dart';
@@ -156,6 +157,11 @@ class _HomeScreenState extends State<HomeScreen> {
       []; // parallel storage for resolved stop coordinates
   bool _addingStop = false;
   final bool _optimizeStops = false;
+  /// LKW-Fahrzeit der zuletzt geplanten Route, aus den Google-Etappen
+  /// abgeleitet. Null, solange keine Etappendaten vorliegen (z. B. wenn die
+  /// Strecke nur aus Fährabschnitten besteht).
+  TruckDriveTime? _truckTime;
+
   /// Gespeicherte Wegpunkt-Folgen für wiederkehrende Strecken.
   List<RoutePreset> _presets = [];
   List<String> _resultRouteStops = [];
@@ -167,6 +173,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   double _avgKmh = 80;
   SpeedProfile _speedProfile = SpeedProfile.automatic;
+
+  /// Voll beladen geht am Berg Zeit verloren – Googles PKW-Zeiten kennen das
+  /// nicht.
+  bool _heavyLoad = false;
   int _remainingDrivingMin = 600;
   int _continuousDrivenMin = 0;
   int _remainingDutyMin = 900;
@@ -617,6 +627,7 @@ class _HomeScreenState extends State<HomeScreen> {
     DateTime departureTime,
   ) async {
     final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
+    _truckTime = null;
 
     if (_viaDenmarkFerries) {
       if (wps.isNotEmpty) {
@@ -790,6 +801,22 @@ class _HomeScreenState extends State<HomeScreen> {
           _log.add(
               '🧭 Fähre erkannt ($why), aber kein Routen-Match – manuell auswählbar.');
         }
+      }
+    }
+
+    // LKW-Fahrzeit je Etappe aus Googles Step-Daten.
+    if (route != null && route.steps.isNotEmpty && route.km > 0) {
+      final truck = truckDriveTimeFromSteps(
+        steps: route.steps,
+        totalKm: route.km,
+      );
+      _truckTime = truck;
+      if (_showDetails) {
+        final h = truck.minutes ~/ 60, m = truck.minutes % 60;
+        final gh = truck.googleMinutes ~/ 60, gm = truck.googleMinutes % 60;
+        _log.add('🚛 LKW-Fahrzeit ${h}h${m.toString().padLeft(2, '0')} statt '
+            '${gh}h${gm.toString().padLeft(2, '0')} laut Google '
+            '(Ø ${truck.avgKmh.toStringAsFixed(1)} km/h)');
       }
     }
 
@@ -1017,17 +1044,26 @@ class _HomeScreenState extends State<HomeScreen> {
         start,
       );
 
+      // Googles Durchschnittstempo über die ganze Route ist zu optimistisch:
+      // es mittelt 120 auf der Autobahn mit 50 auf der Landstraße. Der LKW
+      // fährt auf dem Autobahnteil aber nur 80 und auf der Landstraße genauso
+      // langsam. Deshalb je Abschnitt deckeln.
+      final truckTime = _truckTime;
       final speedPlan = SpeedProfileResolver.resolve(
         profile: _speedProfile,
         customKmh: _avgKmh,
-        routedKmh: roadMix?.averageKmh,
+        routedKmh: truckTime?.avgKmh ?? roadMix?.averageKmh,
         routeLabels: [s, d, ..._stops],
+        heavyLoad: _heavyLoad,
       );
 
       // debug
       // ignore: avoid_print
       print(
-          '[Compute] planDistanceAndFerryAuto -> distKm=$distKm routedKmh=${roadMix?.averageKmh} note=$note matchedFerry=${matchedFerry?.name}');
+          '[Compute] planDistanceAndFerryAuto -> distKm=$distKm '
+          'googleKmh=${roadMix?.averageKmh?.toStringAsFixed(1)} '
+          'lkwKmh=${truckTime?.avgKmh.toStringAsFixed(1)} '
+          'note=$note matchedFerry=${matchedFerry?.name}');
 
       if (_showDetails) {
         _log.add(
@@ -1175,15 +1211,34 @@ class _HomeScreenState extends State<HomeScreen> {
   List<LatLng> _decodePolyline(String encoded) =>
       map_launcher.decodePolyline(encoded);
 
+  /// Hinweis für die Kartenkopfzeile. Bei einer geplanten Fähre zeigt die
+  /// Karte Googles eigene Streckenführung – die kann eine andere Verbindung
+  /// wählen als die, mit der gerechnet wurde.
+  String? _mapRouteNote() {
+    if (_resultViaDenmark) {
+      return 'Geplant über Dänemark; Karte zeigt Googles Streckenführung';
+    }
+    final ferry = _resultFerry;
+    if (ferry != null) {
+      return 'Geplant mit ${ferry.name}; Karte zeigt Googles Streckenführung '
+          'und kann eine andere Fähre wählen';
+    }
+    return null;
+  }
+
   Future<void> _openMapOsm() async {
     if (_etaResult != null && _resultRoutePolyline != null) {
       final points = map_launcher.decodePolyline(_resultRoutePolyline!);
       if (points.length >= 2) {
+        // Geometrie der tatsächlich berechneten Route – genauer als ein
+        // erneuter Abruf, deshalb hier bevorzugt.
         await Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => MapOsmView(
             start: points.first,
             dest: points.last,
             route: points,
+            stops: [for (final c in _stopCoords) if (c != null) c],
+            subtitle: _mapRouteNote() ?? 'Berechnete Route',
           ),
         ));
         return;
@@ -1205,6 +1260,7 @@ class _HomeScreenState extends State<HomeScreen> {
       optimizeStops: _optimizeStops,
       googleMapsApiKey: GOOGLE_MAPS_API_KEY,
       mapsDirectCallsAllowed: mapsDirectCallsAllowed,
+      routeNote: _mapRouteNote(),
       addLog: (m) => setState(() => _log.add(m)),
       showDetails: () => _showDetails,
       mounted: mounted,
@@ -2056,32 +2112,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: pad,
                 child: OutlinedButton.icon(
                   icon: const Icon(Icons.map),
-                  label: Text(_etaResult != null &&
-                          (_resultFerry != null || _resultViaDenmark)
-                      ? 'Fährroute: Karte derzeit nicht verfügbar'
-                      : 'Karte anzeigen'),
-                  onPressed: (_etaResult != null &&
-                              (_resultFerry != null || _resultViaDenmark))
-                      ? null
-                      : () {
-                          // Ensure window.open is triggered synchronously from user gesture to avoid popup blocking on web
-                          if (kIsWeb) {
-                            if ((_etaResult == null
-                                    ? _stops
-                                    : _resultRouteStops)
-                                .isEmpty) {
-                              // ignore: avoid_print
-                              print('[MapButton] using external web tab');
-                              openInNewTabWithName(
-                                  'about:blank', 'driverroute_map');
-                            } else {
-                              // ignore: avoid_print
-                              print(
-                                  '[MapButton] using in-app map because waypoints are present');
-                            }
-                          }
-                          _openMapOsm();
-                        },
+                  label: const Text('Karte anzeigen'),
+                  // Immer die App-Karte, auch bei Fährrouten – die Karte
+                  // stellt Fährabschnitte jetzt gesondert dar.
+                  onPressed: _openMapOsm,
                 ),
               ),
               if (kDebugMode)
@@ -2249,6 +2283,25 @@ class _HomeScreenState extends State<HomeScreen> {
           Text(
             _speedProfile.description,
             style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          // Wirkt auf jedes Profil, nicht nur auf die Automatik.
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            secondary: const Text('🏋', style: TextStyle(fontSize: 20)),
+            title: const Text('Schwere Ladung'),
+            subtitle: Text(
+              'Rechnet ${((heavyLoadTimeFactor - 1) * 100).round()} % mehr '
+              'Fahrzeit – voll beladen geht am Berg und beim Beschleunigen '
+              'Zeit verloren.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            value: _heavyLoad,
+            onChanged: (v) => setState(() {
+              _heavyLoad = v;
+              _etaResult = null;
+            }),
           ),
           if (_speedProfile == SpeedProfile.custom) ...[
             const SizedBox(height: 6),
