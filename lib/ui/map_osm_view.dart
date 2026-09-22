@@ -74,6 +74,12 @@ class _MapOsmViewState extends State<MapOsmView> {
         widget.dest,
       ];
 
+  void _zoomBy(double delta) {
+    final camera = _mapController.camera;
+    final next = (camera.zoom + delta).clamp(2.0, 18.0);
+    _mapController.move(camera.center, next);
+  }
+
   double get _drivenKm {
     const distance = Distance();
     var meters = 0.0;
@@ -147,70 +153,103 @@ class _MapOsmViewState extends State<MapOsmView> {
               actions: [SizedBox.shrink()],
             ),
           Expanded(
-            child: FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: widget.start,
-                initialZoom: 5,
-                onMapReady: () {
-                  if (!_fitted) _fit();
-                  if (kDebugMode) {
-                    debugPrint('[MapOsmView] Abschnitte: ${segments.length}, '
-                        'Punkte: ${_allPoints.length}');
-                  }
-                },
-              ),
+            child: Stack(
               children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.mexx.driverroute.eta',
-                ),
-                PolylineLayer(
-                  polylines: [
-                    for (final seg in segments)
-                      if (seg.points.length >= 2)
-                        Polyline(
-                          points: seg.points,
-                          strokeWidth: seg.isDashed ? 3 : 5,
-                          color: seg.isFerry
-                              ? Colors.teal
-                              : (seg.isGap ? Colors.orange : Colors.indigo),
-                          pattern: seg.isDashed
-                              ? StrokePattern.dashed(segments: const [12, 10])
-                              : const StrokePattern.solid(),
+    FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: widget.start,
+                    initialZoom: 5,
+                    // Norden bleibt oben: Auf einer Streckenkarte nützt Drehen
+                    // nichts, und die Drehgeste konkurriert mit dem Zoomen –
+                    // das fühlt sich an, als ginge Zoomen nicht.
+                    interactionOptions: const InteractionOptions(
+                      flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+                    ),
+                    onMapReady: () {
+                      if (!_fitted) _fit();
+                      if (kDebugMode) {
+                        debugPrint('[MapOsmView] Abschnitte: ${segments.length}, '
+                            'Punkte: ${_allPoints.length}');
+                      }
+                    },
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.mexx.driverroute.eta',
+                    ),
+                    PolylineLayer(
+                      polylines: [
+                        for (final seg in segments)
+                          if (seg.points.length >= 2)
+                            Polyline(
+                              points: seg.points,
+                              strokeWidth: seg.isDashed ? 3 : 5,
+                              color: seg.isFerry
+                                  ? Colors.teal
+                                  : (seg.isGap ? Colors.orange : Colors.indigo),
+                              pattern: seg.isDashed
+                                  ? StrokePattern.dashed(segments: const [12, 10])
+                                  : const StrokePattern.solid(),
+                            ),
+                      ],
+                    ),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: widget.start,
+                          width: 40,
+                          height: 40,
+                          child: const Icon(Icons.trip_origin,
+                              size: 26, color: Colors.green),
                         ),
+                        for (final stop in widget.stops)
+                          Marker(
+                            point: stop,
+                            width: 34,
+                            height: 34,
+                            child: const Icon(Icons.circle,
+                                size: 16, color: Colors.indigo),
+                          ),
+                        Marker(
+                          point: widget.dest,
+                          width: 44,
+                          height: 44,
+                          child: const Icon(Icons.location_pin,
+                              size: 34, color: Colors.red),
+                        ),
+                      ],
+                    ),
+                    const RichAttributionWidget(
+                      attributions: [
+                        TextSourceAttribution('OpenStreetMap-Mitwirkende'),
+                      ],
+                    ),
                   ],
                 ),
-                MarkerLayer(
-                  markers: [
-                    Marker(
-                      point: widget.start,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(Icons.trip_origin,
-                          size: 26, color: Colors.green),
-                    ),
-                    for (final stop in widget.stops)
-                      Marker(
-                        point: stop,
-                        width: 34,
-                        height: 34,
-                        child: const Icon(Icons.circle,
-                            size: 16, color: Colors.indigo),
+                // Zoom auch ohne Geste und ohne Mausrad bedienbar.
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FloatingActionButton.small(
+                        heroTag: 'zoomIn',
+                        tooltip: 'Näher heran',
+                        onPressed: () => _zoomBy(1),
+                        child: const Icon(Icons.add),
                       ),
-                    Marker(
-                      point: widget.dest,
-                      width: 44,
-                      height: 44,
-                      child: const Icon(Icons.location_pin,
-                          size: 34, color: Colors.red),
-                    ),
-                  ],
-                ),
-                const RichAttributionWidget(
-                  attributions: [
-                    TextSourceAttribution('OpenStreetMap-Mitwirkende'),
-                  ],
+                      const SizedBox(height: 8),
+                      FloatingActionButton.small(
+                        heroTag: 'zoomOut',
+                        tooltip: 'Weiter weg',
+                        onPressed: () => _zoomBy(-1),
+                        child: const Icon(Icons.remove),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

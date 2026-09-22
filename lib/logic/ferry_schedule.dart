@@ -57,6 +57,50 @@ class FerrySchedule {
     return null;
   }
 
+  /// Planmäßige Abfahrtszeiten für einen bestimmten Tag.
+  ///
+  /// Gibt es einen Wochentagsfahrplan, gilt der Wochentag am Hafen – sonst
+  /// die flache Liste. Rückgabe ist "HH:mm" in Hafen-Ortszeit.
+  static List<String> timesForDate(
+    DateTime date,
+    List<String> departuresLocal,
+    String tzName, {
+    Map<int, List<String>> departuresByWeekday = const {},
+  }) {
+    final hasWeekday =
+        departuresByWeekday.values.any((list) => list.isNotEmpty);
+    if (!hasWeekday) {
+      return _parse(departuresLocal).map(_format).toList();
+    }
+    final location = _location(tzName);
+    final weekday = location == null
+        ? date.weekday
+        : tz.TZDateTime(location, date.year, date.month, date.day).weekday;
+    return _parse(departuresByWeekday[weekday] ?? const [])
+        .map(_format)
+        .toList();
+  }
+
+  /// Wandelt "HH:mm" Hafen-Ortszeit am Tag [date] in Gerätezeit um.
+  ///
+  /// Ohne diese Umrechnung würde eine 18:00-Abfahrt in Patras beim Fahrer in
+  /// Österreich als 18:00 landen statt als 17:00.
+  static DateTime? atPortTime(DateTime date, String hhmm, String tzName) {
+    final parsed = _parse([hhmm]);
+    if (parsed.isEmpty) return null;
+    final t = parsed.first;
+    final location = _location(tzName);
+    if (location == null) {
+      return DateTime(date.year, date.month, date.day, t.hour, t.minute);
+    }
+    final atPort = tz.TZDateTime(
+        location, date.year, date.month, date.day, t.hour, t.minute);
+    return DateTime.fromMillisecondsSinceEpoch(atPort.millisecondsSinceEpoch);
+  }
+
+  static String _format(_Hm t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
   static DateTime? _nextInLocalTime(
     DateTime from,
     List<_Hm> dailyTimes,

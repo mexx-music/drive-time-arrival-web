@@ -81,4 +81,51 @@ void main() {
 
     expect(departure!.toUtc(), DateTime.utc(2026, 9, 27, 3));
   });
+
+  // --- Auswahl einer planmäßigen Abfahrt für ein Datum -------------------
+
+  test('Wochentagsplan liefert die Zeiten des richtigen Tages', () {
+    const proWochentag = {
+      1: ['18:45'],
+      6: ['17:45'],
+    };
+    // 6. Juli 2026 ist ein Montag, 11. Juli ein Samstag.
+    expect(
+      FerrySchedule.timesForDate(DateTime(2026, 7, 6), const [], 'Europe/Berlin',
+          departuresByWeekday: proWochentag),
+      ['18:45'],
+    );
+    expect(
+      FerrySchedule.timesForDate(DateTime(2026, 7, 11), const [], 'Europe/Berlin',
+          departuresByWeekday: proWochentag),
+      ['17:45'],
+    );
+    // Sonntag ist im Plan nicht enthalten
+    expect(
+      FerrySchedule.timesForDate(DateTime(2026, 7, 12), const [], 'Europe/Berlin',
+          departuresByWeekday: proWochentag),
+      isEmpty,
+    );
+  });
+
+  test('ohne Wochentagsplan gilt die flache Liste', () {
+    expect(
+      FerrySchedule.timesForDate(
+          DateTime(2026, 7, 6), const ['08:00', '17:30'], 'Europe/Athens'),
+      ['08:00', '17:30'],
+    );
+  });
+
+  test('gewählte Hafenzeit wird in Gerätezeit umgerechnet', () {
+    // 18:00 in Patras entspricht 15:00 UTC.
+    final when =
+        FerrySchedule.atPortTime(DateTime(2026, 7, 6), '18:00', 'Europe/Athens');
+    expect(when!.toUtc(), DateTime.utc(2026, 7, 6, 15));
+  });
+
+  test('unbekannte Zeitzone nimmt die Zeit wie eingegeben', () {
+    final when =
+        FerrySchedule.atPortTime(DateTime(2026, 7, 6), '18:00', 'Quatsch/Zone');
+    expect(when, DateTime(2026, 7, 6, 18));
+  });
 }

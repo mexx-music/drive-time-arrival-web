@@ -18,6 +18,7 @@ import 'logic/ferry_route_suggester.dart';
 import 'logic/ferry_route_search.dart';
 import 'logic/denmark_ferry_route.dart';
 import 'logic/port_aliases.dart';
+import 'logic/ferry_schedule.dart';
 import 'logic/speed_profile.dart';
 import 'logic/truck_speed.dart';
 import 'logic/time_budget.dart';
@@ -2055,6 +2056,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                               ],
                             ),
+                            _plannedDepartureChips(),
                             const SizedBox(height: 6),
                             if (_manualFerryDeparture != null)
                               Text(
@@ -2254,6 +2256,76 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ],
+    );
+  }
+
+  /// Planmäßige Abfahrten der gewählten Fähre zum Antippen.
+  ///
+  /// Bisher musste die Uhrzeit frei eingetippt werden, obwohl der Fahrplan
+  /// in der App liegt. Die Zeiten gelten in Hafen-Ortszeit; weicht die
+  /// Gerätezeit ab, steht sie in Klammern dahinter.
+  Widget _plannedDepartureChips() {
+    final ferry = _manualFerry;
+    if (ferry == null) return const SizedBox.shrink();
+
+    final date = _manualFerryDeparture ?? DateTime.now();
+    final times = FerrySchedule.timesForDate(
+      date,
+      ferry.departuresLocal,
+      ferry.tz,
+      departuresByWeekday: ferry.departuresByWeekday,
+    );
+    if (times.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text(
+          'Für ${DateFormat('EEEE, dd.MM.', 'de').format(date)} ist kein '
+          'Fahrplan hinterlegt – Uhrzeit bitte eintragen.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Planmäßig am ${DateFormat('EEEE, dd.MM.', 'de').format(date)} '
+            '(Ortszeit ${ferry.from})',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              for (final t in times)
+                Builder(builder: (context) {
+                  final when = FerrySchedule.atPortTime(date, t, ferry.tz);
+                  final hier =
+                      when == null ? null : DateFormat('HH:mm').format(when);
+                  final selected = when != null &&
+                      _manualFerryDeparture != null &&
+                      _manualFerryDeparture!.isAtSameMomentAs(when);
+                  return ChoiceChip(
+                    label: Text(hier != null && hier != t
+                        ? '$t  (bei dir $hier)'
+                        : t),
+                    selected: selected,
+                    onSelected: when == null
+                        ? null
+                        : (_) => setState(() {
+                              _manualFerryDeparture = when;
+                              _etaResult = null;
+                            }),
+                  );
+                }),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
