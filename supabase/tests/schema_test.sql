@@ -4,6 +4,10 @@
 \timing off
 set client_min_messages = notice;
 
+begin;
+
+-- Innerhalb der Transaktion, damit der Testlauf auch diese
+-- Hilfsfunktion restlos zurücknimmt und in der Zieldatenbank nichts bleibt.
 create or replace function cc_assert(ok boolean, label text)
 returns void language plpgsql as $$
 begin
@@ -11,8 +15,6 @@ begin
   else raise exception 'FEHLGESCHLAGEN: %', label;
   end if;
 end $$;
-
-begin;
 
 -- ===================================================== 1) Beide Einheiten
 -- Google Directions (request) und ein Token-Anbieter im selben Modell.
