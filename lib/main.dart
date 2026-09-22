@@ -809,8 +809,16 @@ class _HomeScreenState extends State<HomeScreen> {
       final truck = truckDriveTimeFromSteps(
         steps: route.steps,
         totalKm: route.km,
+        // Für Teilstrecken ohne Etappendaten der eingestellte Schnitt.
+        fallbackKmh: _avgKmh,
       );
       _truckTime = truck;
+      if (!truck.isComplete) {
+        final fehlend = truck.km - truck.coveredKm;
+        _log.add('ℹ️ Für ${fehlend.toStringAsFixed(0)} km lagen keine '
+            'Etappendaten vor – dort mit ${_avgKmh.toStringAsFixed(0)} km/h '
+            'gerechnet.');
+      }
       if (_showDetails) {
         final h = truck.minutes ~/ 60, m = truck.minutes % 60;
         final gh = truck.googleMinutes ~/ 60, gm = truck.googleMinutes % 60;
