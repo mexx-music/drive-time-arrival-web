@@ -1256,9 +1256,15 @@ class _HomeScreenState extends State<HomeScreen> {
               autoOrManualFerry: ferryCandidate,
               manualDeparture: _manualFerryDeparture,
               waypoints: routedWaypoints,
-              // Bei aktiver Sperre ist distKm die km-Zahl der validierten
-              // Route; sie darf nicht durch eine ungeprüfte Neuabfrage ersetzt
-              // werden.
+              // Die Kilometer stehen aus der Routenplanung oben bereits fest.
+              // Ohne sie würde die ETA dieselbe Strecke ein zweites Mal bei
+              // Google abfragen – ein überflüssiger Directions-Request je
+              // Berechnung.
+              //
+              // Auf eine Dezimalstelle gerundet wie bisher der DistanceService,
+              // damit die Fahrzeit auf die Minute genau dieselbe bleibt.
+              // Bei 0 (Directions fehlgeschlagen) greift wie bisher fallbackKm.
+              verifiedKm: distKm > 0 ? (distKm * 10).round() / 10.0 : null,
               ferryRoadKmBefore: ferrySuggestion?.kmBefore,
               ferryRoadKmAfter: ferrySuggestion?.kmAfter,
               fallbackKm: km,
