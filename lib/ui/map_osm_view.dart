@@ -74,6 +74,21 @@ class _MapOsmViewState extends State<MapOsmView> {
         widget.dest,
       ];
 
+  /// Zum Zeichnen ausdünnen.
+  ///
+  /// Step-Polylinien liefern alle paar Meter einen Punkt – auf einer
+  /// Fährtour sind das schnell über 50.000. Für die Darstellung reicht ein
+  /// Bruchteil; die Kilometerangabe rechnet weiterhin mit allen Punkten.
+  static List<LatLng> _thin(List<LatLng> points, {int max = 3000}) {
+    if (points.length <= max) return points;
+    final step = (points.length / max).ceil();
+    final out = <LatLng>[
+      for (var i = 0; i < points.length; i += step) points[i],
+    ];
+    if (out.last != points.last) out.add(points.last);
+    return out;
+  }
+
   void _zoomBy(double delta) {
     final camera = _mapController.camera;
     final next = (camera.zoom + delta).clamp(2.0, 18.0);
@@ -184,7 +199,7 @@ class _MapOsmViewState extends State<MapOsmView> {
                         for (final seg in segments)
                           if (seg.points.length >= 2)
                             Polyline(
-                              points: seg.points,
+                              points: _thin(seg.points),
                               strokeWidth: seg.isDashed ? 3 : 5,
                               color: seg.isFerry
                                   ? Colors.teal

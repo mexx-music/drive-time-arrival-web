@@ -62,9 +62,13 @@ Map<String, dynamic> directionsResponse(List<List<List<List<double>>>> routes) {
               {
                 'distance': {'value': (_pathKm(leg) * 1000).round()},
                 'duration': {'value': (_pathKm(leg) / 80 * 3600).round()},
+                // Google liefert Distanz und Dauer auch je Etappe – das
+                // braucht u. a. die LKW-Fahrzeit.
                 'steps': [
                   {
                     'html_instructions': 'drive',
+                    'distance': {'value': (_pathKm(leg) * 1000).round()},
+                    'duration': {'value': (_pathKm(leg) / 80 * 3600).round()},
                     'polyline': {'points': encodePolyline(densify(leg))},
                   }
                 ],

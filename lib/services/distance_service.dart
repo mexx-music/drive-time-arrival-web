@@ -10,16 +10,24 @@ class DistanceService {
   const DistanceService();
 
   /// Gibt die Gesamtstrecke in Kilometern (1 Dezimalstelle) oder null bei Fehler.
+  /// [avoidFerries] ist für Landwege zu einem Hafen wichtig: ohne das
+  /// schmuggelt Google in die vermeintliche Straßenstrecke eigene Fähren
+  /// (z. B. quer durch Dänemark) und die Kilometer stimmen nicht mehr.
   Future<double?> fetchKmDistance({
     required String origin,
     required String destination,
     List<String>? waypoints,
+    bool avoidFerries = false,
   }) async {
     // If running on web and a proxy is configured, use it
     if (!mapsDirectCallsAllowed()) {
       if (mapsProxyConfigured()) {
         try {
-          final data = await proxyDirections(origin: origin, destination: destination, waypoints: waypoints);
+          final data = await proxyDirections(
+              origin: origin,
+              destination: destination,
+              waypoints: waypoints,
+              avoidFerries: avoidFerries);
           final status = (data['status'] ?? 'UNKNOWN').toString();
           if (status != 'OK') {
             if (kDebugMode) {
@@ -70,6 +78,7 @@ class DistanceService {
           'language=en',
           'departure_time=now',
           'alternatives=false',
+          if (avoidFerries) 'avoid=ferries',
           'key=$GOOGLE_MAPS_API_KEY',
         ].join('&') +
         wp;

@@ -18,6 +18,7 @@ import 'logic/ferry_route_suggester.dart';
 import 'logic/ferry_route_search.dart';
 import 'logic/denmark_ferry_route.dart';
 import 'logic/port_aliases.dart';
+import 'logic/ferry_leg_plan.dart';
 import 'logic/ferry_schedule.dart';
 import 'logic/speed_profile.dart';
 import 'logic/truck_speed.dart';
@@ -163,6 +164,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Strecke nur aus Fährabschnitten besteht).
   TruckDriveTime? _truckTime;
 
+  /// Die beiden Landwege um die geplante Fähre. Trägt die echten Kilometer
+  /// und die Geometrie, die die Karte braucht.
+  FerryLegPlan? _ferryLegPlan;
+
   /// Gespeicherte Wegpunkt-Folgen für wiederkehrende Strecken.
   List<RoutePreset> _presets = [];
   List<String> _resultRouteStops = [];
@@ -275,6 +280,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _stopCtl.clear();
       _addingStop = false;
       _etaResult = null;
+      _ferryLegPlan = null;
     });
   }
 
@@ -297,6 +303,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ..clear()
         ..addAll(List<LatLng?>.filled(applied.stops.length, null));
       _etaResult = null;
+      _ferryLegPlan = null;
       _ferryRouteNote = null;
     });
     ScaffoldMessenger.of(context).showSnackBar(
@@ -346,6 +353,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _stops.insert(to, stop);
       _stopCoords.insert(to, coordinate);
       _etaResult = null;
+      _ferryLegPlan = null;
     });
   }
 
@@ -354,6 +362,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _stops.removeAt(index);
       _stopCoords.removeAt(index);
       _etaResult = null;
+      _ferryLegPlan = null;
     });
   }
 
@@ -629,6 +638,7 @@ class _HomeScreenState extends State<HomeScreen> {
   ) async {
     final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
     _truckTime = null;
+    _ferryLegPlan = null;
 
     if (_viaDenmarkFerries) {
       if (wps.isNotEmpty) {
@@ -664,20 +674,21 @@ class _HomeScreenState extends State<HomeScreen> {
         origin: origin,
         destination: destination,
         routes: _routes,
-        roadDistance: (from, to) => const DistanceService()
-            .fetchKmDistance(origin: from, destination: to),
+        // Ohne avoidFerries schmuggelt Google in den Landweg zum Hafen
+        // eigene Überfahrten und die Kilometer stimmen nicht.
+        roadDistance: (from, to) => const DistanceService().fetchKmDistance(
+            origin: from, destination: to, avoidFerries: true),
         startTime: departureTime,
       );
       if (suggestion != null) {
-        return (
-          suggestion.roadKm,
-          null,
+        return _withFerryLegs(
+          det,
+          origin,
+          destination,
           suggestion.route,
-          'Fähre automatisch vorgeschlagen: ${suggestion.route.name}. Fahrplan vor Buchung prüfen.',
-          <String>[],
-          null,
-          suggestion,
-          null,
+          fallback: suggestion,
+          note: 'Fähre automatisch vorgeschlagen: ${suggestion.route.name}. '
+              'Fahrplan vor Buchung prüfen.',
         );
       }
       if (FerryRouteSuggester.supportsTrip(origin, destination)) {
@@ -685,6 +696,19 @@ class _HomeScreenState extends State<HomeScreen> {
           'Für diese Strecke konnte keine erreichbare Fähre geprüft werden. Bitte Verbindung prüfen oder eine Fähre manuell wählen.',
         );
       }
+    }
+
+    // Manuell gewählte Fähre: dieselben zwei Landwege, damit Kilometer und
+    // Karte zur gewählten Verbindung passen statt zu Googles eigener.
+    final manual = _manualFerry;
+    if (manual != null && wps.isEmpty) {
+      return _withFerryLegs(
+        det,
+        origin,
+        destination,
+        manual,
+        note: 'Fähre manuell gewählt: ${manual.name}.',
+      );
     }
 
     // --- Routenplanung -------------------------------------------------
@@ -856,6 +880,77 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Baut aus der gewählten Fähre die beiden Landwege und liefert damit
+  /// echte Kilometer, echte LKW-Fahrzeit und die Geometrie für die Karte.
+  ///
+  /// Fällt der Abruf aus, wird auf die bisherige Schätzung des Suggesters
+  /// zurückgegriffen – dann fehlt der Karte allerdings die Streckenführung.
+  Future<
+      (
+        double km,
+        RoadMixAnalysis? roadMix,
+        FerryRoute? ferry,
+        String note,
+        List<String> routedWaypoints,
+        String? encodedPolyline,
+        FerryRouteSuggestion? ferrySuggestion,
+        DenmarkFerryRoute? denmarkRoute,
+      )> _withFerryLegs(
+    FerryAutoDetect det,
+    String origin,
+    String destination,
+    FerryRoute ferry, {
+    FerryRouteSuggestion? fallback,
+    required String note,
+  }) async {
+    final plan = await FerryLegPlan.plan(
+      origin: origin,
+      destination: destination,
+      ferry: ferry,
+      det: det,
+    );
+
+    if (plan == null) {
+      _log.add('⚠️ Landwege zur Fähre konnten nicht abgerufen werden – '
+          'gerechnet mit geschätzten Kilometern, die Karte zeigt keine '
+          'geplante Strecke.');
+      return (
+        fallback?.roadKm ?? 0.0,
+        null,
+        ferry,
+        note,
+        <String>[],
+        null,
+        fallback,
+        null,
+      );
+    }
+
+    _ferryLegPlan = plan;
+    _truckTime = truckDriveTimeFromSteps(
+      steps: plan.steps,
+      totalKm: plan.roadKm,
+      fallbackKmh: _avgKmh,
+    );
+    if (_showDetails) {
+      _log.add('🛣️ Landwege: ${plan.legA.km.toStringAsFixed(0)} km bis '
+          '${plan.ferry.from}, ${plan.legB.km.toStringAsFixed(0)} km ab '
+          '${plan.ferry.to} – zusammen ${plan.roadKm.toStringAsFixed(0)} km '
+          'ohne Seestrecke.');
+    }
+
+    return (
+      plan.roadKm,
+      RoadMixAnalysis.fromDirectionsSteps(plan.steps),
+      plan.ferry,
+      note,
+      <String>[],
+      null,
+      FerryRouteSuggestion(plan.ferry, plan.legA.km, plan.legB.km),
+      null,
+    );
+  }
+
   Future<void> _compute() async {
     if (_calculating) return;
     if (_startCtl.text.trim().isEmpty || _destCtl.text.trim().isEmpty) {
@@ -899,6 +994,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _calculating = true;
       _log.clear();
       _etaResult = null;
+      _ferryLegPlan = null;
       _countryRouteNote = null;
       _ferryRouteNote = null;
     });
@@ -1236,6 +1332,36 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openMapOsm() async {
+    // Fährtour: die beiden geplanten Landwege plus Seestrecke zeichnen.
+    // Ohne das fragt die Karte Google erneut von Start nach Ziel und zeigt
+    // dessen eigene, kürzeste Fähre statt der geplanten.
+    final legs = _ferryLegPlan;
+    if (_etaResult != null && legs != null) {
+      final from = legs.portFrom;
+      final to = legs.portTo;
+      final segs = <MapSegment>[
+        MapSegment(
+            points: legs.legA.points, label: 'Anfahrt → ${legs.ferry.from}'),
+        if (from != null && to != null)
+          MapSegment(
+              points: [from, to], label: legs.ferry.name, isFerry: true),
+        MapSegment(points: legs.legB.points, label: '${legs.ferry.to} → Ziel'),
+      ];
+      if (legs.legA.points.isNotEmpty && legs.legB.points.isNotEmpty) {
+        await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => MapOsmView(
+            start: legs.legA.points.first,
+            dest: legs.legB.points.last,
+            route: const [],
+            segments: segs,
+            stops: [for (final c in _stopCoords) if (c != null) c],
+            subtitle: _mapRouteNote(),
+          ),
+        ));
+        return;
+      }
+    }
+
     if (_etaResult != null && _resultRoutePolyline != null) {
       final points = map_launcher.decodePolyline(_resultRoutePolyline!);
       if (points.length >= 2) {
@@ -1841,6 +1967,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           _manualFerryDeparture = null;
                         }
                         _etaResult = null;
+                        _ferryLegPlan = null;
                       }),
                     ),
                     SwitchListTile(
@@ -1857,6 +1984,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           _manualFerryDeparture = null;
                         }
                         _etaResult = null;
+                        _ferryLegPlan = null;
                       }),
                     ),
                     Padding(
@@ -1899,6 +2027,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     _manualFerry = null;
                                     _manualFerryDeparture = null;
                                     _etaResult = null;
+                                    _ferryLegPlan = null;
                                   }),
                                   icon: const Icon(Icons.close),
                                 ),
@@ -1941,6 +2070,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           _viaDenmarkFerries = false;
                                           _ferrySearchCtl.clear();
                                           _etaResult = null;
+                                          _ferryLegPlan = null;
                                         });
                                       },
                                     );
@@ -1992,6 +2122,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                             prev.hour,
                                             prev.minute);
                                         _etaResult = null;
+                                        _ferryLegPlan = null;
                                       });
                                     },
                                     child: InputDecorator(
@@ -2043,6 +2174,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         selected.minute,
                                       );
                                       _etaResult = null;
+                                      _ferryLegPlan = null;
                                     });
                                   },
                                 ),
@@ -2051,6 +2183,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     onPressed: () => setState(() {
                                       _manualFerryDeparture = null;
                                       _etaResult = null;
+                                      _ferryLegPlan = null;
                                     }),
                                     child: const Text('Zeit zurücksetzen'),
                                   ),
@@ -2319,6 +2452,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         : (_) => setState(() {
                               _manualFerryDeparture = when;
                               _etaResult = null;
+                              _ferryLegPlan = null;
                             }),
                   );
                 }),
@@ -2381,6 +2515,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onChanged: (v) => setState(() {
               _heavyLoad = v;
               _etaResult = null;
+              _ferryLegPlan = null;
             }),
           ),
           if (_speedProfile == SpeedProfile.custom) ...[
