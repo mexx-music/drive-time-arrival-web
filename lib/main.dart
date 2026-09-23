@@ -821,6 +821,12 @@ class _HomeScreenState extends State<HomeScreen> {
       // --- PATCH END ---
 
       if (matched != null) {
+        // Hier und nur hier steht fest, dass diese Berechnung eine Fähre
+        // benutzt. Alles danach – die getrennten Landwege vor und nach der
+        // Überfahrt – kostet zusätzliche Google-Aufrufe. Damit die Auswertung
+        // Fähr- und Straßenrouten nicht vermischt, wird die Berechnung ab
+        // hier als Fährroute geführt.
+        CatLabTrace.markFerry();
         if (_showDetails) {
           _log.add('🔎 Auto-Fähre: ${matched.name} (reason: $why)');
         }
@@ -1233,6 +1239,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final det = FerryAutoDetect(GOOGLE_MAPS_API_KEY);
       final FerryRoute? ferryCandidate =
           _manualFerry ?? (_autoFerry ? matchedFerry : null);
+      // Bei einer von Hand gewählten Fähre läuft die Erkennung oben nicht an,
+      // die Fährstrecke wird trotzdem gerechnet.
+      if (ferryCandidate != null) CatLabTrace.markFerry();
 
       res = denmarkRoute != null
           ? EtaCalculator.computeTwoShortFerries(

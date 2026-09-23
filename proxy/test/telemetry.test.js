@@ -147,6 +147,77 @@ test('Telemetrie', { skip, concurrency: false }, async (t) => {
     assert.strictEqual(wuRow.rows[0].kind, 'route_ferry', 'als Faehrroute gekennzeichnet');
   });
 
+  await t.test('4b) Lambach-Oslo: Faehre wird erst waehrend der Berechnung erkannt',
+    async () => {
+      const wu = uuid();
+      // So laeuft es wirklich: die Routenplanung fragt zuerst zweimal, um
+      // ueberhaupt herauszufinden, ob eine Faehre im Weg liegt. Erst danach
+      // steht die Einstufung fest - die Arbeitseinheit ist da laengst da.
+      await post('/api/directions', {
+        origin: 'Lambach', destination: 'Oslo',
+        cc_work_unit: wu, cc_work_kind: 'route',
+      });
+      await post('/api/directions', {
+        origin: 'Lambach', destination: 'Oslo', avoid: 'ferries',
+        cc_work_unit: wu, cc_work_kind: 'route',
+      });
+      await telemetry._drain();
+
+      let w = await pg.query('select kind from cc.work_units where id = $1', [wu]);
+      assert.strictEqual(w.rows[0].kind, 'route',
+        'vor der Erkennung ist es eine gewoehnliche Route');
+
+      // Ab jetzt weiss die App von der Faehre: die Landwege vor und nach der
+      // Ueberfahrt werden getrennt gerechnet.
+      for (let i = 0; i < 6; i += 1) {
+        await post('/api/directions', {
+          origin: 'Lambach', destination: 'Hafen',
+          cc_work_unit: wu, cc_work_kind: 'route_ferry',
+        });
+      }
+      await telemetry._drain();
+
+      w = await pg.query('select kind from cc.work_units where id = $1', [wu]);
+      assert.strictEqual(w.rows[0].kind, 'route_ferry',
+        'die Einstufung wird nachgezogen');
+
+      const rows = await eventsFor(wu);
+      assert.strictEqual(rows.length, 8, 'alle acht Aufrufe in einer Arbeitseinheit');
+      const anzahl = await pg.query(
+        'select count(*) as n from cc.work_units where id = $1', [wu]);
+      assert.strictEqual(Number(anzahl.rows[0].n), 1, 'und nur eine Arbeitseinheit');
+    });
+
+  await t.test('4c) eine erkannte Faehrroute wird nie zurueckgestuft', async () => {
+    const wu = uuid();
+    await post('/api/directions', {
+      origin: 'A', destination: 'B', cc_work_unit: wu, cc_work_kind: 'route_ferry',
+    });
+    await telemetry._drain();
+    // Ein Nachzuegler ohne Faehrkennzeichen darf nichts kaputtmachen.
+    await post('/api/geocode', {
+      address: 'A', cc_work_unit: wu, cc_work_kind: 'route',
+    });
+    await telemetry._drain();
+
+    const w = await pg.query('select kind from cc.work_units where id = $1', [wu]);
+    assert.strictEqual(w.rows[0].kind, 'route_ferry');
+  });
+
+  await t.test('4d) eine reine Strassenroute bleibt route', async () => {
+    const wu = uuid();
+    for (let i = 0; i < 2; i += 1) {
+      await post('/api/directions', {
+        origin: 'Lambach', destination: 'Hamburg',
+        cc_work_unit: wu, cc_work_kind: 'route',
+      });
+    }
+    await telemetry._drain();
+    const w = await pg.query('select kind from cc.work_units where id = $1', [wu]);
+    assert.strictEqual(w.rows[0].kind, 'route');
+    assert.strictEqual((await eventsFor(wu)).length, 2);
+  });
+
   await t.test('5) Google-Fehler ergibt ok=false', async () => {
     const wu = uuid();
     google.setMode('google_error');

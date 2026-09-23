@@ -46,6 +46,30 @@ void main() {
     expect(CatLabTrace.requestFields['cc_work_kind'], 'route_ferry');
   });
 
+  test('mehrfaches Kennzeichnen bleibt bei route_ferry', () {
+    CatLabTrace.begin();
+    CatLabTrace.markFerry();
+    CatLabTrace.markFerry();
+    expect(CatLabTrace.kind, 'route_ferry');
+  });
+
+  test('die Kennung bleibt beim Kennzeichnen dieselbe', () {
+    CatLabTrace.begin();
+    final vorher = CatLabTrace.workUnitId;
+    CatLabTrace.markFerry();
+    expect(CatLabTrace.workUnitId, vorher,
+        reason: 'sonst zerfiele die Berechnung in zwei Arbeitseinheiten');
+  });
+
+  test('die nächste Berechnung startet wieder als Straßenroute', () {
+    CatLabTrace.begin();
+    CatLabTrace.markFerry();
+    CatLabTrace.end();
+    CatLabTrace.begin();
+    expect(CatLabTrace.kind, 'route',
+        reason: 'eine Fährroute darf nicht auf die folgende abfärben');
+  });
+
   test('ohne laufende Berechnung kennzeichnet markFerry nichts', () {
     CatLabTrace.markFerry();
     expect(CatLabTrace.requestFields, isEmpty);

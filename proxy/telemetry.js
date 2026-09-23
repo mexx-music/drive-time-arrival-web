@@ -37,9 +37,19 @@ let mutedUntil = 0;
 let projectId = null;
 const serviceIds = new Map();
 
-// Arbeitseinheiten, die in dieser Prozesslaufzeit schon angelegt wurden.
-// Spart den Einfuegeversuch fuer jeden weiteren Aufruf derselben Berechnung.
-const knownWorkUnits = new Set();
+// Arbeitseinheiten, die in dieser Prozesslaufzeit schon angelegt wurden,
+// samt ihrer zuletzt geschriebenen Gattung. Spart den Einfuegeversuch fuer
+// jeden weiteren Aufruf derselben Berechnung.
+const knownWorkUnits = new Map();
+
+// Ob eine Faehre im Spiel ist, stellt sich erst waehrend der Berechnung
+// heraus: die ersten Aufrufe dienen ja gerade dazu, das herauszufinden. Die
+// Arbeitseinheit ist da laengst angelegt. Deshalb darf eine spaetere Meldung
+// die Einstufung heraufsetzen - aber nie wieder herunter, damit ein
+// nachzueglerischer Aufruf eine erkannte Faehrroute nicht zurueckstuft.
+function kindRank(kind) {
+  return kind === 'route_ferry' ? 1 : 0;
+}
 
 function enabled() {
   return Boolean(process.env.CONTROL_CENTER_DATABASE_URL) && !poolFailed;
@@ -111,19 +121,25 @@ async function write({ service, ok, workUnitId, workUnitKind, cacheHit }) {
     const serviceId = serviceIds.get(service);
     if (!serviceId) throw new Error(`Leistung ${service} nicht im Katalog`);
 
-    if (workUnitId && !knownWorkUnits.has(workUnitId)) {
-      await client.query(
-        `insert into cc.work_units (id, project_id, kind)
-         values ($1, $2, $3) on conflict (id) do nothing`,
-        [workUnitId, projectId, workUnitKind],
-      );
-      knownWorkUnits.add(workUnitId);
-      // Nicht unbegrenzt wachsen lassen. Die aeltesten Eintraege werden
-      // ohnehin nicht mehr gebraucht, weil die Berechnung laengst vorbei ist.
-      if (knownWorkUnits.size > 5000) {
-        const keep = [...knownWorkUnits].slice(-1000);
-        knownWorkUnits.clear();
-        for (const k of keep) knownWorkUnits.add(k);
+    if (workUnitId) {
+      const bekannt = knownWorkUnits.get(workUnitId);
+      if (bekannt === undefined || kindRank(workUnitKind) > kindRank(bekannt)) {
+        await client.query(
+          `insert into cc.work_units (id, project_id, kind)
+           values ($1, $2, $3)
+           on conflict (id) do update set kind = excluded.kind
+            where cc.work_units.kind <> 'route_ferry'
+              and excluded.kind = 'route_ferry'`,
+          [workUnitId, projectId, workUnitKind],
+        );
+        knownWorkUnits.set(workUnitId, workUnitKind);
+        // Nicht unbegrenzt wachsen lassen. Die aeltesten Eintraege werden
+        // ohnehin nicht mehr gebraucht, weil die Berechnung laengst vorbei ist.
+        if (knownWorkUnits.size > 5000) {
+          const keep = [...knownWorkUnits].slice(-1000);
+          knownWorkUnits.clear();
+          for (const [k, v] of keep) knownWorkUnits.set(k, v);
+        }
       }
     }
 
