@@ -188,6 +188,9 @@ class _HomeScreenState extends State<HomeScreen> {
   int _continuousDrivenMin = 0;
   int _remainingDutyMin = 900;
 
+  /// Welcher Wert des Zeitbudgets gerade bearbeitet wird (0/1/2), sonst null.
+  int? _editingBudget;
+
   // Lenk-/Ruhezeit & Tankpause
   bool _ten1 = true; // 10h-Tag #1 verfügbar?
   bool _ten2 = true; // 10h-Tag #2 verfügbar?
@@ -1463,6 +1466,261 @@ class _HomeScreenState extends State<HomeScreen> {
     return teile.join(' · ');
   }
 
+  static String _hhmm(int minuten) =>
+      '${minuten ~/ 60}:${(minuten % 60).toString().padLeft(2, '0')}';
+
+  /// Kurzform des Geschwindigkeitsprofils für Chips und Zusammenfassung.
+  /// Die Zahlen stehen unter der Überschrift „Geschwindigkeit“ und sind
+  /// damit als km/h lesbar, ohne die Einheit fünfmal zu wiederholen.
+  static String _profilKurz(SpeedProfile p) => switch (p) {
+        SpeedProfile.automatic => 'Automatisch',
+        SpeedProfile.standard80 => '80',
+        SpeedProfile.mixedRoads70 => '70',
+        SpeedProfile.norway60 => '60',
+        SpeedProfile.custom => 'Individuell',
+      };
+
+  /// Was zugeklappt unter der Überschrift steht.
+  String get _zeitSummary {
+    final teile = <String>[
+      'Fahrzeit ${_hhmm(_remainingDrivingMin)}',
+      'Einsatz ${_hhmm(_remainingDutyMin)}',
+    ];
+    if (_continuousDrivenMin > 0) {
+      teile.add('seit Pause ${_hhmm(_continuousDrivenMin)}');
+    }
+    // „ab jetzt“ ist der Normalfall und damit keine Nachricht wert; die
+    // Zeile ist auf dem Telefon ohnehin knapp.
+    if (_manualDepartureActive) {
+      teile.add('ab ${_zweistellig(_manualDepartureHour)}:'
+          '${_zweistellig(_manualDepartureMinute)}');
+    }
+    // Wie oben: nur melden, was vom Normalfall abweicht. Sonst passt die
+    // Zeile auf dem Telefon nicht mehr und wird abgeschnitten.
+    if (_speedProfile != SpeedProfile.automatic) {
+      teile.add(_profilKurz(_speedProfile));
+    }
+    if (_heavyLoad) teile.add('schwere Ladung');
+    return teile.join(' · ');
+  }
+
+  static String _zweistellig(int n) => n.toString().padLeft(2, '0');
+
+  /// Ein Wert des Zeitbudgets. Zeigt nur die Zahl; die Eingabefelder
+  /// erscheinen erst, wenn jemand darauf tippt. Vorher standen hier
+  /// dauerhaft sechs Stunden-/Minuten-Felder.
+  Widget _budgetTile({
+    required int index,
+    required String label,
+    required int minuten,
+    required String hinweis,
+  }) {
+    final theme = Theme.of(context);
+    final offen = _editingBudget == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _editingBudget = offen ? null : index),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            color: offen
+                ? theme.colorScheme.primary.withValues(alpha: 0.10)
+                : null,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.hintColor,
+                ),
+              ),
+              const SizedBox(height: 1),
+              Text(
+                _hhmm(minuten),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              Text(
+                hinweis,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontSize: 11,
+                  color: theme.hintColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Die Eingabe zum angetippten Wert. Nur einer ist gleichzeitig offen.
+  Widget _budgetEditor() {
+    final theme = Theme.of(context);
+    final (titel, beschreibung, minuten, maxMinuten, setzen) =
+        switch (_editingBudget!) {
+      0 => (
+          'Verbleibende Fahrzeit',
+          'Bis zur nächsten Tagesruhe; eine Lenkpause kann früher nötig sein.',
+          _remainingDrivingMin.clamp(0, _dailyDrivingLimit),
+          _dailyDrivingLimit,
+          (int v) => setState(() => _remainingDrivingMin = v),
+        ),
+      1 => (
+          'Verbleibende Einsatzzeit',
+          'Bis zur Tagesruhe (derzeit höchstens '
+              '${_dailyDutyLimit ~/ 60} Stunden).',
+          _remainingDutyMin.clamp(0, _dailyDutyLimit),
+          _dailyDutyLimit,
+          (int v) => setState(() => _remainingDutyMin = v),
+        ),
+      _ => (
+          'Seit der letzten Lenkpause',
+          'Nur falls heute bereits gefahren wurde.',
+          _continuousDrivenMin,
+          270,
+          (int v) => setState(() => _continuousDrivenMin = v),
+        ),
+    };
+
+    return Container(
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  titel,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() => _editingBudget = null),
+                child: const Text('Fertig'),
+              ),
+            ],
+          ),
+          Text(beschreibung, style: theme.textTheme.bodySmall),
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.only(right: 4, bottom: 4),
+            child: DurationInput(
+              key: ValueKey(_editingBudget),
+              minutes: minuten,
+              maxMinutes: maxMinuten,
+              onChanged: setzen,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Abfahrt in einer Zeile. Ohne Auswahl heißt es schlicht „Jetzt“.
+  Widget _departureRow() {
+    final theme = Theme.of(context);
+    final text = _manualDepartureActive
+        ? '${DateFormat('dd.MM.').format(_manualDepartureDate)} '
+            '${_zweistellig(_manualDepartureHour)}:'
+            '${_zweistellig(_manualDepartureMinute)}'
+        : 'Jetzt';
+    return SizedBox(
+      height: 40,
+      child: Row(
+        children: [
+          Icon(Icons.play_circle_outline_rounded,
+              size: 18, color: theme.hintColor),
+          const SizedBox(width: 8),
+          Text(
+            'Abfahrt',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const Spacer(),
+          if (_manualDepartureActive)
+            TextButton(
+              onPressed: () =>
+                  setState(() => _manualDepartureActive = false),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+              ),
+              child: const Text('Jetzt'),
+            ),
+          InkWell(
+            onTap: _abfahrtWaehlen,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                children: [
+                  Text(
+                    text,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(Icons.edit_calendar_outlined,
+                      size: 16, color: theme.colorScheme.primary),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Datum und Uhrzeit nacheinander abfragen. Bricht der Fahrer ab, bleibt
+  /// alles, wie es war – insbesondere bleibt „Jetzt“ stehen.
+  Future<void> _abfahrtWaehlen() async {
+    final datum = await showDatePicker(
+      context: context,
+      initialDate: _manualDepartureDate,
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (datum == null || !mounted) return;
+    final zeit = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(
+        hour: _manualDepartureHour,
+        minute: _manualDepartureMinute,
+      ),
+      initialEntryMode: TimePickerEntryMode.input,
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
+        child: child!,
+      ),
+    );
+    if (zeit == null || !mounted) return;
+    setState(() {
+      _manualDepartureDate = datum;
+      _manualDepartureHour = zeit.hour;
+      _manualDepartureMinute = zeit.minute;
+      _manualDepartureActive = true;
+    });
+  }
+
   Widget _numField(String label, int value, void Function(int) onChanged) {
     final ctl = TextEditingController(text: value.toString());
     return TextField(
@@ -1798,243 +2056,164 @@ class _HomeScreenState extends State<HomeScreen> {
                     'Abfahrt und verbleibende Zeit',
                     style: TextStyle(fontWeight: FontWeight.w800),
                   ),
+                  // Zugeklappt steht hier der ganze Stand – das ist der
+                  // Normalfall, in dem niemand etwas ändern will.
+                  subtitle: Text(
+                    _zeitSummary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).hintColor,
+                        ),
+                  ),
+                  expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                  childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
                   children: [
-                    LayoutBuilder(
-                      builder: (ctx, box) {
-                        // bei schmalen Layouts untereinander
-                        final stackVertically = box.maxWidth < 720;
+                    // Die drei Werte nebeneinander statt in drei großen
+                    // Kästen untereinander. Antippen öffnet die Eingabe.
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _budgetTile(
+                          index: 0,
+                          label: 'Fahrzeit',
+                          minuten: _remainingDrivingMin,
+                          hinweis: 'von ${_hhmm(_dailyDrivingLimit)}',
+                        ),
+                        _budgetTile(
+                          index: 1,
+                          label: 'Einsatzzeit',
+                          minuten: _remainingDutyMin,
+                          hinweis: 'von ${_hhmm(_dailyDutyLimit)}',
+                        ),
+                        _budgetTile(
+                          index: 2,
+                          label: 'Seit Lenkpause',
+                          minuten: _continuousDrivenMin,
+                          hinweis: _continuousDrivenMin == 0
+                              ? 'frisch gestartet'
+                              : 'max ${_hhmm(270)}',
+                        ),
+                      ],
+                    ),
+                    if (_editingBudget != null) _budgetEditor(),
 
-                        final leftWidget = Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Text(
-                                'Zeitbudget für heute',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleMedium
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                              ),
-                              const SizedBox(height: 12),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFEAF4FF),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: const Color(0xFFC9E1FA),
-                                  ),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 14),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('Verbleibende Fahrzeit',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleMedium),
-                                    const SizedBox(height: 4),
-                                    const Text(
-                                      'Bis zur nächsten Tagesruhe; eine Lenkpause kann früher nötig sein.',
-                                    ),
-                                    const SizedBox(height: 8),
-                                    DurationInput(
-                                      minutes: _remainingDrivingMin.clamp(
-                                          0, _dailyDrivingLimit),
-                                      maxMinutes: _dailyDrivingLimit,
-                                      onChanged: (v) => setState(
-                                          () => _remainingDrivingMin = v),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFEAF8F3),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: const Color(0xFFC7E7D9),
-                                  ),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 14),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('Verbleibende Einsatzzeit',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleMedium),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Bis zur Tagesruhe (derzeit höchstens ${_dailyDutyLimit ~/ 60} Stunden).',
-                                      style:
-                                          Theme.of(context).textTheme.bodySmall,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    DurationInput(
-                                      minutes: _remainingDutyMin.clamp(
-                                          0, _dailyDutyLimit),
-                                      maxMinutes: _dailyDutyLimit,
-                                      onChanged: (v) =>
-                                          setState(() => _remainingDutyMin = v),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context).colorScheme.surface,
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: Theme.of(context).dividerColor,
-                                  ),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 14),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('Seit der letzten Lenkpause',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleSmall),
-                                    const SizedBox(height: 4),
-                                    const Text(
-                                      'Nur falls heute bereits gefahren wurde.',
-                                    ),
-                                    const SizedBox(height: 8),
-                                    DurationInput(
-                                      minutes: _continuousDrivenMin,
-                                      maxMinutes: 270,
-                                      onChanged: (v) => setState(
-                                          () => _continuousDrivenMin = v),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              _speedProfileInput(),
-                            ],
+                    const Divider(height: 18),
+                    _departureRow(),
+
+                    const Divider(height: 18),
+                    // Fünf große Knöpfe plus Dauererklärung sind hier
+                    // zusammengeschrumpft: die Erklärung hängt am ⓘ und
+                    // wechselt mit dem gewählten Profil.
+                    Row(
+                      children: [
+                        Text(
+                          'Geschwindigkeit',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(width: 5),
+                        Tooltip(
+                          message: _speedProfile.description,
+                          triggerMode: TooltipTriggerMode.tap,
+                          showDuration: const Duration(seconds: 8),
+                          child: Icon(
+                            Icons.info_outline_rounded,
+                            size: 15,
+                            color: Theme.of(context).hintColor,
                           ),
-                        );
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        for (final profile in SpeedProfile.values)
+                          ChoiceChip(
+                            label: Text(_profilKurz(profile)),
+                            selected: _speedProfile == profile,
+                            showCheckmark: false,
+                            visualDensity: VisualDensity.compact,
+                            labelStyle: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(
+                                  fontWeight: _speedProfile == profile
+                                      ? FontWeight.w700
+                                      : FontWeight.w400,
+                                ),
+                            onSelected: (_) =>
+                                setState(() => _speedProfile = profile),
+                          ),
+                      ],
+                    ),
+                    if (_speedProfile == SpeedProfile.custom)
+                      _slider(
+                        'Eigener Planungsschnitt',
+                        _avgKmh,
+                        40,
+                        90,
+                        (v) => setState(() => _avgKmh = v),
+                      ),
 
-                        final rightWidget = Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.surface,
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color:
-                                  Theme.of(context).colorScheme.outlineVariant,
+                    // Wirkt auf jedes Profil, nicht nur auf die Automatik.
+                    SizedBox(
+                      height: 38,
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.scale_rounded,
+                            size: 18,
+                            color: _heavyLoad
+                                ? Theme.of(context).colorScheme.primary
+                                : Theme.of(context).disabledColor,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: 'Schwere Ladung',
+                                    style: TextStyle(
+                                      fontWeight: _heavyLoad
+                                          ? FontWeight.w600
+                                          : FontWeight.w400,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: '  +'
+                                        '${((heavyLoadTimeFactor - 1) * 100).round()}'
+                                        ' % Fahrzeit',
+                                    style: TextStyle(
+                                      color: Theme.of(context).hintColor,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SwitchListTile.adaptive(
-                                contentPadding: EdgeInsets.zero,
-                                title: const Text('Manuelle Abfahrt'),
-                                subtitle: const Text(
-                                  'Ausschalten für Abfahrt ab jetzt',
-                                ),
-                                value: _manualDepartureActive,
-                                onChanged: (v) =>
-                                    setState(() => _manualDepartureActive = v),
-                              ),
-                              if (_manualDepartureActive) ...[
-                                const SizedBox(height: 10),
-                                InkWell(
-                                  onTap: () async {
-                                    final selectedDate = await showDatePicker(
-                                      context: context,
-                                      initialDate: _manualDepartureDate,
-                                      firstDate: DateTime.now()
-                                          .subtract(const Duration(days: 365)),
-                                      lastDate: DateTime.now()
-                                          .add(const Duration(days: 365)),
-                                    );
-                                    if (selectedDate != null) {
-                                      setState(() =>
-                                          _manualDepartureDate = selectedDate);
-                                    }
-                                  },
-                                  child: InputDecorator(
-                                    decoration: InputDecoration(
-                                      labelText: '📅 Datum',
-                                      border: OutlineInputBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(8)),
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                              vertical: 12, horizontal: 12),
-                                    ),
-                                    child: Text(DateFormat('yyyy-MM-dd')
-                                        .format(_manualDepartureDate)),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                OutlinedButton.icon(
-                                  icon: const Icon(Icons.access_time_rounded),
-                                  label: Text(
-                                    'Abfahrtszeit ${_manualDepartureHour.toString().padLeft(2, '0')}:${_manualDepartureMinute.toString().padLeft(2, '0')}',
-                                  ),
-                                  onPressed: () async {
-                                    final selected = await showTimePicker(
-                                      context: context,
-                                      initialTime: TimeOfDay(
-                                        hour: _manualDepartureHour,
-                                        minute: _manualDepartureMinute,
-                                      ),
-                                      initialEntryMode:
-                                          TimePickerEntryMode.input,
-                                      builder: (context, child) => MediaQuery(
-                                        data: MediaQuery.of(context).copyWith(
-                                          alwaysUse24HourFormat: true,
-                                        ),
-                                        child: child!,
-                                      ),
-                                    );
-                                    if (selected != null && mounted) {
-                                      setState(() {
-                                        _manualDepartureHour = selected.hour;
-                                        _manualDepartureMinute =
-                                            selected.minute;
-                                      });
-                                    }
-                                  },
-                                ),
-                              ],
-                            ],
+                          Switch(
+                            value: _heavyLoad,
+                            onChanged: (v) => setState(() {
+                              _heavyLoad = v;
+                              _etaResult = null;
+                              _ferryLegPlan = null;
+                            }),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
                           ),
-                        );
-
-                        if (stackVertically) {
-                          return Column(
-                            children: [
-                              leftWidget,
-                              const SizedBox(height: 12),
-                              rightWidget
-                            ],
-                          );
-                        }
-
-                        return Row(
-                          children: [
-                            Expanded(child: leftWidget),
-                            const SizedBox(width: 12),
-                            Expanded(child: rightWidget),
-                          ],
-                        );
-                      },
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 8),
                   ],
                 ),
               ),
@@ -2684,75 +2863,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _speedProfileInput() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: Theme.of(context).dividerColor.withValues(alpha: 0.6),
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Geschwindigkeitsprofil',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 7,
-            runSpacing: 7,
-            children: [
-              for (final profile in SpeedProfile.values)
-                ChoiceChip(
-                  label: Text(profile.label),
-                  selected: _speedProfile == profile,
-                  onSelected: (_) => setState(() => _speedProfile = profile),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _speedProfile.description,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 4),
-          // Wirkt auf jedes Profil, nicht nur auf die Automatik.
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            secondary: const Text('🏋', style: TextStyle(fontSize: 20)),
-            title: const Text('Schwere Ladung'),
-            subtitle: Text(
-              'Rechnet ${((heavyLoadTimeFactor - 1) * 100).round()} % mehr '
-              'Fahrzeit – voll beladen geht am Berg und beim Beschleunigen '
-              'Zeit verloren.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            value: _heavyLoad,
-            onChanged: (v) => setState(() {
-              _heavyLoad = v;
-              _etaResult = null;
-              _ferryLegPlan = null;
-            }),
-          ),
-          if (_speedProfile == SpeedProfile.custom) ...[
-            const SizedBox(height: 6),
-            _slider(
-              'Eigener Planungsschnitt',
-              _avgKmh,
-              40,
-              90,
-              (v) => setState(() => _avgKmh = v),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
 }
 
 class _PageIntro extends StatelessWidget {

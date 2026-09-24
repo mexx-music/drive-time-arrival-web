@@ -129,20 +129,27 @@ void main() {
     await tester.tap(find.text('Abfahrt und verbleibende Zeit'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Verbleibende Fahrzeit'), findsOneWidget);
-    expect(find.text('Verbleibende Einsatzzeit'), findsOneWidget);
-    expect(find.textContaining('Abfahrtszeit '), findsNothing);
+    // Aufgeklappt stehen die drei Werte da - aber noch keine Eingabefelder.
+    expect(find.text('Fahrzeit'), findsOneWidget);
+    expect(find.text('Einsatzzeit'), findsOneWidget);
+    expect(find.text('Seit Lenkpause'), findsOneWidget);
+    expect(find.text('Stunden'), findsNothing);
+    expect(find.text('Minuten'), findsNothing);
 
-    await tester.scrollUntilVisible(
-      find.text('Manuelle Abfahrt'),
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.ensureVisible(find.text('Manuelle Abfahrt'));
+    // Die Abfahrt steht auf Jetzt, ohne Datum und Uhrzeit anzubieten.
+    expect(find.text('Jetzt'), findsOneWidget);
+
+    // Erst ein Tipp auf den Wert öffnet die Eingabe - und nur diese eine.
+    await tester.tap(find.text('Fahrzeit'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Manuelle Abfahrt'));
+    expect(find.text('Verbleibende Fahrzeit'), findsOneWidget);
+    expect(find.text('Stunden'), findsOneWidget);
+    expect(find.text('Minuten'), findsOneWidget);
+
+    // Und ein zweiter Tipp schließt sie wieder.
+    await tester.tap(find.text('Fahrzeit'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Abfahrtszeit '), findsOneWidget);
+    expect(find.text('Stunden'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
