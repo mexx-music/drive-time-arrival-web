@@ -1337,6 +1337,132 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_showDetails) _log.add('🔍 $msg');
   }
 
+  /// Ein einzelner Vorrat als Punkt. Blau mit Haken heißt vorhanden,
+  /// hellgrau heißt verbraucht. Der Punkt ist klein, die Tippfläche nicht –
+  /// im Fahrerhaus wird das mit dem Daumen bedient.
+  Widget _reserveDot({
+    required bool available,
+    required String semantik,
+    required VoidCallback onTap,
+  }) {
+    final theme = Theme.of(context);
+    return Semantics(
+      label: semantik,
+      toggled: available,
+      button: true,
+      child: InkResponse(
+        onTap: onTap,
+        radius: 20,
+        child: SizedBox(
+          width: 36,
+          height: 32,
+          child: Center(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: available
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.surfaceContainerHighest,
+                border: Border.all(
+                  color:
+                      available ? theme.colorScheme.primary : theme.dividerColor,
+                  width: 1.5,
+                ),
+              ),
+              child: available
+                  ? Icon(Icons.check,
+                      size: 15, color: theme.colorScheme.onPrimary)
+                  : null,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Eine Zeile Vorrat: Bezeichnung, die Punkte, und rechts wie viele davon
+  /// noch übrig sind. Zwei solche Zeilen ersetzen fünf Schaltflächen.
+  Widget _reserveRow({
+    required String label,
+    required List<bool> values,
+    required void Function(int index, bool value) onToggle,
+  }) {
+    final theme = Theme.of(context);
+    final frei = values.where((v) => v).length;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        for (var i = 0; i < values.length; i++)
+          _reserveDot(
+            available: values[i],
+            semantik:
+                '$label ${i + 1}, ${values[i] ? "verfügbar" : "verbraucht"}',
+            onTap: () => onToggle(i, !values[i]),
+          ),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 30,
+          child: Text(
+            '$frei/${values.length}',
+            textAlign: TextAlign.right,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: frei == 0 ? theme.disabledColor : null,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Eine Vorgabe für diese eine Tour: ausgewählt heißt aktiv.
+  Widget _optionChip(
+    IconData icon,
+    String label,
+    bool active,
+    void Function(bool) onChanged,
+  ) {
+    final theme = Theme.of(context);
+    return FilterChip(
+      label: Text(label),
+      selected: active,
+      onSelected: onChanged,
+      showCheckmark: false,
+      visualDensity: VisualDensity.compact,
+      avatar: Icon(
+        icon,
+        size: 17,
+        color: active ? theme.colorScheme.primary : theme.disabledColor,
+      ),
+      labelStyle: theme.textTheme.bodyMedium?.copyWith(
+        fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+      ),
+    );
+  }
+
+  /// Zusammenfassung für die zugeklappte Box, damit der Stand sichtbar ist,
+  /// ohne sie aufzuklappen.
+  String get _ruleSummary {
+    final tage = (_ten1 ? 1 : 0) + (_ten2 ? 1 : 0);
+    final ruhen = (_nine1 ? 1 : 0) + (_nine2 ? 1 : 0) + (_nine3 ? 1 : 0);
+    final teile = <String>['$tage × 10 h', '$ruhen × 9 h'];
+    if (_tankpause) teile.add('Tankpause');
+    if (_splitBreak) teile.add('geteilte Pause');
+    if (_weeklyRestDue) teile.add('Wochenruhe fällig');
+    return teile.join(' · ');
+  }
+
   Widget _numField(String label, int value, void Function(int) onChanged) {
     final ctl = TextEditingController(text: value.toString());
     return TextField(
@@ -1918,67 +2044,125 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: pad,
                 child: ExpansionTile(
                   leading: const Icon(Icons.rule_rounded),
-                  title: const Text(
-                    'Lenk- und Ruhezeiten',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.only(bottom: 6),
-                      child: Text(
-                        'Tippe, um Verfügbarkeit umzuschalten (hell = nicht verfügbar).',
-                        style: TextStyle(fontSize: 12, color: Colors.black54),
-                      ),
-                    ),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 8,
+                  // Die Erklärung sitzt hier, wo ohnehin Platz ist, statt
+                  // eine eigene Zeile zu verbrauchen. Als Zeichen im Text und
+                  // nicht als Row daneben: eine Row würde auf schmalen
+                  // Geräten überlaufen, Text bricht einfach um.
+                  title: Text.rich(
+                    TextSpan(
                       children: [
-                        FilterChip(
-                          label: const Text('10h-Tag #1'),
-                          selected: _ten1,
-                          onSelected: (v) =>
-                              _changeDrivingLimit(() => _ten1 = v),
-                        ),
-                        FilterChip(
-                          label: const Text('10h-Tag #2'),
-                          selected: _ten2,
-                          onSelected: (v) =>
-                              _changeDrivingLimit(() => _ten2 = v),
-                        ),
-                        FilterChip(
-                          label: const Text('9h-Ruhe #1'),
-                          selected: _nine1,
-                          onSelected: (v) => _changeDutyLimit(() => _nine1 = v),
-                        ),
-                        FilterChip(
-                          label: const Text('9h-Ruhe #2'),
-                          selected: _nine2,
-                          onSelected: (v) => _changeDutyLimit(() => _nine2 = v),
-                        ),
-                        FilterChip(
-                          label: const Text('9h-Ruhe #3'),
-                          selected: _nine3,
-                          onSelected: (v) => _changeDutyLimit(() => _nine3 = v),
-                        ),
-                        FilterChip(
-                          label: const Text('⛽ Tankpause +30 min'),
-                          selected: _tankpause,
-                          onSelected: (v) => setState(() => _tankpause = v),
-                        ),
-                        FilterChip(
-                          label: const Text('Geteilte Pause 15 + 30 min'),
-                          selected: _splitBreak,
-                          onSelected: (v) => setState(() => _splitBreak = v),
-                        ),
-                        FilterChip(
-                          label: const Text('Wochenruhe vor Abfahrt fällig'),
-                          selected: _weeklyRestDue,
-                          onSelected: (v) => setState(() => _weeklyRestDue = v),
+                        const TextSpan(text: 'Lenk- und Ruhezeiten'),
+                        WidgetSpan(
+                          alignment: PlaceholderAlignment.middle,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 6),
+                            child: Tooltip(
+                              message: 'Auf einen Punkt tippen, um ihn als '
+                                  'verbraucht zu markieren.\n'
+                                  'Blau mit Haken = noch verfügbar, '
+                                  'grau = schon verbraucht.',
+                              triggerMode: TooltipTriggerMode.tap,
+                              showDuration: const Duration(seconds: 6),
+                              child: Icon(
+                                Icons.info_outline_rounded,
+                                size: 15,
+                                color: Theme.of(context).hintColor,
+                              ),
+                            ),
+                          ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  // Der Stand ist damit auch zugeklappt ablesbar.
+                  subtitle: Text(
+                    _ruleSummary,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).hintColor,
+                        ),
+                  ),
+                  // Ohne beides stehen die Zeilen mittig und kleben am Rand.
+                  expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                  childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                  children: [
+                    // Zwei Zähler-Zeilen statt fünf Schaltflächen: der Fahrer
+                    // sieht auf einen Blick, wie viel er noch hat.
+                    _reserveRow(
+                      label: '10 h-Lenktage',
+                      values: [_ten1, _ten2],
+                      onToggle: (i, v) => _changeDrivingLimit(
+                        () => i == 0 ? _ten1 = v : _ten2 = v,
+                      ),
+                    ),
+                    _reserveRow(
+                      label: '9 h-Ruhezeiten',
+                      values: [_nine1, _nine2, _nine3],
+                      onToggle: (i, v) => _changeDutyLimit(
+                        () => i == 0
+                            ? _nine1 = v
+                            : i == 1
+                                ? _nine2 = v
+                                : _nine3 = v,
+                      ),
+                    ),
+                    const Divider(height: 10),
+                    // Die drei unten bedeuten etwas anderes als „wie viel ist
+                    // noch übrig“ und stehen deshalb abgesetzt.
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        _optionChip(
+                          Icons.local_gas_station_rounded,
+                          'Tankpause +30',
+                          _tankpause,
+                          (v) => setState(() => _tankpause = v),
+                        ),
+                        _optionChip(
+                          Icons.hourglass_bottom_rounded,
+                          'Geteilte Pause 15+30',
+                          _splitBreak,
+                          (v) => setState(() => _splitBreak = v),
+                        ),
+                      ],
+                    ),
+                    // Kein weiterer gleichwertiger Knopf, sondern ein Zustand.
+                    SizedBox(
+                      height: 34,
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.bedtime_rounded,
+                            size: 18,
+                            color: _weeklyRestDue
+                                ? Theme.of(context).colorScheme.primary
+                                : Theme.of(context).disabledColor,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Wochenruhe vor Abfahrt fällig',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(
+                                    fontWeight: _weeklyRestDue
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                  ),
+                            ),
+                          ),
+                          Switch(
+                            value: _weeklyRestDue,
+                            onChanged: (v) =>
+                                setState(() => _weeklyRestDue = v),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
