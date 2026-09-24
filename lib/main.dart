@@ -1466,6 +1466,46 @@ class _HomeScreenState extends State<HomeScreen> {
     return teile.join(' · ');
   }
 
+  /// Abschnittsüberschrift in Versalien. Steht als Titel IN der Kachel und
+  /// nicht darüber, damit die ganze Kopfzeile antippbar bleibt.
+  Widget _kapitel(String text) => Text(
+        text,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.9,
+              color: const Color(0xFF486581),
+            ),
+      );
+
+  /// Der Stand, der unter der Überschrift steht, solange zugeklappt ist.
+  Widget _stand(String text) => Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: const Color(0xFF102A43),
+              fontWeight: FontWeight.w600,
+            ),
+      );
+
+  String get _stopsSummary => _stops.isEmpty
+      ? 'Keine'
+      : '${_stops.length} · ${_stops.take(2).join(', ')}'
+          '${_stops.length > 2 ? ' …' : ''}';
+
+  String get _ferrySummary {
+    final manuell = _manualFerry;
+    if (manuell != null) {
+      final ab = _manualFerryDeparture;
+      return ab == null
+          ? manuell.name
+          : '${manuell.name} · ab ${_zweistellig(ab.hour)}:'
+              '${_zweistellig(ab.minute)}';
+    }
+    if (_viaDenmarkFerries) return 'Über Dänemark, zwei Fähren';
+    return _autoFerry ? 'Automatisch vorschlagen' : 'Keine';
+  }
+
   static String _hhmm(int minuten) =>
       '${minuten ~/ 60}:${(minuten % 60).toString().padLeft(2, '0')}';
 
@@ -1868,8 +1908,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Padding(
                 padding: pad,
                 child: _InputCard(
-                  title: 'Route planen',
-                  subtitle: 'Start und Ziel festlegen',
+                  title: 'ROUTE PLANEN',
                   icon: Icons.route_rounded,
                   child: LayoutBuilder(
                     builder: (context, constraints) {
@@ -1961,13 +2000,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: pad,
                 child: ExpansionTile(
                   leading: const Icon(Icons.add_location_alt_rounded),
-                  title: const Text(
-                    'Zwischenstopps',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  subtitle: const Text(
-                    'Mehrere Orte in Fahrreihenfolge hinzufügen',
-                  ),
+                  title: _kapitel('ZWISCHENSTOPPS'),
+                  subtitle: _stand(_stopsSummary),
                   children: [
                     Padding(
                       padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
@@ -2040,32 +2074,33 @@ class _HomeScreenState extends State<HomeScreen> {
               // die der Fahrer besser kennt als jeder Routenplaner.
               Padding(
                 padding: pad,
-                child: RoutePresetSelector(
-                  presets: _presets,
-                  currentStopCount: _stops.length,
-                  onApply: _applyPreset,
-                  onDelete: _deletePreset,
-                  onSaveCurrent: _saveCurrentAsPreset,
+                // In dieselbe Form wie die Abschnitte gesetzt: als lose Zeile
+                // zwischen zwei Kacheln sah sie aus wie vergessen.
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFFD9E2EC)),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 2),
+                  child: RoutePresetSelector(
+                    presets: _presets,
+                    currentStopCount: _stops.length,
+                    onApply: _applyPreset,
+                    onDelete: _deletePreset,
+                    onSaveCurrent: _saveCurrentAsPreset,
+                  ),
                 ),
               ),
               Padding(
                 padding: pad,
                 child: ExpansionTile(
                   leading: const Icon(Icons.schedule_rounded),
-                  title: const Text(
-                    'Abfahrt und verbleibende Zeit',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
+                  title: _kapitel('ABFAHRT & ZEIT'),
                   // Zugeklappt steht hier der ganze Stand – das ist der
                   // Normalfall, in dem niemand etwas ändern will.
-                  subtitle: Text(
-                    _zeitSummary,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).hintColor,
-                        ),
-                  ),
+                  subtitle: _stand(_zeitSummary),
                   expandedCrossAxisAlignment: CrossAxisAlignment.start,
                   childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
                   children: [
@@ -2223,14 +2258,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: pad,
                 child: ExpansionTile(
                   leading: const Icon(Icons.rule_rounded),
-                  // Die Erklärung sitzt hier, wo ohnehin Platz ist, statt
-                  // eine eigene Zeile zu verbrauchen. Als Zeichen im Text und
-                  // nicht als Row daneben: eine Row würde auf schmalen
-                  // Geräten überlaufen, Text bricht einfach um.
-                  title: Text.rich(
+                  title: _kapitel('LENK- & RUHEZEITEN'),
+                  // Die Erklärung hängt am Zeichen hinter dem Stand, damit
+                  // sie keine eigene Zeile verbraucht.
+                  subtitle: Text.rich(
                     TextSpan(
                       children: [
-                        const TextSpan(text: 'Lenk- und Ruhezeiten'),
+                        TextSpan(text: _ruleSummary),
                         WidgetSpan(
                           alignment: PlaceholderAlignment.middle,
                           child: Padding(
@@ -2252,13 +2286,11 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ],
                     ),
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  // Der Stand ist damit auch zugeklappt ablesbar.
-                  subtitle: Text(
-                    _ruleSummary,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).hintColor,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: const Color(0xFF102A43),
+                          fontWeight: FontWeight.w600,
                         ),
                   ),
                   // Ohne beides stehen die Zeilen mittig und kleben am Rand.
@@ -2351,10 +2383,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: pad,
                 child: ExpansionTile(
                   leading: const Icon(Icons.directions_boat_rounded),
-                  title: const Text(
-                    'Fähre',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
+                  title: _kapitel('FÄHRE'),
+                  subtitle: _stand(_ferrySummary),
                   children: [
                     SwitchListTile(
                       title: const Text('Fähre automatisch vorschlagen'),
@@ -2882,13 +2912,7 @@ class _PageIntro extends StatelessWidget {
                   fontWeight: FontWeight.w900,
                 ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            'Route, Lenkzeiten und Pausen in wenigen Schritten planen.',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: const Color(0xFF627D98),
-                ),
-          ),
+
         ],
       ),
     );
@@ -2897,73 +2921,45 @@ class _PageIntro extends StatelessWidget {
 
 class _InputCard extends StatelessWidget {
   final String title;
-  final String subtitle;
   final IconData icon;
   final Widget child;
 
   const _InputCard({
     required this.title,
-    required this.subtitle,
     required this.icon,
     required this.child,
   });
 
   @override
   Widget build(BuildContext context) {
+    // Gleiche Form wie die aufklappbaren Abschnitte: weiss, gerundet, dünner
+    // Rahmen. Der frühere Schatten und der 40 Pixel grosse Symbolkasten
+    // liessen diesen einen Block schwerer wirken als alle anderen.
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: const Color(0xFFD9E2EC)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0D102A43),
-            blurRadius: 18,
-            offset: Offset(0, 6),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEAF4FF),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: const Color(0xFF0A6EBD)),
-              ),
-              const SizedBox(width: 11),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        color: Color(0xFF102A43),
-                        fontSize: 17,
-                        fontWeight: FontWeight.w900,
-                      ),
+              Icon(icon, size: 20, color: const Color(0xFF486581)),
+              const SizedBox(width: 12),
+              Text(
+                title,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.9,
+                      color: const Color(0xFF486581),
                     ),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(
-                        color: Color(0xFF627D98),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           child,
         ],
       ),

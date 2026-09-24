@@ -111,7 +111,12 @@ class _RoutePresetSelectorState extends State<RoutePresetSelector> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('🛣️ ', style: TextStyle(fontSize: 13)),
+                // Symbol statt Emoji: die übrigen Abschnitte verwenden
+                // durchgehend Symbole, ein buntes Emoji fällt heraus.
+                Icon(Icons.alt_route_rounded,
+                    size: 16,
+                    color: active ? theme.colorScheme.primary : null),
+                const SizedBox(width: 6),
                 Flexible(
                   child: Text(
                     'Routen-Vorlage · $_summary',

@@ -24,7 +24,7 @@ void main() {
 
     expect(find.text('Tour vorbereiten'), findsOneWidget);
     expect(find.text('Deine Tourübersicht'), findsOneWidget);
-    expect(find.text('Route planen'), findsOneWidget);
+    expect(find.text('ROUTE PLANEN'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -33,7 +33,7 @@ void main() {
 
     expect(find.text('Tour vorbereiten'), findsOneWidget);
     expect(find.text('Deine Tourübersicht'), findsNothing);
-    expect(find.text('Route planen'), findsOneWidget);
+    expect(find.text('ROUTE PLANEN'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -48,8 +48,8 @@ void main() {
   testWidgets('Mehrere Zwischenstopps lassen sich hinzufügen und sortieren',
       (tester) async {
     await pumpAtSize(tester, width: 390, height: 844);
-    await tester.ensureVisible(find.text('Zwischenstopps'));
-    await tester.tap(find.text('Zwischenstopps'));
+    await tester.ensureVisible(find.text('ZWISCHENSTOPPS'));
+    await tester.tap(find.text('ZWISCHENSTOPPS'));
     await tester.pumpAndSettle();
 
     final stopField = find.byWidgetPredicate((widget) =>
@@ -120,13 +120,13 @@ void main() {
       (tester) async {
     await pumpAtSize(tester, width: 390, height: 844);
     await tester.scrollUntilVisible(
-      find.text('Abfahrt und verbleibende Zeit'),
+      find.text('ABFAHRT & ZEIT'),
       250,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.ensureVisible(find.text('Abfahrt und verbleibende Zeit'));
+    await tester.ensureVisible(find.text('ABFAHRT & ZEIT'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Abfahrt und verbleibende Zeit'));
+    await tester.tap(find.text('ABFAHRT & ZEIT'));
     await tester.pumpAndSettle();
 
     // Aufgeklappt stehen die drei Werte da - aber noch keine Eingabefelder.
@@ -158,11 +158,11 @@ void main() {
       (tester) async {
     await pumpAtSize(tester, width: 390, height: 844);
     await tester.scrollUntilVisible(
-      find.text('Fähre'),
+      find.text('FÄHRE'),
       250,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.tap(find.text('Fähre'));
+    await tester.tap(find.text('FÄHRE'));
     await tester.pumpAndSettle();
 
     final tile = find.ancestor(
@@ -188,11 +188,11 @@ void main() {
       (tester) async {
     await pumpAtSize(tester, width: 390, height: 844);
     await tester.scrollUntilVisible(
-      find.text('Fähre'),
+      find.text('FÄHRE'),
       250,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.tap(find.text('Fähre'));
+    await tester.tap(find.text('FÄHRE'));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.text('Alternative über Dänemark: 2 Fähren'),
@@ -226,11 +226,11 @@ void main() {
     });
     await pumpAtSize(tester, width: 390, height: 844);
     await tester.scrollUntilVisible(
-      find.text('Fähre'),
+      find.text('FÄHRE'),
       250,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.tap(find.text('Fähre'));
+    await tester.tap(find.text('FÄHRE'));
     await tester.pumpAndSettle();
 
     final search = find.byWidgetPredicate((widget) =>
