@@ -21,6 +21,12 @@ let pg;
 
 const uuid = () => require('crypto').randomUUID();
 
+// So wie die Web-App fragt: der Browser setzt den Origin selbst.
+const WEB_APP_HEADERS = {
+  'Content-Type': 'application/json',
+  Origin: 'https://mexx-music.github.io',
+};
+
 async function boot() {
   google = await startFakeGoogle();
   process.env.GOOGLE_MAPS_API_KEY = 'testschluessel';
@@ -47,7 +53,7 @@ async function boot() {
 async function post(path, body) {
   const res = await fetch(`${base}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: WEB_APP_HEADERS,
     body: JSON.stringify(body),
   });
   return { status: res.status, body: await res.text() };
@@ -324,7 +330,7 @@ test('6) ohne erreichbares Control Center laeuft die Route weiter',
     for (let i = 0; i < 3; i += 1) {
       const res = await fetch(`http://127.0.0.1:${port}/api/directions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: WEB_APP_HEADERS,
         body: JSON.stringify({ origin: 'A', destination: 'B', cc_work_unit: uuid() }),
       });
       assert.strictEqual(res.status, 200, 'Route muss trotz toter Datenbank antworten');
@@ -365,7 +371,7 @@ test('5c) Netzfehler zu Google ergibt ebenfalls ok=false',
 
     const res = await fetch(`http://127.0.0.1:${port}/api/directions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: WEB_APP_HEADERS,
       body: JSON.stringify({ origin: 'A', destination: 'B', cc_work_unit: wu }),
     });
     assert.strictEqual(res.status, 500, 'der Fehler wird unveraendert weitergereicht');

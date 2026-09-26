@@ -1,7 +1,8 @@
-/* Minimal Express proxy for Google Maps APIs (local testing)
+/* Minimal Express proxy for Google Maps APIs
  * - Reads GOOGLE_MAPS_API_KEY from env
  * - Provides POST /api/geocode, /api/directions, /api/autocomplete
- * - Basic CORS allowlist and rate-limiting for local dev
+ * - CORS allowlist, origin check, rate limiting and an emergency kill switch
+ *   for the paid endpoints (see guard.js)
  */
 
 const express = require('express');
@@ -10,52 +11,47 @@ const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const telemetry = require('./telemetry');
+const guard = require('./guard');
 
 const app = express();
+app.set('trust proxy', guard.trustProxySetting());
 app.use(helmet());
-app.use(express.json({ limit: '1mb' }));
 
-// Simple rate limiter
-const limiter = rateLimit({ windowMs: 60 * 1000, max: 120 });
-app.use(limiter);
-
-// CORS allowlist
-const allowedOrigins = new Set([
-  'http://localhost',
-  'http://127.0.0.1',
-  'http://localhost:8080',
-  'http://127.0.0.1:8080',
-  'http://localhost:5000',
-  'http://127.0.0.1:5000',
-  'https://mexx-music.github.io'
-]);
-
-// origin checker reused for both normal requests and preflight
-const originChecker = (origin, callback) => {
-  if (!origin) return callback(null, true);
-  const low = origin.toLowerCase();
-  // Allow any localhost or 127.0.0.1 origin (with arbitrary port)
-  if (low.startsWith('http://localhost') || low.startsWith('http://127.0.0.1')) {
-    return callback(null, true);
-  }
-  // Allow other explicitly listed origins
-  if (allowedOrigins.has(origin) || allowedOrigins.has(origin.replace(/:\d+$/, ''))) {
-    return callback(null, true);
-  }
-  return callback(new Error('Not allowed by CORS'));
-};
-
+// Fremde Origins bekommen keine CORS-Freigabe - aber auch keinen Fehler mit
+// Stacktrace. Ob die Anfrage bearbeitet wird, entscheidet danach
+// requireAllowedOrigin fuer /api.
 const corsOptions = {
-  origin: originChecker,
+  origin: (origin, callback) => callback(null, guard.originAllowed(origin)),
   methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept'],
   preflightContinue: false,
   optionsSuccessStatus: 204
 };
 
+// CORS zuerst, damit auch 429-, 403- und 503-Antworten fuer die Web-App
+// lesbar sind statt als undurchsichtiger Netzwerkfehler anzukommen.
 app.use(cors(corsOptions));
 // Handle preflight requests for all routes
 app.options('*', cors(corsOptions));
+
+// Alles unter /api kostet Google-Geld. Reihenfolge: Not-Aus zuerst (ohne
+// Datenbank), dann Herkunft, dann Rate-Limit. /health bleibt davon frei.
+const paidLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: guard.positiveInt(process.env.RATE_LIMIT_PER_MINUTE, 120),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'rate_limited' },
+});
+app.use(
+  '/api',
+  guard.forwardedForDiagnostics(),
+  guard.killSwitch,
+  guard.requireAllowedOrigin,
+  paidLimiter,
+);
+
+app.use(express.json({ limit: '1mb' }));
 
 const GOOGLE_KEY = process.env.GOOGLE_MAPS_API_KEY;
 if (!GOOGLE_KEY) {
@@ -245,6 +241,16 @@ app.post('/api/autocomplete', async (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'proxy_error', message: err.message });
   }
+});
+
+// Fehler als knappes JSON, nie als HTML-Seite mit Stacktrace und Dateipfaden.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  const status = Number.isInteger(err.status) && err.status >= 400 && err.status < 600
+    ? err.status
+    : 500;
+  if (status >= 500) console.error(err);
+  res.status(status).json({ error: status >= 500 ? 'proxy_error' : 'bad_request' });
 });
 
 // replace direct listen with a safe wrapper to avoid crashing if port is in use
