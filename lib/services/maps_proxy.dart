@@ -8,15 +8,33 @@ import 'catlab_trace.dart';
 /// REST endpoints are blocked by CORS and should be proxied via a backend.
 /// This file centralizes the guard so callers can be migrated later.
 
-bool mapsDirectCallsAllowed() => !kIsWeb;
+bool mapsDirectCallsAllowed() => debugMapsDirectCallsAllowed ?? !kIsWeb;
+
+/// Nur für Tests: erzwingt den Web-Weg über den Proxy auch in der VM, damit
+/// Tests die tatsächlichen Proxy-Aufrufe zählen können.
+@visibleForTesting
+bool? debugMapsDirectCallsAllowed;
+@visibleForTesting
+String? debugMapsProxyBase;
+@visibleForTesting
+http.Client? debugMapsProxyClient;
 
 const String webBlockedMessage =
     'Web routing via direct Google REST request is blocked in browser';
 
 // Optional proxy base for web builds. Provide via `--dart-define=MAPS_PROXY_BASE=https://...`
-const String mapsProxyBase =
+const String _mapsProxyBaseDefine =
     String.fromEnvironment('MAPS_PROXY_BASE', defaultValue: '');
+String get mapsProxyBase => debugMapsProxyBase ?? _mapsProxyBaseDefine;
 bool mapsProxyConfigured() => mapsProxyBase.isNotEmpty;
+
+Future<http.Response> _post(Uri uri, String body) {
+  const headers = {'Content-Type': 'application/json'};
+  final client = debugMapsProxyClient;
+  return client != null
+      ? client.post(uri, headers: headers, body: body)
+      : http.post(uri, headers: headers, body: body);
+}
 
 /// Obergrenze für eine einzelne Proxy-Anfrage. Ohne Timeout bleibt ein
 /// hängender Request für immer offen und die App zeigt endlos
@@ -46,10 +64,8 @@ Future<Map<String, dynamic>> proxyGeocode(String address) async {
       ? mapsProxyBase.substring(0, mapsProxyBase.length - 1)
       : mapsProxyBase;
   final uri = Uri.parse('$base/api/geocode');
-  final res = await http
-      .post(uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'address': address, ...CatLabTrace.requestFields}))
+  final res = await _post(
+          uri, jsonEncode({'address': address, ...CatLabTrace.requestFields}))
       .timeout(proxyRequestTimeout);
   if (res.statusCode != 200)
     throw Exception('Proxy error HTTP ${res.statusCode}');
@@ -65,10 +81,9 @@ Future<Map<String, dynamic>> proxyReverseGeocode(
       ? mapsProxyBase.substring(0, mapsProxyBase.length - 1)
       : mapsProxyBase;
   final uri = Uri.parse('$base/api/geocode');
-  final res = await http.post(
+  final res = await _post(
     uri,
-    headers: {'Content-Type': 'application/json'},
-    body: jsonEncode(
+    jsonEncode(
       {'lat': latitude, 'lng': longitude, ...CatLabTrace.requestFields},
     ),
   ).timeout(proxyRequestTimeout);
@@ -91,10 +106,9 @@ Future<Map<String, dynamic>> proxyAutocomplete({
       ? mapsProxyBase.substring(0, mapsProxyBase.length - 1)
       : mapsProxyBase;
   final uri = Uri.parse('$base/api/autocomplete');
-  final res = await http.post(
+  final res = await _post(
     uri,
-    headers: {'Content-Type': 'application/json'},
-    body: jsonEncode({
+    jsonEncode({
       'input': input,
       'sessiontoken': sessionToken,
       'language': language,
@@ -139,11 +153,8 @@ Future<Map<String, dynamic>> proxyDirections({
     // zusammenfassen kann. Der Proxy ignoriert die Felder fuer Google.
     ...CatLabTrace.requestFields,
   };
-  final res = await http
-      .post(uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload))
-      .timeout(proxyRequestTimeout);
+  final res =
+      await _post(uri, jsonEncode(payload)).timeout(proxyRequestTimeout);
   if (res.statusCode != 200)
     throw Exception('Proxy error HTTP ${res.statusCode}');
   return jsonDecode(res.body) as Map<String, dynamic>;

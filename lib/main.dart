@@ -236,9 +236,21 @@ class _HomeScreenState extends State<HomeScreen> {
   int _manualDepartureMinute = DateTime.now().minute;
   bool _manualDepartureActive = false;
 
-  // Visible resolved previews provided by PlaceInput via onConfirmed
+  // Was ein Feld zuletzt aufgelöst hat. Gilt nur, solange genau dieser Text
+  // noch im Feld steht; jede Eingabe von Hand setzt es zurück.
   String? _resolvedStart;
   String? _resolvedDestination;
+  String? _resolvedStop;
+  LatLng? _resolvedStopCoord;
+
+  static bool _isResolved(
+    String? resolvedText,
+    Object? coordinate,
+    TextEditingController ctl,
+  ) =>
+      coordinate != null &&
+      resolvedText != null &&
+      resolvedText == ctl.text.trim();
 
   @override
   void initState() {
@@ -270,18 +282,25 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _addingStop = true);
     String label = raw;
     LatLng? coordinate;
-    try {
-      final resolved = await GeocodingService.resolve(raw);
-      label = resolved.description;
-      coordinate = LatLng(resolved.lat, resolved.lng);
-    } catch (error) {
-      debugPrint('Zwischenstopp konnte nicht vorab aufgelöst werden: $error');
+    if (_isResolved(_resolvedStop, _resolvedStopCoord, _stopCtl)) {
+      // Schon beim Auswählen des Vorschlags aufgelöst.
+      coordinate = _resolvedStopCoord;
+    } else {
+      try {
+        final resolved = await GeocodingService.resolve(raw);
+        label = resolved.description;
+        coordinate = LatLng(resolved.lat, resolved.lng);
+      } catch (error) {
+        debugPrint('Zwischenstopp konnte nicht vorab aufgelöst werden: $error');
+      }
     }
     if (!mounted) return;
     setState(() {
       _stops.add(label);
       _stopCoords.add(coordinate);
       _stopCtl.clear();
+      _resolvedStop = null;
+      _resolvedStopCoord = null;
       _addingStop = false;
       _etaResult = null;
       _ferryLegPlan = null;
@@ -1052,27 +1071,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // km bevorzugt via Directions
       double km = double.tryParse(_kmCtl.text.trim()) ?? 0.0;
-      var s = (_resolvedStart != null && _resolvedStart!.trim().isNotEmpty)
-          ? _resolvedStart!.trim()
-          : _startCtl.text.trim();
-      var d = (_resolvedDestination != null &&
-              _resolvedDestination!.trim().isNotEmpty)
-          ? _resolvedDestination!.trim()
-          : _destCtl.text.trim();
 
-      // Try to finalize autocomplete suggestions for start/destination if user didn't explicitly pick one
+      // Nur was noch nicht aufgelöst ist, wird hier geocodiert. Ein Vorschlag,
+      // "Ort prüfen" oder "Meine Position" haben Text und Koordinaten schon
+      // geliefert; ein erneuter Aufruf brächte nichts Neues.
       try {
-        if (!places_auto.isExplicitlySelectedForController(_startCtl)) {
-          final typed = s;
+        if (!_isResolved(_resolvedStart, _startLat, _startCtl)) {
+          final typed = _startCtl.text.trim();
           bool finalized = false;
           try {
             if (typed.isNotEmpty) {
               final geores = await GeocodingService.resolve(typed);
               if (geores != null && geores.description.isNotEmpty) {
                 _startCtl.text = geores.description;
+                _resolvedStart = geores.description.trim();
+                _startLat = geores.lat;
+                _startLng = geores.lng;
                 debugPrint(
                     'finalizing start via geocoding: ${geores.description}');
-                places_auto.markExplicitSelection(_startCtl);
                 finalized = true;
               }
             }
@@ -1082,7 +1098,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (!finalized) {
             final sug = places_auto.getSuggestionsForController(_startCtl);
             if (sug.isNotEmpty) {
-              final low = s.toLowerCase();
+              final low = typed.toLowerCase();
               String chosen = sug.first;
               final idxExact = sug.indexWhere((x) => x.toLowerCase() == low);
               if (idxExact != -1) {
@@ -1094,7 +1110,6 @@ class _HomeScreenState extends State<HomeScreen> {
               }
               _startCtl.text = chosen;
               debugPrint('fallback to autocomplete suggestion: $chosen');
-              places_auto.markExplicitSelection(_startCtl);
             }
           }
         }
@@ -1103,17 +1118,19 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       try {
-        if (!places_auto.isExplicitlySelectedForController(_destCtl)) {
-          final typed = d;
+        if (!_isResolved(_resolvedDestination, _destLat, _destCtl)) {
+          final typed = _destCtl.text.trim();
           bool finalized = false;
           try {
             if (typed.isNotEmpty) {
               final geores = await GeocodingService.resolve(typed);
               if (geores != null && geores.description.isNotEmpty) {
                 _destCtl.text = geores.description;
+                _resolvedDestination = geores.description.trim();
+                _destLat = geores.lat;
+                _destLng = geores.lng;
                 debugPrint(
                     'finalizing destination via geocoding: ${geores.description}');
-                places_auto.markExplicitSelection(_destCtl);
                 finalized = true;
               }
             }
@@ -1123,7 +1140,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (!finalized) {
             final sug = places_auto.getSuggestionsForController(_destCtl);
             if (sug.isNotEmpty) {
-              final low = d.toLowerCase();
+              final low = typed.toLowerCase();
               String chosen = sug.first;
               final idxExact = sug.indexWhere((x) => x.toLowerCase() == low);
               if (idxExact != -1) {
@@ -1135,7 +1152,6 @@ class _HomeScreenState extends State<HomeScreen> {
               }
               _destCtl.text = chosen;
               debugPrint('fallback to autocomplete suggestion: $chosen');
-              places_auto.markExplicitSelection(_destCtl);
             }
           }
         }
@@ -1143,15 +1159,12 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('finalize dest suggestion error: $e');
       }
 
-      // Die Autovervollständigung kann inzwischen präzisere Orts- und
+      // Geroutet wird immer mit dem Text, der jetzt im Feld steht – nie mit
+      // einem früher aufgelösten Wert, den der Nutzer inzwischen überschrieben
+      // hat. Die Autovervollständigung kann oben präzisere Orts- und
       // Landesnamen geliefert haben. Diese Werte steuern auch das Norwegenprofil.
-      s = (_resolvedStart != null && _resolvedStart!.trim().isNotEmpty)
-          ? _resolvedStart!.trim()
-          : _startCtl.text.trim();
-      d = (_resolvedDestination != null &&
-              _resolvedDestination!.trim().isNotEmpty)
-          ? _resolvedDestination!.trim()
-          : _destCtl.text.trim();
+      final s = _startCtl.text.trim();
+      final d = _destCtl.text.trim();
 
       // debug: show start/destination read from controllers before validation
       // ignore: avoid_print
@@ -1929,30 +1942,16 @@ class _HomeScreenState extends State<HomeScreen> {
                               controller: _startCtl,
                               initialText: _startCtl.text,
                               enableCurrentLocation: true,
-                              onCoordinatesResolved: (lat, lng) => setState(() {
+                              onResolved: (text, lat, lng) => setState(() {
+                                _resolvedStart = text;
                                 _startLat = lat;
                                 _startLng = lng;
                               }),
-                              onChanged: (v) => _startCtl.text = v,
-                              onConfirmed: (v) async {
-                                final txt = v.trim();
-                                if (txt.isEmpty) return;
-                                // store resolved preview (do not overwrite controller)
-                                setState(() => _resolvedStart = txt);
-                                // attempt to resolve coordinates for routing, but keep controller as-is
-                                try {
-                                  final r = await GeocodingService.resolve(txt);
-                                  setState(() {
-                                    _startLat = r.lat;
-                                    _startLng = r.lng;
-                                  });
-                                  // debug
-                                  print('preview resolved start: $txt');
-                                } catch (e) {
-                                  debugPrint(
-                                      'start preview geocoding failed: $e');
-                                }
-                              },
+                              onEdited: (_) => setState(() {
+                                _resolvedStart = null;
+                                _startLat = null;
+                                _startLng = null;
+                              }),
                             ),
                           ),
                           SizedBox(
@@ -1965,29 +1964,16 @@ class _HomeScreenState extends State<HomeScreen> {
                               initialText: _destCtl.text,
                               originLat: _startLat,
                               originLng: _startLng,
-                              onCoordinatesResolved: (lat, lng) => setState(() {
+                              onResolved: (text, lat, lng) => setState(() {
+                                _resolvedDestination = text;
                                 _destLat = lat;
                                 _destLng = lng;
                               }),
-                              onChanged: (v) => _destCtl.text = v,
-                              onConfirmed: (v) async {
-                                final txt = v.trim();
-                                if (txt.isEmpty) return;
-                                // store resolved preview (do not overwrite controller)
-                                setState(() => _resolvedDestination = txt);
-                                try {
-                                  final r = await GeocodingService.resolve(txt);
-                                  setState(() {
-                                    _destLat = r.lat;
-                                    _destLng = r.lng;
-                                  });
-                                  // debug
-                                  print('preview resolved destination: $txt');
-                                } catch (e) {
-                                  debugPrint(
-                                      'destination preview geocoding failed: $e');
-                                }
-                              },
+                              onEdited: (_) => setState(() {
+                                _resolvedDestination = null;
+                                _destLat = null;
+                                _destLng = null;
+                              }),
                             ),
                           ),
                         ],
@@ -2014,6 +2000,16 @@ class _HomeScreenState extends State<HomeScreen> {
                             hint: 'Adresse oder Ort eingeben',
                             controller: _stopCtl,
                             initialText: _stopCtl.text,
+                            onResolved: (text, lat, lng) {
+                              _resolvedStop = text;
+                              _resolvedStopCoord = lat != null && lng != null
+                                  ? LatLng(lat, lng)
+                                  : null;
+                            },
+                            onEdited: (_) {
+                              _resolvedStop = null;
+                              _resolvedStopCoord = null;
+                            },
                           ),
                           const SizedBox(height: 8),
                           Align(

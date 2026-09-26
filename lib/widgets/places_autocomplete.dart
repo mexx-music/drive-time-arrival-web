@@ -29,6 +29,7 @@ class PlacesAutocompleteField extends StatefulWidget {
     this.includeQueryPredictions = false,
     this.mode = PlacesAutocompleteMode.inline,
     this.onSearchPressed,
+    this.onUserEdit,
   });
 
   final String apiKey;
@@ -41,6 +42,9 @@ class PlacesAutocompleteField extends StatefulWidget {
       onPlacePicked;
   final PlacesAutocompleteMode mode;
   final VoidCallback? onSearchPressed;
+
+  /// Nur echte Tastatureingaben, nicht das programmatische Setzen des Texts.
+  final ValueChanged<String>? onUserEdit;
 
   // Bias / Filter
   final double? originLat;
@@ -103,6 +107,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
     _debounce?.cancel();
     // user typed -> clear explicit selection mark for this controller
     _resetExplicitSelectionForController(widget.controller);
+    widget.onUserEdit?.call(s);
     if (s.trim().length < _kMinChars) {
       setState(() {
         _items = [];

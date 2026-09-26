@@ -17,7 +17,16 @@ class PlaceInput extends StatefulWidget {
   final bool enableCurrentLocation;
   final double? originLat;
   final double? originLng;
-  final void Function(double latitude, double longitude)? onCoordinatesResolved;
+
+  /// Ein aufgelöster Ort: der Text, der jetzt im Feld steht, samt den
+  /// Koordinaten, sofern die Auflösung sie schon geliefert hat. Wer beides
+  /// hier bekommt, muss denselben Text nicht noch einmal geocodieren.
+  final void Function(String text, double? latitude, double? longitude)?
+      onResolved;
+
+  /// Der Nutzer hat den Text von Hand verändert. Was vorher aufgelöst war,
+  /// gehört damit nicht mehr zu diesem Text.
+  final ValueChanged<String>? onEdited;
 
   const PlaceInput({
     super.key,
@@ -31,7 +40,8 @@ class PlaceInput extends StatefulWidget {
     this.enableCurrentLocation = false,
     this.originLat,
     this.originLng,
-    this.onCoordinatesResolved,
+    this.onResolved,
+    this.onEdited,
   });
 
   @override
@@ -44,6 +54,8 @@ class _PlaceInputState extends State<PlaceInput>
   final FocusNode _focusNode = FocusNode();
 
   String? _resolvedPreview;
+  double? _resolvedLat;
+  double? _resolvedLng;
   int _reqCounter = 0;
   int _activeReqId = 0;
   String _pendingQuery = '';
@@ -109,14 +121,17 @@ class _PlaceInputState extends State<PlaceInput>
     return lab.contains('start');
   }
 
-  void _applyResolvedValue(String value) {
+  void _applyResolvedValue(String value, {double? lat, double? lng}) {
     _suppressControllerListener = true;
     _ctl.text = value;
     _suppressControllerListener = false;
     _resolvedPreview = value;
+    _resolvedLat = lat;
+    _resolvedLng = lng;
 
     setState(() {});
 
+    widget.onResolved?.call(value.trim(), lat, lng);
     widget.onChanged?.call(value);
     widget.onConfirmed?.call(value);
 
@@ -142,7 +157,7 @@ class _PlaceInputState extends State<PlaceInput>
     try {
       final res = await GeocodingService.resolve(raw);
       if (res != null && res.description.isNotEmpty) {
-        _applyResolvedValue(res.description);
+        _applyResolvedValue(res.description, lat: res.lat, lng: res.lng);
         debugPrint('preview resolved ${widget.label}: ${res.description}');
       }
     } catch (e) {
@@ -164,7 +179,7 @@ class _PlaceInputState extends State<PlaceInput>
     try {
       final res = await GeocodingService.resolve(raw);
       if (res != null && res.description.isNotEmpty) {
-        _applyResolvedValue(res.description);
+        _applyResolvedValue(res.description, lat: res.lat, lng: res.lng);
         debugPrint('preview resolved ${widget.label}: ${res.description}');
       }
     } catch (e) {
@@ -200,11 +215,6 @@ class _PlaceInputState extends State<PlaceInput>
           timeLimit: Duration(seconds: 15),
         ),
       );
-      widget.onCoordinatesResolved?.call(
-        position.latitude,
-        position.longitude,
-      );
-
       var description =
           '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
       try {
@@ -219,7 +229,13 @@ class _PlaceInputState extends State<PlaceInput>
 
       _lastSelectedSuggestion = description;
       _hasSelectedSuggestion = true;
-      _applyResolvedValue(description);
+      // Die GPS-Position ist genauer als alles, was eine erneute Auflösung
+      // des Adresstexts liefern könnte. Der Text dient nur der Anzeige.
+      _applyResolvedValue(
+        description,
+        lat: position.latitude,
+        lng: position.longitude,
+      );
       if (mounted) FocusScope.of(context).unfocus();
     } on _LocationMessage catch (error) {
       if (mounted) _showMessage(error.text);
@@ -300,7 +316,7 @@ class _PlaceInputState extends State<PlaceInput>
       }
 
       if (res != null && res.description.isNotEmpty) {
-        _applyResolvedValue(res.description);
+        _applyResolvedValue(res.description, lat: res.lat, lng: res.lng);
 
         if (_isStartField) {
           debugPrint('visible finalization for start: ${res.description}');
@@ -450,7 +466,8 @@ class _PlaceInputState extends State<PlaceInput>
                 final applied = _resolvedPreview!;
                 _lastSelectedSuggestion = applied;
                 _hasSelectedSuggestion = true;
-                _applyResolvedValue(applied);
+                _applyResolvedValue(applied,
+                    lat: _resolvedLat, lng: _resolvedLng);
                 debugPrint(
                     'applied resolved place for ${widget.label}: $applied');
               },
@@ -512,11 +529,7 @@ class _PlaceInputState extends State<PlaceInput>
               _lastSelectedSuggestion = description;
               _hasSelectedSuggestion = true;
 
-              if (lat != null && lng != null) {
-                widget.onCoordinatesResolved?.call(lat, lng);
-              }
-
-              _applyResolvedValue(description);
+              _applyResolvedValue(description, lat: lat, lng: lng);
 
               debugPrint('inline selection applied to field: $description');
 
@@ -526,6 +539,7 @@ class _PlaceInputState extends State<PlaceInput>
               }
             },
             onSearchPressed: _verifyCurrentText,
+            onUserEdit: (s) => widget.onEdited?.call(s),
           ),
           _currentLocationButton(),
           _buildResolvedPreview(),
@@ -556,7 +570,10 @@ class _PlaceInputState extends State<PlaceInput>
             ],
           ),
         ),
-        onChanged: (s) => widget.onChanged?.call(s),
+        onChanged: (s) {
+          widget.onEdited?.call(s);
+          widget.onChanged?.call(s);
+        },
         onSubmitted: (value) async {
           // User pressed Enter: cancel typing debounce and finalize immediately
           _typingTimer?.cancel();
@@ -568,7 +585,7 @@ class _PlaceInputState extends State<PlaceInput>
           try {
             final res = await GeocodingService.resolve(raw);
             if (res != null && res.description.isNotEmpty) {
-              _applyResolvedValue(res.description);
+              _applyResolvedValue(res.description, lat: res.lat, lng: res.lng);
               debugPrint('visible finalization by submit: ${res.description}');
               return;
             }
@@ -607,7 +624,10 @@ class _PlaceInputState extends State<PlaceInput>
               ],
             ),
           ),
-          onChanged: (s) => widget.onChanged?.call(s),
+          onChanged: (s) {
+            widget.onEdited?.call(s);
+            widget.onChanged?.call(s);
+          },
           onSubmitted: (value) async {
             // User pressed Enter: cancel typing debounce and finalize immediately
             _typingTimer?.cancel();
@@ -619,7 +639,8 @@ class _PlaceInputState extends State<PlaceInput>
             try {
               final res = await GeocodingService.resolve(raw);
               if (res != null && res.description.isNotEmpty) {
-                _applyResolvedValue(res.description);
+                _applyResolvedValue(res.description,
+                    lat: res.lat, lng: res.lng);
                 debugPrint(
                     'visible finalization by submit: ${res.description}');
                 return;
