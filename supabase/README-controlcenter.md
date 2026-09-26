@@ -12,7 +12,15 @@ DriveTime-Proxy schreibt noch nichts hierher.
 | `migrations/…0003_cc_billing.sql` | Rechnungsimporte, Rechnungsfakten, Abgleichssicht |
 | `migrations/…0004_cc_settings.sql` | Projekt- und Leistungseinstellungen |
 | `migrations/…0005_cc_seed_drivetime.sql` | Stammdaten DriveTime / Google Maps, bewusst ohne Preise |
-| `tests/schema_test.sql` | 20 Prüfungen, läuft in einer Transaktion und macht sie am Ende rückgängig |
+| `migrations/…0006_cc_identity.sql` | `cc.users` an `auth.users`, Konten und Mitgliedschaften; entfernt `cc.users.plan` |
+| `migrations/…0007_cc_quota.sql` | Plan-Kontingente, Entitlements, Tour-Ledger, Funktionen, Rechte |
+| `tests/auth_stub.sql` | Nur lokal: Ersatz für `auth.users`. Bricht in Supabase ab |
+| `tests/schema_test.sql` | Grundschema, läuft in einer Transaktion und macht sie am Ende rückgängig |
+| `tests/quota_test.sql` | Kontingent-Schicht, ebenfalls in einer zurückgenommenen Transaktion |
+| `tests/run_local.sh` | Stub, Migrationen, beide SQL-Tests und Prüfung auf zurückgebliebene Daten |
+
+Parallelität (echte getrennte Verbindungen) und der Migrationslauf selbst
+werden in `proxy/test/quota_db.test.js` geprüft.
 
 ## Lokal ausführen
 
@@ -21,11 +29,33 @@ Zugangsdatum, sondern eine Vorgabe ohne Bedeutung; der Container wird danach
 wieder entfernt.
 
 ```bash
-docker run -d --name cc-pg -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:16-alpine
-createdb -h localhost -p 55432 -U postgres controlcenter
-for f in supabase/migrations/*.sql; do psql -h localhost -p 55432 -U postgres -d controlcenter -v ON_ERROR_STOP=1 -f "$f"; done
-psql -h localhost -p 55432 -U postgres -d controlcenter -v ON_ERROR_STOP=1 -f supabase/tests/schema_test.sql
+docker run -d --rm --name cc-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=controlcenter -p 55432:5432 postgres:17-alpine
+PSQL="docker exec -i cc-pg psql -U postgres -d controlcenter" supabase/tests/run_local.sh
 ```
+
+In Supabase existiert `auth.users` bereits; dort läuft `auth_stub.sql` nie.
+
+## Kontingente: Rechte für den Proxy (noch nicht angelegt)
+
+Die Funktionen sind `SECURITY DEFINER` mit leerem `search_path`; niemand hat
+Rechte an den Tabellen. Eine spätere Proxy-Rolle bekommt nur:
+
+```sql
+grant usage on schema cc to <proxy_rolle>;
+grant execute on function cc.ensure_personal_account(uuid),
+                          cc.ensure_default_entitlement(uuid, text),
+                          cc.reserve_tour(uuid, text, uuid, uuid),
+                          cc.use_tour_call(uuid, uuid),
+                          cc.finish_tour_call(uuid, uuid, boolean),
+                          cc.release_tour(uuid, uuid),
+                          cc.complete_tour(uuid, uuid),
+                          cc.counter_try_increment(smallint, integer, text, text, text, numeric, numeric, numeric)
+  to <proxy_rolle>;
+```
+
+Plan-Kontingente (`cc.plan_quotas`) und Entitlements außerhalb des
+Standard-Free-Plans setzt nur ein Administrator. Ohne aktive, vollständige
+Kontingentzeile reserviert `cc.reserve_tour` keine Tour.
 
 ## Zwei Kostenzahlen, die nie addiert werden
 

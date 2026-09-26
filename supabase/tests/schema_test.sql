@@ -180,14 +180,37 @@ select cc_assert(
   'Verbrauchsdaten überleben das Löschen der Sitzung');
 
 -- =========================================== 7) Nutzer später anhängbar
+-- cc.users.id ist die ID aus Supabase Auth; ein Plan steht nicht mehr am
+-- Nutzer, sondern in cc.entitlements am Konto (Migration 0006/0007).
+insert into auth.users (id) values ('33333333-3333-3333-3333-333333333333');
 insert into cc.users (id) values ('33333333-3333-3333-3333-333333333333');
 insert into cc.sessions (id, project_id, user_id)
 select '44444444-4444-4444-4444-444444444444', id,
        '33333333-3333-3333-3333-333333333333'
   from cc.projects where key='drivetime';
 select cc_assert(
-  (select plan from cc.users where id='33333333-3333-3333-3333-333333333333') = 'free',
-  'Nutzer bekommt standardmäßig den Free-Plan');
+  (select count(*) from information_schema.columns
+    where table_schema='cc' and table_name='users' and column_name='plan') = 0,
+  'Nutzer trägt keinen eigenen Plan mehr');
+
+do $$
+declare blocked boolean := false;
+begin
+  begin
+    insert into cc.users (id) values ('55555555-5555-5555-5555-555555555555');
+  exception when foreign_key_violation then blocked := true;
+  end;
+  perform cc_assert(blocked, 'cc.users nur für existierende Auth-Nutzer');
+end $$;
+
+-- Auth-Nutzer löschen: cc.users geht mit, die Sitzung bleibt anonym bestehen.
+delete from auth.users where id='33333333-3333-3333-3333-333333333333';
+select cc_assert(
+  not exists (select 1 from cc.users where id='33333333-3333-3333-3333-333333333333'),
+  'Löschen in auth.users entfernt den cc-Nutzer');
+select cc_assert(
+  (select user_id is null from cc.sessions where id='44444444-4444-4444-4444-444444444444'),
+  'Sitzung überlebt das Löschen des Nutzers anonym');
 
 -- ================================================= 8) Zähler-Hochzählen
 insert into cc.counters (project_id, service_id, scope, scope_key, period, quantity, cost_estimate)

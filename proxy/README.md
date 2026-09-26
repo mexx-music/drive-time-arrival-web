@@ -67,8 +67,9 @@ nicht an Google weitergereicht.
 Tests:
 
 ```bash
-docker run -d --name cc-test -e POSTGRES_PASSWORD=test -p 55433:5432 postgres:17-alpine
-# Migrationen aus supabase/migrations einspielen, dann:
+docker run -d --name cc-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=cc -p 55433:5432 postgres:17-alpine
+# auth_stub.sql, alle Migrationen und die SQL-Tests einspielen:
+PSQL="docker exec -i cc-test psql -U postgres -d cc" ../supabase/tests/run_local.sh
 CONTROL_CENTER_TEST_URL="postgresql://postgres:test@127.0.0.1:55433/cc?sslmode=disable" npm test
 ```
 
