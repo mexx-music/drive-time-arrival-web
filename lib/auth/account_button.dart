@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../account/account_service.dart';
 import 'auth_service.dart';
 
 /// Anmelde-Knopf in der Kopfzeile. Bei ausgeschaltetem Login unsichtbar.
 class AccountButton extends StatelessWidget {
-  const AccountButton({super.key, required this.auth});
+  const AccountButton({super.key, required this.auth, this.account});
 
   final AuthService auth;
+
+  /// Kontozustand laut Proxy; null = nicht angebunden.
+  final AccountService? account;
 
   @override
   Widget build(BuildContext context) {
@@ -26,17 +30,55 @@ class AccountButton extends StatelessWidget {
           icon: const Icon(Icons.account_circle_rounded),
           onSelected: (value) async {
             if (value == 'logout') await auth.signOut();
+            if (value == 'retry') await account?.retry();
           },
-          itemBuilder: (_) => [
-            PopupMenuItem<String>(
-              enabled: false,
-              child: Text(user.email ?? 'Angemeldet'),
-            ),
-            const PopupMenuItem<String>(value: 'logout', child: Text('Abmelden')),
-          ],
+          itemBuilder: (_) {
+            final state = account?.state.value;
+            return [
+              PopupMenuItem<String>(
+                enabled: false,
+                child: Text(user.email ?? 'Angemeldet'),
+              ),
+              if (state != null)
+                PopupMenuItem<String>(
+                  key: const Key('account-state'),
+                  enabled: false,
+                  child: Text(accountStateLabel(state)),
+                ),
+              if (state?.phase == AccountPhase.error)
+                const PopupMenuItem<String>(
+                    value: 'retry', child: Text('Erneut versuchen')),
+              const PopupMenuItem<String>(value: 'logout', child: Text('Abmelden')),
+            ];
+          },
         );
       },
     );
+  }
+}
+
+/// Anzeige des Kontozustands. Ein Plan erscheint nur, wenn der Proxy ihn
+/// bestätigt hat – bei einem Fehler nie ein Ersatz-Plan.
+String accountStateLabel(AccountState state) {
+  switch (state.phase) {
+    case AccountPhase.disabled:
+    case AccountPhase.signedOut:
+      return '';
+    case AccountPhase.loading:
+      return 'Konto wird geladen …';
+    case AccountPhase.ready:
+      return 'Plan: ${state.info!.planKey}';
+    case AccountPhase.error:
+      return switch (state.error!) {
+        AccountErrorKind.sessionRejected =>
+          'Konto nicht verfügbar: bitte neu anmelden',
+        AccountErrorKind.forbidden => 'Konto nicht verfügbar: kein Zugriff',
+        AccountErrorKind.network => 'Konto nicht verfügbar: keine Verbindung',
+        AccountErrorKind.unavailable ||
+        AccountErrorKind.notConfigured ||
+        AccountErrorKind.invalidResponse =>
+          'Konto gerade nicht verfügbar',
+      };
   }
 }
 

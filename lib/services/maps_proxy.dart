@@ -28,8 +28,9 @@ const String _mapsProxyBaseDefine =
 String get mapsProxyBase => debugMapsProxyBase ?? _mapsProxyBaseDefine;
 bool mapsProxyConfigured() => mapsProxyBase.isNotEmpty;
 
-Future<http.Response> _post(Uri uri, String body) {
-  const headers = {'Content-Type': 'application/json'};
+Future<http.Response> _post(Uri uri, String body,
+    {Map<String, String> extraHeaders = const {}}) {
+  final headers = {'Content-Type': 'application/json', ...extraHeaders};
   final client = debugMapsProxyClient;
   return client != null
       ? client.post(uri, headers: headers, body: body)
@@ -122,6 +123,36 @@ Future<Map<String, dynamic>> proxyAutocomplete({
     throw Exception('Proxy error HTTP ${res.statusCode}');
   }
   return jsonDecode(res.body) as Map<String, dynamic>;
+}
+
+/// Der Proxy ist in diesem Build nicht eingerichtet (kein MAPS_PROXY_BASE).
+class ProxyNotConfiguredException implements Exception {
+  const ProxyNotConfiguredException();
+}
+
+/// POST /api/account/bootstrap mit dem Supabase-Zugangstoken.
+///
+/// Schickt bewusst einen leeren Körper: Nutzer, Konto und Plan bestimmt allein
+/// der Proxy anhand des geprüften Tokens. Liefert Status und (falls lesbar)
+/// den JSON-Körper; die Bewertung übernimmt der Aufrufer.
+Future<({int status, Object? body})> proxyAccountBootstrap(
+    String accessToken) async {
+  if (!mapsProxyConfigured()) throw const ProxyNotConfiguredException();
+  final base = mapsProxyBase.endsWith('/')
+      ? mapsProxyBase.substring(0, mapsProxyBase.length - 1)
+      : mapsProxyBase;
+  final res = await _post(
+    Uri.parse('$base/api/account/bootstrap'),
+    '{}',
+    extraHeaders: {'Authorization': 'Bearer $accessToken'},
+  ).timeout(proxyRequestTimeout);
+  Object? body;
+  try {
+    body = jsonDecode(res.body);
+  } catch (_) {
+    body = null;
+  }
+  return (status: res.statusCode, body: body);
 }
 
 /// Proxy helper: POST /api/directions with { origin, destination, waypoints }

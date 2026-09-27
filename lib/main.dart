@@ -42,6 +42,7 @@ import 'auth/auth_config.dart';
 import 'auth/auth_service.dart';
 import 'auth/supabase_auth_service.dart';
 import 'auth/account_button.dart';
+import 'account/account_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -60,7 +61,9 @@ Future<void> main() async {
     // show proxy config in debug
     if (kDebugMode) logMapsProxyConfig();
   }
-  runApp(DriverRouteApp(auth: await _initAuth()));
+  final auth = await _initAuth();
+  // Konto erst nach bestätigter Anmeldung, und nur so, wie der Proxy es meldet.
+  runApp(DriverRouteApp(auth: auth, account: AccountService(auth: auth)));
 }
 
 /// Login nur, wenn die öffentlichen Supabase-Werte beim Build gesetzt wurden.
@@ -78,9 +81,11 @@ Future<AuthService> _initAuth() async {
 }
 
 class DriverRouteApp extends StatelessWidget {
-  const DriverRouteApp({super.key, this.auth = const DisabledAuthService()});
+  const DriverRouteApp(
+      {super.key, this.auth = const DisabledAuthService(), this.account});
 
   final AuthService auth;
+  final AccountService? account;
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -156,15 +161,17 @@ class DriverRouteApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: HomeScreen(auth: auth),
+      home: HomeScreen(auth: auth, account: account),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, this.auth = const DisabledAuthService()});
+  const HomeScreen(
+      {super.key, this.auth = const DisabledAuthService(), this.account});
 
   final AuthService auth;
+  final AccountService? account;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -1925,7 +1932,10 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         centerTitle: false,
         actions: widget.auth.enabled
-            ? [AccountButton(auth: widget.auth), const SizedBox(width: 8)]
+            ? [
+                AccountButton(auth: widget.auth, account: widget.account),
+                const SizedBox(width: 8),
+              ]
             : null,
       ),
       body: LayoutBuilder(
