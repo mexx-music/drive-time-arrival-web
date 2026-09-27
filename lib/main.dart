@@ -38,6 +38,10 @@ import 'widgets/tour_result_view.dart';
 import 'ui/map_osm_view.dart';
 import 'utils/open_in_tab.dart';
 import 'services/map_launcher.dart' as map_launcher;
+import 'auth/auth_config.dart';
+import 'auth/auth_service.dart';
+import 'auth/supabase_auth_service.dart';
+import 'auth/account_button.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -56,11 +60,27 @@ Future<void> main() async {
     // show proxy config in debug
     if (kDebugMode) logMapsProxyConfig();
   }
-  runApp(const DriverRouteApp());
+  runApp(DriverRouteApp(auth: await _initAuth()));
+}
+
+/// Login nur, wenn die öffentlichen Supabase-Werte beim Build gesetzt wurden.
+/// Ohne sie – oder bei einer unsicheren Einstellung – läuft die App wie
+/// bisher ohne Anmeldung.
+Future<AuthService> _initAuth() async {
+  try {
+    final config = AuthConfig.fromEnvironment();
+    if (config == null) return const DisabledAuthService();
+    return await SupabaseAuthService.initialize(config);
+  } catch (error) {
+    debugPrint('Login deaktiviert: $error');
+    return const DisabledAuthService();
+  }
 }
 
 class DriverRouteApp extends StatelessWidget {
-  const DriverRouteApp({super.key});
+  const DriverRouteApp({super.key, this.auth = const DisabledAuthService()});
+
+  final AuthService auth;
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -136,13 +156,15 @@ class DriverRouteApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: const HomeScreen(),
+      home: HomeScreen(auth: auth),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.auth = const DisabledAuthService()});
+
+  final AuthService auth;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -1902,6 +1924,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         centerTitle: false,
+        actions: widget.auth.enabled
+            ? [AccountButton(auth: widget.auth), const SizedBox(width: 8)]
+            : null,
       ),
       body: LayoutBuilder(
         builder: (context, viewport) {
