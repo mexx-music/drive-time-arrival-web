@@ -2,41 +2,20 @@
  * und das Standard-Entitlement (Free) fuer DriveTime an.
  *
  * Anders als die Telemetrie ist das kein Best-effort: der Aufrufer wartet auf
- * das Ergebnis, und ein Fehler wird gemeldet statt verschluckt. Deshalb ein
- * eigener kleiner Pool - der Telemetrie-Pool legt sich nach einem Fehler
- * bewusst eine Minute schlafen.
+ * das Ergebnis, und ein Fehler wird gemeldet statt verschluckt (ccdb.js).
  *
  * Idempotent: beide Datenbankfunktionen legen nur an, was fehlt. Ein
  * wiederholter Aufruf liefert dasselbe Konto und aendert nichts.
  */
 const PROJECT_KEY = 'drivetime';
 
-let pool = null;
-
-function getPool() {
-  if (pool) return pool;
-  const url = process.env.CONTROL_CENTER_DATABASE_URL;
-  if (!url) return null;
-  const { Pool } = require('pg');
-  pool = new Pool({
-    connectionString: url,
-    ssl: String(url).includes('sslmode=disable') ? false : { rejectUnauthorized: false },
-    max: Number(process.env.CONTROL_CENTER_SYNC_POOL_MAX || 2),
-    connectionTimeoutMillis: 5000,
-    idleTimeoutMillis: 30_000,
-    // Eine haengende Anfrage darf keine Verbindung ewig belegen.
-    statement_timeout: 5000,
-  });
-  // Ein Fehler an einer ruhenden Verbindung darf den Prozess nicht beenden.
-  pool.on('error', (err) => console.warn(`[account] Pool-Fehler (${err.code || 'unbekannt'})`));
-  return pool;
-}
+const ccdb = require('./ccdb');
 
 class BootstrapError extends Error {}
 
 /** Legt Konto und Free-Entitlement fuer userId an (falls noch nicht da). */
 async function bootstrapAccount(userId) {
-  const p = getPool();
+  const p = ccdb.getPool();
   if (!p) throw new BootstrapError('nicht konfiguriert');
   const client = await p.connect();
   try {
@@ -82,8 +61,7 @@ async function handleBootstrap(req, res) {
 
 /** Nur fuer Tests. */
 async function _reset() {
-  if (pool) await pool.end().catch(() => {});
-  pool = null;
+  await ccdb._reset();
 }
 
 module.exports = { handleBootstrap, bootstrapAccount, _reset };

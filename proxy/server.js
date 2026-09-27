@@ -14,6 +14,7 @@ const telemetry = require('./telemetry');
 const guard = require('./guard');
 const auth = require('./auth');
 const account = require('./account');
+const tours = require('./tours');
 
 const app = express();
 app.set('trust proxy', guard.trustProxySetting());
@@ -75,6 +76,25 @@ function googleStatusOk(status) {
   return status === 'OK' || status === 'ZERO_RESULTS';
 }
 
+// Obergrenze fuer einen einzelnen Google-Aufruf. Ohne sie haengt ein Aufruf
+// unbegrenzt - und eine Tour bliebe so lange mit einem laufenden Aufruf
+// belegt. Muss deutlich unter dem Nachlauf der Touren (5 min) liegen.
+function googleTimeoutMs() {
+  const n = Number(process.env.GOOGLE_TIMEOUT_MS);
+  return Number.isInteger(n) && n > 0 ? n : 30_000;
+}
+
+// Telemetrie-Zuordnung: im Tour-Modus ist die Tour die Arbeitseinheit
+// (tours.id = work_units.id), unabhaengig davon, was der Client als
+// cc_work_unit mitschickt.
+function traceFor(req, params) {
+  if (!req.tourCall) return telemetry.traceFrom(params);
+  return {
+    workUnitId: req.tourCall.tourId,
+    workUnitKind: params && params.cc_work_kind === 'route_ferry' ? 'route_ferry' : 'route',
+  };
+}
+
 /* Einzige Stelle, an der ein Google-Aufruf verbucht wird.
  *
  * Jeder Aufruf laeuft hier durch, deshalb kann weder einer doppelt gezaehlt
@@ -83,7 +103,11 @@ function googleStatusOk(status) {
  * ok=false. Der Fehler selbst wird nicht angefasst und laeuft weiter nach
  * oben, als gaebe es dieses Modul nicht.
  */
-async function googleCall(endpoint, trace, run) {
+async function googleCall(endpoint, trace, run, tour) {
+  // Tour-Modus: erst das Budget verbindlich belegen. Lehnt die Datenbank ab
+  // oder ist sie nicht erreichbar, wirft beginCall - Google wird dann gar
+  // nicht erst angefragt.
+  if (tour) await tours.beginCall(tour);
   let ok = false;
   try {
     const out = await run();
@@ -97,11 +121,22 @@ async function googleCall(endpoint, trace, run) {
       cacheHit: false,
       ...trace,
     });
+    // Immer abschliessen, auch nach Fehler oder Timeout - sonst bliebe der
+    // Aufruf als laufend vermerkt.
+    if (tour) await tours.endCall(tour, ok);
   }
 }
 
+// Fehler von Google-Aufrufen enthalten die volle Adresse - samt API-Key und
+// Adressen der Nutzer. Deshalb nur die Fehlerart protokollieren und dem
+// Client nie eine Fehlermeldung durchreichen.
+function logProviderError(endpoint, err) {
+  const kind = (err && (err.type || err.code || err.name)) || 'unbekannt';
+  console.error(`[proxy] ${endpoint}: Aufruf fehlgeschlagen (${kind})`);
+}
+
 function forwardGet(url) {
-  return fetch(url).then(async (r) => {
+  return fetch(url, { timeout: googleTimeoutMs() }).then(async (r) => {
     const text = await r.text();
     return { status: r.status, body: text };
   });
@@ -121,7 +156,7 @@ const handleDirections = async (req, res) => {
 
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
 
-    const trace = telemetry.traceFrom(params);
+    const trace = traceFor(req, params);
     const url = new URL(`${GOOGLE_MAPS_BASE}/maps/api/directions/json`);
 
     url.searchParams.append('origin', origin);
@@ -146,26 +181,27 @@ const handleDirections = async (req, res) => {
     }
 
     const data = await googleCall('directions', trace, async () => {
-      const response = await fetch(url.toString());
+      const response = await fetch(url.toString(), { timeout: googleTimeoutMs() });
       const body = await response.json();
       return {
         ok: response.ok && googleStatusOk(body.status),
         value: body,
       };
-    });
+    }, req.tourCall);
 
     res.json(data);
 
   } catch (err) {
-    console.error('Directions proxy error:', err);
+    if (err instanceof tours.TourDenied) return tours.sendDenied(err, res);
+    logProviderError('directions', err);
     res.status(500).json({ error: 'Proxy failed' });
   }
 };
 
-app.get('/api/directions', handleDirections);
-app.post('/api/directions', handleDirections);
+app.get('/api/directions', tours.gate('directions'), handleDirections);
+app.post('/api/directions', tours.gate('directions'), handleDirections);
 
-app.post('/api/geocode', async (req, res) => {
+app.post('/api/geocode', tours.gate('geocode'), async (req, res) => {
   try {
     const address = (req.body && req.body.address) || '';
     const lat = req.body && req.body.lat;
@@ -176,7 +212,7 @@ app.post('/api/geocode', async (req, res) => {
     const query = address
       ? `address=${encodeURIComponent(address)}`
       : `latlng=${encodeURIComponent(`${lat},${lng}`)}`;
-    const trace = telemetry.traceFrom(req.body);
+    const trace = traceFor(req, req.body);
     const url = `${GOOGLE_MAPS_BASE}/maps/api/geocode/json?${query}&key=${GOOGLE_KEY}`;
     const r = await googleCall('geocode', trace, async () => {
       const res = await forwardGet(url);
@@ -188,16 +224,17 @@ app.post('/api/geocode', async (req, res) => {
       }
       const httpOk = res.status >= 200 && res.status < 300;
       return { ok: httpOk && googleStatusOk(status), value: res };
-    });
+    }, req.tourCall);
     res.status(r.status).type('application/json').send(r.body);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'proxy_error', message: err.message });
+    if (err instanceof tours.TourDenied) return tours.sendDenied(err, res);
+    logProviderError(req.path, err);
+    res.status(500).json({ error: 'proxy_error' });
   }
 });
 
 
-app.post('/api/autocomplete', async (req, res) => {
+app.post('/api/autocomplete', tours.gate('autocomplete'), async (req, res) => {
   try {
     const { input, sessiontoken, language, location, radius } = req.body || {};
     if (!input) return res.status(400).json({ error: 'missing_input' });
@@ -222,9 +259,10 @@ app.post('/api/autocomplete', async (req, res) => {
       }
     }
 
-    const trace = telemetry.traceFrom(req.body);
+    const trace = traceFor(req, req.body);
     const response = await googleCall('autocomplete', trace, async () => {
       const res = await fetch(`${GOOGLE_PLACES_BASE}/v1/places:autocomplete`, {
+        timeout: googleTimeoutMs(),
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -236,12 +274,13 @@ app.post('/api/autocomplete', async (req, res) => {
       });
       // Places New meldet Fehler ueber den HTTP-Status, nicht im Koerper.
       return { ok: res.ok, value: res };
-    });
+    }, req.tourCall);
     const responseBody = await response.text();
     res.status(response.status).type('application/json').send(responseBody);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'proxy_error', message: err.message });
+    if (err instanceof tours.TourDenied) return tours.sendDenied(err, res);
+    logProviderError(req.path, err);
+    res.status(500).json({ error: 'proxy_error' });
   }
 });
 
@@ -250,13 +289,19 @@ app.post('/api/autocomplete', async (req, res) => {
 // Google-Geld und ist deshalb vom Not-Aus ausgenommen (guard.NON_PAID_PATHS).
 app.post('/api/account/bootstrap', auth.requireAuth, account.handleBootstrap);
 
+// Touren: reservieren, abschliessen, freigeben. Nutzer nur aus dem Token.
+app.post('/api/tours', auth.requireAuth, tours.handleReserve);
+app.post('/api/tours/:id/complete', auth.requireAuth, tours.handleComplete);
+app.post('/api/tours/:id/release', auth.requireAuth, tours.handleRelease);
+
 // Fehler als knappes JSON, nie als HTML-Seite mit Stacktrace und Dateipfaden.
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   const status = Number.isInteger(err.status) && err.status >= 400 && err.status < 600
     ? err.status
     : 500;
-  if (status >= 500) console.error(err);
+  // Nur die Fehlerart: Meldungen koennen Teile der Anfrage (Adressen) enthalten.
+  if (status >= 500) console.error(`[proxy] Fehler (${err.type || err.code || err.name})`);
   res.status(status).json({ error: status >= 500 ? 'proxy_error' : 'bad_request' });
 });
 

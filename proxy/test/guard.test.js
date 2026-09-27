@@ -34,6 +34,7 @@ async function boot() {
     CONTROL_CENTER_DATABASE_URL: 'postgresql://x:y@127.0.0.1:1/cc?sslmode=disable',
     TRUST_PROXY: '1',
     RATE_LIMIT_PER_MINUTE: String(LIMIT),
+    GOOGLE_TIMEOUT_MS: '300',
     PORT: '0',
   });
   delete process.env.PAID_CALLS_DISABLED;
@@ -60,6 +61,11 @@ function apiRoutes() {
  * ausgenommenen. Eine neue Route ist damit automatisch kostenpflichtig. */
 function paidRoutes() {
   return apiRoutes().filter((r) => !guard.NON_PAID_PATHS.has(r.path.replace(/^\/api/, '')));
+}
+
+/** Die Maps-Routen, die heute ohne Anmeldung Google aufrufen. */
+function mapsRoutes() {
+  return paidRoutes().filter((r) => BODIES[r.path] !== undefined);
 }
 
 const BODIES = {
@@ -112,6 +118,9 @@ test('Proxy-Schutz', { concurrency: false }, async (t) => {
       'POST /api/autocomplete',
       'POST /api/directions',
       'POST /api/geocode',
+      'POST /api/tours',
+      'POST /api/tours/:id/complete',
+      'POST /api/tours/:id/release',
     ]);
   });
 
@@ -226,7 +235,7 @@ test('Proxy-Schutz', { concurrency: false }, async (t) => {
       'http://127.0.0.1:8080',
       'http://localhost:61234',
     ]) {
-      for (const { method, path } of paidRoutes()) {
+      for (const { method, path } of mapsRoutes()) {
         const r = await call(method, path, { origin });
         assert.strictEqual(r.status, 200, `${origin} ${method} ${path}`);
         assert.strictEqual(r.acao, origin);
@@ -289,6 +298,33 @@ test('Proxy-Schutz', { concurrency: false }, async (t) => {
       assert.strictEqual(r.status, 200);
     }
     assert.strictEqual((await call('POST', '/api/geocode', { client: c })).status, 200);
+  });
+
+  // ------------------------------------------------ Google-Fehler und Key
+  await t.test('Google-Timeout: API-Key und Adressen weder im Log noch in der Antwort', async () => {
+    const logged = [];
+    const orig = { error: console.error, warn: console.warn, log: console.log };
+    for (const k of Object.keys(orig)) console[k] = (...a) => logged.push(a.map(String).join(' '));
+    google.setMode('hang');
+    try {
+      for (const [path, body] of [
+        ['/api/geocode', { address: 'Geheimgasse 7, Lambach' }],
+        ['/api/directions', { origin: 'Geheimgasse 7, Lambach', destination: 'Hamburg' }],
+        ['/api/autocomplete', { input: 'Geheimgasse' }],
+      ]) {
+        const r = await call('POST', path, { body: JSON.stringify(body) });
+        assert.strictEqual(r.status, 500, path);
+        assert.ok(!r.text.includes('testschluessel'), `API-Key in Antwort: ${path}`);
+        assert.ok(!r.text.includes('Geheimgasse'), `Adresse in Antwort: ${path}`);
+      }
+    } finally {
+      google.setMode('ok');
+      Object.assign(console, orig);
+    }
+    const all = logged.join('\n');
+    assert.match(all, /Aufruf fehlgeschlagen \(request-timeout\)/);
+    assert.ok(!all.includes('testschluessel'), 'API-Key im Log');
+    assert.ok(!all.includes('Geheimgasse'), 'Adresse im Log');
   });
 
   // --------------------------------------------------------------- Fehler

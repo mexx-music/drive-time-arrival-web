@@ -124,5 +124,40 @@ Umgebungsvariablen: `SUPABASE_URL` (oeffentliche Projekt-URL, ohne Schluessel)
 und die schon vorhandene `CONTROL_CENTER_DATABASE_URL`. Kein Service-Role-Key.
 Die Maps-Endpunkte verlangen (noch) keine Anmeldung.
 
+## Touren und Aufrufbudget (verbindliche Kostenkontrolle)
+
+Eine Berechnung ("Route berechnen") ist eine Tour. Im Tour-Modus gilt:
+
+1. `POST /api/tours` mit `{ "idempotency_key": "<uuid>" }` und Bearer-Token
+   reserviert eine Tour (`cc.reserve_tour`). Antwort 201/200 mit `tour_id`,
+   `call_budget`, `expires_at`; 402 `quota_exhausted`; 403 bei fehlendem
+   Kontingent/Entitlement; 503, wenn die Datenbank nicht erreichbar ist.
+2. Maps-Aufrufe schicken `tour_id` mit. Unmittelbar vor jedem Google-Aufruf
+   `cc.use_tour_call`, danach immer `cc.finish_tour_call` - auch nach Fehler
+   oder Timeout. Abgelehnt (404/409/429/503) wird, bevor Google angefragt wird.
+3. `POST /api/tours/:id/complete` bzw. `/release` schliesst ab bzw. gibt eine
+   Tour ohne Erfolg frei.
+
+Nutzer nur aus dem Token; Konto, Plan, Budget und Kontingent nur aus der
+Datenbank. Die Telemetrie ordnet Aufrufe im Tour-Modus der Tour zu
+(`tours.id = work_units.id`), bleibt aber best-effort und getrennt.
+
+Wann der Tour-Modus greift:
+
+| Anfrage | Verhalten |
+|---|---|
+| mit `tour_id` | Tour-Modus, Token Pflicht |
+| Directions mit `Authorization` | Tour-Modus |
+| Directions und `TOURS_REQUIRED=1` | Tour-Modus |
+| sonst (heutige App, Adresseingabe) | wie bisher |
+
+Umgebungsvariablen: `TOURS_REQUIRED` (Vorgabe aus), `GOOGLE_TIMEOUT_MS`
+(Vorgabe 30000; muss deutlich unter dem Tour-Nachlauf von 5 min liegen).
+Solange in `cc.plan_quotas` nichts aktiv ist, lehnt jede Reservierung mit
+403 `quota_not_configured` ab.
+
+Tests laufen nacheinander (`--test-concurrency=1`), weil mehrere Testdateien
+dieselbe Testdatenbank benutzen.
+
 ## Notes
 - This is intended for local development and minimal testing. For production, deploy behind HTTPS, add proper auth, restrict your Google API key and add monitoring/rate limits as needed.
