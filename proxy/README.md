@@ -102,5 +102,27 @@ deshalb anders gebaut sein:
 Die beiden Schichten koennen nebeneinander bestehen: die Telemetrie beobachtet
 weiter, die Limit-Schicht entscheidet.
 
+## Anmeldung und Konto-Bootstrap
+
+`POST /api/account/bootstrap` legt nach bestaetigter Anmeldung das persoenliche
+Konto und das Free-Entitlement fuer DriveTime an (`cc.ensure_personal_account`,
+dann `cc.ensure_default_entitlement`, in einer Transaktion). Idempotent.
+
+- Verlangt `Authorization: Bearer <Supabase-Zugangstoken>`.
+- Das Token wird lokal gegen die oeffentlichen Schluessel (JWKS) geprueft:
+  nur ES256/RS256, Aussteller `<SUPABASE_URL>/auth/v1`, Zielgruppe
+  `authenticated`, Rolle `authenticated`, keine anonymen Nutzer.
+- Die Nutzer-ID ist allein `sub` aus dem Token. Angaben im Body oder in der
+  Adresse werden ignoriert.
+- Antwort: `{ account_id, plan_key, status, created }`.
+- Fail closed: ohne `SUPABASE_URL`, bei nicht erreichbaren Schluesseln oder
+  Datenbankfehlern kommt 503 und es wird nichts angelegt.
+- Kostet kein Google-Geld und ist deshalb vom Not-Aus `PAID_CALLS_DISABLED`
+  ausgenommen.
+
+Umgebungsvariablen: `SUPABASE_URL` (oeffentliche Projekt-URL, ohne Schluessel)
+und die schon vorhandene `CONTROL_CENTER_DATABASE_URL`. Kein Service-Role-Key.
+Die Maps-Endpunkte verlangen (noch) keine Anmeldung.
+
 ## Notes
 - This is intended for local development and minimal testing. For production, deploy behind HTTPS, add proper auth, restrict your Google API key and add monitoring/rate limits as needed.

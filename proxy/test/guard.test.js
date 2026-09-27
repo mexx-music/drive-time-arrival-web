@@ -56,6 +56,12 @@ function apiRoutes() {
   return out;
 }
 
+/** Kostenpflichtige Routen: alles unter /api ausser den ausdruecklich
+ * ausgenommenen. Eine neue Route ist damit automatisch kostenpflichtig. */
+function paidRoutes() {
+  return apiRoutes().filter((r) => !guard.NON_PAID_PATHS.has(r.path.replace(/^\/api/, '')));
+}
+
 const BODIES = {
   '/api/directions': { origin: 'A', destination: 'B' },
   '/api/geocode': { address: 'A' },
@@ -93,8 +99,14 @@ test('Proxy-Schutz', { concurrency: false }, async (t) => {
     await google.close();
   });
 
+  await t.test('nur der Konto-Bootstrap ist vom Not-Aus ausgenommen', () => {
+    assert.deepStrictEqual([...guard.NON_PAID_PATHS], ['/account/bootstrap']);
+    const all = apiRoutes().map((r) => `${r.method} ${r.path}`);
+    assert.ok(all.includes('POST /api/account/bootstrap'));
+  });
+
   await t.test('alle kostenpflichtigen Routen sind bekannt', () => {
-    const paths = apiRoutes().map((r) => `${r.method} ${r.path}`).sort();
+    const paths = paidRoutes().map((r) => `${r.method} ${r.path}`).sort();
     assert.deepStrictEqual(paths, [
       'GET /api/directions',
       'POST /api/autocomplete',
@@ -114,7 +126,7 @@ test('Proxy-Schutz', { concurrency: false }, async (t) => {
     await t.test(`Not-Aus (${value}): jede /api-Route 503, kein Google-Aufruf`, async () => {
       process.env.PAID_CALLS_DISABLED = value;
       try {
-        for (const { method, path } of apiRoutes()) {
+        for (const { method, path } of paidRoutes()) {
           const r = await call(method, path);
           assert.strictEqual(r.status, 503, `${method} ${path}`);
           assert.strictEqual(r.json.error, 'paid_calls_disabled');
@@ -131,6 +143,18 @@ test('Proxy-Schutz', { concurrency: false }, async (t) => {
       }
     });
   }
+
+  await t.test('Not-Aus sperrt den Konto-Bootstrap nicht', async () => {
+    process.env.PAID_CALLS_DISABLED = '1';
+    try {
+      // Ohne Token: 401 von der Anmeldung, nicht 503 vom Not-Aus.
+      const r = await call('POST', '/api/account/bootstrap');
+      assert.strictEqual(r.status, 401);
+      assert.strictEqual(r.googleCalls, 0);
+    } finally {
+      delete process.env.PAID_CALLS_DISABLED;
+    }
+  });
 
   await t.test('Not-Aus: Preflight und /health bleiben erreichbar', async () => {
     process.env.PAID_CALLS_DISABLED = '1';
@@ -202,7 +226,7 @@ test('Proxy-Schutz', { concurrency: false }, async (t) => {
       'http://127.0.0.1:8080',
       'http://localhost:61234',
     ]) {
-      for (const { method, path } of apiRoutes()) {
+      for (const { method, path } of paidRoutes()) {
         const r = await call(method, path, { origin });
         assert.strictEqual(r.status, 200, `${origin} ${method} ${path}`);
         assert.strictEqual(r.acao, origin);

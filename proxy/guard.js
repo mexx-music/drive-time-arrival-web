@@ -70,9 +70,13 @@ function positiveInt(raw, fallback) {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
+// Pfade unter /api, die keinen kostenpflichtigen Provider-Aufruf ausloesen.
+// Alles andere gilt als kostenpflichtig - auch jede kuenftige Route.
+const NON_PAID_PATHS = new Set(['/account/bootstrap']);
+
 /** Antwort, wenn der Not-Aus aktiv ist. Google wird nicht angefragt. */
 function killSwitch(req, res, next) {
-  if (!paidCallsDisabled()) return next();
+  if (!paidCallsDisabled() || NON_PAID_PATHS.has(req.path)) return next();
   res.set('Retry-After', '600');
   res.set('Cache-Control', 'no-store');
   return res.status(503).json({
@@ -109,6 +113,7 @@ function forwardedForDiagnostics(limit = 3) {
 }
 
 module.exports = {
+  NON_PAID_PATHS,
   originAllowed,
   paidCallsDisabled,
   trustProxySetting,

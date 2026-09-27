@@ -12,6 +12,8 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 const telemetry = require('./telemetry');
 const guard = require('./guard');
+const auth = require('./auth');
+const account = require('./account');
 
 const app = express();
 app.set('trust proxy', guard.trustProxySetting());
@@ -243,6 +245,11 @@ app.post('/api/autocomplete', async (req, res) => {
   }
 });
 
+// Konto nach bestaetigter Anmeldung anlegen. Nur mit gueltigem Supabase-
+// Token; die Nutzer-ID kommt allein aus dessen "sub". Kostet kein
+// Google-Geld und ist deshalb vom Not-Aus ausgenommen (guard.NON_PAID_PATHS).
+app.post('/api/account/bootstrap', auth.requireAuth, account.handleBootstrap);
+
 // Fehler als knappes JSON, nie als HTML-Seite mit Stacktrace und Dateipfaden.
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
@@ -272,4 +279,4 @@ const startServer = (port) => {
 const port = process.env.PORT || 3000;
 const server = startServer(port);
 
-module.exports = { app, server, telemetry };
+module.exports = { app, server, telemetry, account };
