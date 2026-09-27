@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'catlab_trace.dart';
+import '../tour/tour_scope.dart';
 
 /// Small abstraction for map REST calls. In browsers direct calls to Google
 /// REST endpoints are blocked by CORS and should be proxied via a backend.
@@ -65,12 +66,32 @@ Future<Map<String, dynamic>> proxyGeocode(String address) async {
       ? mapsProxyBase.substring(0, mapsProxyBase.length - 1)
       : mapsProxyBase;
   final uri = Uri.parse('$base/api/geocode');
+  // Im Tour-Modus Pflicht; wirft, wenn die Tour nichts mehr erlaubt.
+  final tour = TourScope.forCall();
   final res = await _post(
-          uri, jsonEncode({'address': address, ...CatLabTrace.requestFields}))
-      .timeout(proxyRequestTimeout);
-  if (res.statusCode != 200)
+    uri,
+    jsonEncode({
+      'address': address,
+      ...CatLabTrace.requestFields,
+      ...?tour?.fields,
+    }),
+    extraHeaders: tour?.headers ?? const {},
+  ).timeout(proxyRequestTimeout);
+  if (res.statusCode != 200) {
+    if (tour != null) {
+      TourScope.recordRejection(tour, res.statusCode, _tryJson(res.body));
+    }
     throw Exception('Proxy error HTTP ${res.statusCode}');
+  }
   return jsonDecode(res.body) as Map<String, dynamic>;
+}
+
+Object? _tryJson(String body) {
+  try {
+    return jsonDecode(body);
+  } catch (_) {
+    return null;
+  }
 }
 
 Future<Map<String, dynamic>> proxyReverseGeocode(
@@ -136,23 +157,23 @@ class ProxyNotConfiguredException implements Exception {
 /// der Proxy anhand des geprüften Tokens. Liefert Status und (falls lesbar)
 /// den JSON-Körper; die Bewertung übernimmt der Aufrufer.
 Future<({int status, Object? body})> proxyAccountBootstrap(
-    String accessToken) async {
+        String accessToken) =>
+    proxyAuthedPost('/api/account/bootstrap', const {}, accessToken);
+
+/// POST an einen geschützten Proxy-Endpunkt mit Bearer-Token.
+/// Liefert Status und (falls lesbar) den JSON-Körper.
+Future<({int status, Object? body})> proxyAuthedPost(
+    String path, Map<String, Object?> body, String accessToken) async {
   if (!mapsProxyConfigured()) throw const ProxyNotConfiguredException();
   final base = mapsProxyBase.endsWith('/')
       ? mapsProxyBase.substring(0, mapsProxyBase.length - 1)
       : mapsProxyBase;
   final res = await _post(
-    Uri.parse('$base/api/account/bootstrap'),
-    '{}',
+    Uri.parse('$base$path'),
+    jsonEncode(body),
     extraHeaders: {'Authorization': 'Bearer $accessToken'},
   ).timeout(proxyRequestTimeout);
-  Object? body;
-  try {
-    body = jsonDecode(res.body);
-  } catch (_) {
-    body = null;
-  }
-  return (status: res.statusCode, body: body);
+  return (status: res.statusCode, body: _tryJson(res.body));
 }
 
 /// Proxy helper: POST /api/directions with { origin, destination, waypoints }
@@ -184,9 +205,17 @@ Future<Map<String, dynamic>> proxyDirections({
     // zusammenfassen kann. Der Proxy ignoriert die Felder fuer Google.
     ...CatLabTrace.requestFields,
   };
-  final res =
-      await _post(uri, jsonEncode(payload)).timeout(proxyRequestTimeout);
-  if (res.statusCode != 200)
+  // Im Tour-Modus Pflicht; wirft, wenn die Tour nichts mehr erlaubt.
+  final tour = TourScope.forCall();
+  if (tour != null) payload.addAll(tour.fields);
+  final res = await _post(uri, jsonEncode(payload),
+          extraHeaders: tour?.headers ?? const {})
+      .timeout(proxyRequestTimeout);
+  if (res.statusCode != 200) {
+    if (tour != null) {
+      TourScope.recordRejection(tour, res.statusCode, _tryJson(res.body));
+    }
     throw Exception('Proxy error HTTP ${res.statusCode}');
+  }
   return jsonDecode(res.body) as Map<String, dynamic>;
 }

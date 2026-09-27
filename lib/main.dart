@@ -43,6 +43,8 @@ import 'auth/auth_service.dart';
 import 'auth/supabase_auth_service.dart';
 import 'auth/account_button.dart';
 import 'account/account_service.dart';
+import 'tour/tour_scope.dart';
+import 'tour/tour_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -63,7 +65,12 @@ Future<void> main() async {
   }
   final auth = await _initAuth();
   // Konto erst nach bestätigter Anmeldung, und nur so, wie der Proxy es meldet.
-  runApp(DriverRouteApp(auth: auth, account: AccountService(auth: auth)));
+  final account = AccountService(auth: auth);
+  runApp(DriverRouteApp(
+    auth: auth,
+    account: account,
+    tours: TourService(auth: auth, account: account),
+  ));
 }
 
 /// Login nur, wenn die öffentlichen Supabase-Werte beim Build gesetzt wurden.
@@ -82,10 +89,14 @@ Future<AuthService> _initAuth() async {
 
 class DriverRouteApp extends StatelessWidget {
   const DriverRouteApp(
-      {super.key, this.auth = const DisabledAuthService(), this.account});
+      {super.key,
+      this.auth = const DisabledAuthService(),
+      this.account,
+      this.tours});
 
   final AuthService auth;
   final AccountService? account;
+  final TourService? tours;
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -161,17 +172,23 @@ class DriverRouteApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: HomeScreen(auth: auth, account: account),
+      home: HomeScreen(auth: auth, account: account, tours: tours),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen(
-      {super.key, this.auth = const DisabledAuthService(), this.account});
+      {super.key,
+      this.auth = const DisabledAuthService(),
+      this.account,
+      this.tours});
 
   final AuthService auth;
   final AccountService? account;
+
+  /// Tour-Lebenszyklus beim Proxy; null = nicht angebunden.
+  final TourService? tours;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -1077,7 +1094,18 @@ class _HomeScreenState extends State<HomeScreen> {
     // Ab hier gehoeren alle Google-Aufrufe zu dieser einen Berechnung.
     CatLabTrace.begin();
 
+    // Angemeldet: die Berechnung läuft in genau einer Tour des Proxys. Ohne
+    // bestätigte Tour wird nicht gerechnet – auch nicht ohne Tour "zur Not".
+    // Nicht angemeldet: öffentlicher Modus wie bisher.
+    final tours = widget.tours;
+    TourTicket? tour;
+    var succeeded = false;
     try {
+      if (tours != null && tours.required) {
+        final ticket = await tours.begin(_tourInputs());
+        tour = ticket;
+        TourScope.enter(ticket.tourId, () => tours.tokenFor(ticket));
+      }
       final now = DateTime.now();
       DateTime start = now;
 
@@ -1340,6 +1368,9 @@ class _HomeScreenState extends State<HomeScreen> {
               denmarkRoute == null)) {
         throw StateError('Keine verwertbare Routendistanz vorhanden');
       }
+      // Hat die Kostenkontrolle unterwegs abgelehnt, gibt es kein Ergebnis –
+      // auch wenn einzelne Aufrufe den Fehler still übergangen haben.
+      TourScope.throwIfFailed();
       if (!mounted) return;
       setState(() {
         _etaResult = res;
@@ -1359,24 +1390,49 @@ class _HomeScreenState extends State<HomeScreen> {
                     ? 'Fähre ${ferryCandidate.name}: gerechnet mit der ersten planmäßigen Abfahrt nach der Hafenankunft (Ortszeit des Hafens). Fahrplan ist ein Richtwert – gebuchte Abfahrt bitte im Fähre-Feld eintragen.'
                     : 'Fähre ${ferryCandidate.name}: Eingetragene Abfahrtszeit in der ETA berücksichtigt. Buchung und Verfügbarkeit beim Betreiber prüfen.';
       });
+      succeeded = true;
     } catch (error, stackTrace) {
       debugPrint('ETA-Berechnung fehlgeschlagen: $error\n$stackTrace');
+      // Eine Ablehnung der Kostenkontrolle hat Vorrang vor Folgefehlern, die
+      // sie ausgelöst hat (z. B. "keine Distanz", weil Directions gesperrt war).
+      final tourFailure = error is TourFailure ? error : TourScope.failure;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              error is FerryRouteException
-                  ? error.message
-                  : 'Route konnte nicht berechnet werden. Bitte Adressen, Distanz und Verbindung prüfen.',
+              tourFailure != null
+                  ? tourFailure.message
+                  : error is FerryRouteException
+                      ? error.message
+                      : 'Route konnte nicht berechnet werden. Bitte Adressen, Distanz und Verbindung prüfen.',
             ),
           ),
         );
       }
     } finally {
       CatLabTrace.end();
+      TourScope.exit();
+      if (tour != null && tours != null) {
+        // Ein Wiederholen derselben Berechnung soll dieselbe Tour bekommen,
+        // auch wenn Freitext inzwischen durch die aufgelöste Adresse ersetzt ist.
+        if (!succeeded) tours.rememberInputs(tour, _tourInputs());
+        await tours.finish(tour, success: succeeded);
+      }
       if (mounted) setState(() => _calculating = false);
     }
   }
+
+  /// Was eine Berechnung ausmacht, für den Idempotenzschlüssel der Tour.
+  /// Bleibt lokal; der Proxy bekommt nur den Schlüssel.
+  String _tourInputs() => jsonEncode([
+        _startCtl.text.trim(),
+        _destCtl.text.trim(),
+        _stops,
+        _optimizeStops,
+        _autoFerry,
+        _manualFerry?.name,
+        _manualFerryDeparture?.toIso8601String(),
+      ]);
 
   void _dbg(String msg) {
     if (_showDetails) _log.add('🔍 $msg');
