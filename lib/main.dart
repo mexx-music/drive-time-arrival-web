@@ -217,7 +217,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Gespeicherte Wegpunkt-Folgen für wiederkehrende Strecken.
   List<RoutePreset> _presets = [];
-  List<String> _resultRouteStops = [];
   String? _resultRoutePolyline;
   String? _countryRouteNote;
   String? _ferryRouteNote;
@@ -1377,7 +1376,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _resultOrigin = s;
         _resultDestination = d;
         _resultRoadMix = roadMix;
-        _resultRouteStops = routedWaypoints;
         _resultRoutePolyline = encodedPolyline;
         _countryRouteNote = null;
         _resultFerry = ferryCandidate;
@@ -1891,74 +1889,36 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openMapOsm() async {
-    // Fährtour: die beiden geplanten Landwege plus Seestrecke zeichnen.
-    // Ohne das fragt die Karte Google erneut von Start nach Ziel und zeigt
-    // dessen eigene, kürzeste Fähre statt der geplanten.
-    final legs = _ferryLegPlan;
-    if (_etaResult != null && legs != null) {
-      final from = legs.portFrom;
-      final to = legs.portTo;
-      final segs = <MapSegment>[
-        MapSegment(
-            points: legs.legA.points, label: 'Anfahrt → ${legs.ferry.from}'),
-        if (from != null && to != null)
-          MapSegment(
-              points: [from, to], label: legs.ferry.name, isFerry: true),
-        MapSegment(points: legs.legB.points, label: '${legs.ferry.to} → Ziel'),
-      ];
-      if (legs.legA.points.isNotEmpty && legs.legB.points.isNotEmpty) {
-        await Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => MapOsmView(
-            start: legs.legA.points.first,
-            dest: legs.legB.points.last,
-            route: const [],
-            segments: segs,
-            stops: [for (final c in _stopCoords) if (c != null) c],
-            subtitle: _mapRouteNote(),
-          ),
-        ));
-        return;
-      }
-    }
-
-    if (_etaResult != null && _resultRoutePolyline != null) {
-      final points = map_launcher.decodePolyline(_resultRoutePolyline!);
-      if (points.length >= 2) {
-        // Geometrie der tatsächlich berechneten Route – genauer als ein
-        // erneuter Abruf, deshalb hier bevorzugt.
-        await Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => MapOsmView(
-            start: points.first,
-            dest: points.last,
-            route: points,
-            stops: [for (final c in _stopCoords) if (c != null) c],
-            subtitle: _mapRouteNote() ?? 'Berechnete Route',
-          ),
-        ));
-        return;
-      }
-    }
-    final routedStops = _etaResult == null ? _stops : _resultRouteStops;
-    await map_launcher.openMapOsm(
-      context,
-      s: _startCtl.text.trim(),
-      d: _destCtl.text.trim(),
-      stops: routedStops,
-      stopCoords: routedStops.length == _stopCoords.length
-          ? _stopCoords
-          : List<LatLng?>.filled(routedStops.length, null),
-      startLat: _startLat,
-      startLng: _startLng,
-      destLat: _destLat,
-      destLng: _destLng,
-      optimizeStops: _optimizeStops,
-      googleMapsApiKey: GOOGLE_MAPS_API_KEY,
-      mapsDirectCallsAllowed: mapsDirectCallsAllowed,
+    // Nur aus den Daten der letzten Berechnung – kein neuer Google-Aufruf,
+    // keine eigene Tour. Früher fragte die Karte ohne gespeicherte Geometrie
+    // jeden Abschnitt einzeln bei Google an, außerhalb jeder Tour.
+    final plan = map_launcher.planRouteMap(
+      hasResult: _etaResult != null,
+      ferryLegs: _ferryLegPlan,
+      encodedPolyline: _resultRoutePolyline,
+      startCoord: _startLat != null && _startLng != null
+          ? LatLng(_startLat!, _startLng!)
+          : null,
+      destCoord:
+          _destLat != null && _destLng != null ? LatLng(_destLat!, _destLng!) : null,
+      stopCoords: _stopCoords,
       routeNote: _mapRouteNote(),
-      addLog: (m) => setState(() => _log.add(m)),
-      showDetails: () => _showDetails,
-      mounted: mounted,
     );
+    if (!plan.available) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(plan.message!)));
+      return;
+    }
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => MapOsmView(
+        start: plan.start!,
+        dest: plan.dest!,
+        route: plan.route,
+        segments: plan.segments,
+        stops: plan.stops,
+        subtitle: plan.subtitle,
+      ),
+    ));
   }
 
   @override
@@ -2774,8 +2734,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: const Icon(Icons.map),
                   label: const Text('Karte anzeigen'),
                   // Immer die App-Karte, auch bei Fährrouten – die Karte
-                  // stellt Fährabschnitte jetzt gesondert dar.
-                  onPressed: _openMapOsm,
+                  // stellt Fährabschnitte jetzt gesondert dar. Erst nach einer
+                  // Berechnung: vorher gibt es keine Route, die sie zeigen könnte.
+                  onPressed: _etaResult == null ? null : _openMapOsm,
                 ),
               ),
               if (kDebugMode)
