@@ -36,6 +36,7 @@ class MapOsmView extends StatefulWidget {
     this.stops = const [],
     this.title = '🗺️ Route',
     this.subtitle,
+    this.mapController,
   });
 
   final LatLng start;
@@ -52,13 +53,16 @@ class MapOsmView extends StatefulWidget {
   final String title;
   final String? subtitle;
 
+  /// Nur für Tests: eigener Controller, um die Kartenereignisse zu beobachten.
+  @visibleForTesting
+  final MapController? mapController;
+
   @override
   State<MapOsmView> createState() => _MapOsmViewState();
 }
 
 class _MapOsmViewState extends State<MapOsmView> {
-  final MapController _mapController = MapController();
-  bool _fitted = false;
+  late final MapController _mapController = widget.mapController ?? MapController();
 
   List<MapSegment> get _segments {
     if (widget.segments.isNotEmpty) return widget.segments;
@@ -107,18 +111,18 @@ class _MapOsmViewState extends State<MapOsmView> {
     return meters / 1000.0;
   }
 
-  void _fit() {
+  /// Ausschnitt, der die ganze Route samt Start, Stopps und Ziel zeigt.
+  CameraFit get _routeFit {
     final pts = _allPoints;
-    if (pts.length < 2) return;
     final bounds = LatLngBounds(pts.first, pts.first);
     for (final p in pts) {
       bounds.extend(p);
     }
-    _mapController.fitCamera(
-      CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(32)),
-    );
-    _fitted = true;
+    return CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(32));
   }
+
+  /// "Auf Route zoomen" – nachdem der Nutzer die Karte bewegt hat.
+  void _fit() => _mapController.fitCamera(_routeFit);
 
   @override
   Widget build(BuildContext context) {
@@ -175,6 +179,14 @@ class _MapOsmViewState extends State<MapOsmView> {
                   options: MapOptions(
                     initialCenter: widget.start,
                     initialZoom: 5,
+                    // Den Routen-Ausschnitt setzt flutter_map selbst, sobald
+                    // die Kartengröße feststeht – NACH seiner eigenen
+                    // Größenmeldung. Früher passte onMapReady die Kamera an;
+                    // die danach eintreffende Größenmeldung trug noch die alte
+                    // Kamera (Zoom 5), und die Kachelebene lud und verwarf
+                    // Kacheln für diesen veralteten Ausschnitt: grau, bis man
+                    // die Karte bewegte.
+                    initialCameraFit: _routeFit,
                     // Norden bleibt oben: Auf einer Streckenkarte nützt Drehen
                     // nichts, und die Drehgeste konkurriert mit dem Zoomen –
                     // das fühlt sich an, als ginge Zoomen nicht.
@@ -182,7 +194,6 @@ class _MapOsmViewState extends State<MapOsmView> {
                       flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
                     ),
                     onMapReady: () {
-                      if (!_fitted) _fit();
                       if (kDebugMode) {
                         debugPrint('[MapOsmView] Abschnitte: ${segments.length}, '
                             'Punkte: ${_allPoints.length}');
