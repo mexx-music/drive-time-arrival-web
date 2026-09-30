@@ -66,6 +66,10 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
   bool _showInlineList = false;
   bool _autoApplied = false; // prevent repeated auto-apply
 
+  /// Laufnummer der Vorschlagsanfragen: nur die jüngste darf die Liste
+  /// setzen. Beim schnellen Tippen kann eine ältere Antwort später eintreffen.
+  int _fetchSeq = 0;
+
   @override
   void initState() {
     super.initState();
@@ -109,6 +113,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
     _resetExplicitSelectionForController(widget.controller);
     widget.onUserEdit?.call(s);
     if (s.trim().length < _kMinChars) {
+      _fetchSeq++; // laufende Anfrage überholt
       setState(() {
         _items = [];
         _showInlineList = false;
@@ -119,6 +124,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
   }
 
   Future<void> _fetch(String q) async {
+    final seq = ++_fetchSeq;
     final Map<String, dynamic> originPart =
         (widget.originLat != null && widget.originLng != null)
             ? {
@@ -197,6 +203,8 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
         }
         data = jsonDecode(res.body) as Map<String, dynamic>;
       }
+      // Inzwischen neuer getippt oder Feld geleert: diese Antwort ist überholt.
+      if (!mounted || seq != _fetchSeq) return;
 
       if (kDebugMode) {
         debugPrint(

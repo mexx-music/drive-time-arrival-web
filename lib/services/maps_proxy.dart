@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'catlab_trace.dart';
+import '../tour/input_auth.dart';
 import '../tour/tour_scope.dart';
 
 /// Small abstraction for map REST calls. In browsers direct calls to Google
@@ -68,22 +69,60 @@ Future<Map<String, dynamic>> proxyGeocode(String address) async {
   final uri = Uri.parse('$base/api/geocode');
   // Im Tour-Modus Pflicht; wirft, wenn die Tour nichts mehr erlaubt.
   final tour = TourScope.forCall();
+  if (tour == null) {
+    // Adresseingabe außerhalb einer Berechnung: Tagesbudget oder öffentlich.
+    final res = await _inputPost(
+      uri,
+      jsonEncode({'address': address, ...CatLabTrace.requestFields}),
+      InputAuth.forCall(),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('Proxy error HTTP ${res.statusCode}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
   final res = await _post(
     uri,
     jsonEncode({
       'address': address,
       ...CatLabTrace.requestFields,
-      ...?tour?.fields,
+      ...tour.fields,
     }),
-    extraHeaders: tour?.headers ?? const {},
+    extraHeaders: tour.headers,
   ).timeout(proxyRequestTimeout);
   if (res.statusCode != 200) {
-    if (tour != null) {
-      TourScope.recordRejection(tour, res.statusCode, _tryJson(res.body));
-    }
+    TourScope.recordRejection(tour, res.statusCode, _tryJson(res.body));
     throw Exception('Proxy error HTTP ${res.statusCode}');
   }
   return jsonDecode(res.body) as Map<String, dynamic>;
+}
+
+/// Eingabe-Aufruf (Autocomplete, Geocoding außerhalb einer Tour).
+///
+/// Angemeldet ([input] gesetzt): mit Token; der Proxy zählt gegen das
+/// Tagesbudget. Eine Ablehnung oder ein Netzfehler wird zu [InputFailure] –
+/// es gibt KEINEN zweiten Versuch ohne Token. Eine Antwort aus einer
+/// inzwischen beendeten Anmeldung wird verworfen.
+///
+/// Öffentlich ([input] null): wie bisher, ohne Token.
+Future<http.Response> _inputPost(Uri uri, String body, InputCall? input) async {
+  final http.Response res;
+  try {
+    res = await _post(uri, body, extraHeaders: input?.headers ?? const {})
+        .timeout(proxyRequestTimeout);
+  } catch (_) {
+    if (input == null) rethrow;
+    InputAuth.checkCurrent(input);
+    throw InputAuth.report(const InputFailure(InputFailureKind.network));
+  }
+  if (input != null) {
+    InputAuth.checkCurrent(input);
+    if (res.statusCode != 200) {
+      throw InputAuth.report(
+          InputFailure.fromResponse(res.statusCode, _tryJson(res.body)));
+    }
+  }
+  return res;
 }
 
 Object? _tryJson(String body) {
@@ -103,12 +142,13 @@ Future<Map<String, dynamic>> proxyReverseGeocode(
       ? mapsProxyBase.substring(0, mapsProxyBase.length - 1)
       : mapsProxyBase;
   final uri = Uri.parse('$base/api/geocode');
-  final res = await _post(
+  final res = await _inputPost(
     uri,
     jsonEncode(
       {'lat': latitude, 'lng': longitude, ...CatLabTrace.requestFields},
     ),
-  ).timeout(proxyRequestTimeout);
+    InputAuth.forCall(),
+  );
   if (res.statusCode != 200) {
     throw Exception('Proxy error HTTP ${res.statusCode}');
   }
@@ -128,7 +168,7 @@ Future<Map<String, dynamic>> proxyAutocomplete({
       ? mapsProxyBase.substring(0, mapsProxyBase.length - 1)
       : mapsProxyBase;
   final uri = Uri.parse('$base/api/autocomplete');
-  final res = await _post(
+  final res = await _inputPost(
     uri,
     jsonEncode({
       'input': input,
@@ -139,7 +179,8 @@ Future<Map<String, dynamic>> proxyAutocomplete({
       if (radiusMeters != null) 'radius': radiusMeters,
       ...CatLabTrace.requestFields,
     }),
-  ).timeout(proxyRequestTimeout);
+    InputAuth.forCall(),
+  );
   if (res.statusCode != 200) {
     throw Exception('Proxy error HTTP ${res.statusCode}');
   }

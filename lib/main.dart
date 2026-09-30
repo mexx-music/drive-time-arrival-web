@@ -43,6 +43,7 @@ import 'auth/auth_service.dart';
 import 'auth/supabase_auth_service.dart';
 import 'auth/account_button.dart';
 import 'account/account_service.dart';
+import 'tour/input_auth.dart';
 import 'tour/tour_scope.dart';
 import 'tour/tour_service.dart';
 
@@ -302,10 +303,28 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadFerries();
     _loadPresets();
+    // Adresseingabe angemeldet: Token und Tagesbudget; sonst öffentlich.
+    if (widget.auth.enabled) {
+      InputAuth.configure(widget.auth, widget.account);
+      InputAuth.lastFailure.addListener(_showInputFailure);
+    }
+  }
+
+  void _showInputFailure() {
+    final failure = InputAuth.lastFailure.value;
+    if (failure == null || !mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(failure.message)));
+    InputAuth.lastFailure.value = null;
   }
 
   @override
   void dispose() {
+    if (widget.auth.enabled) {
+      InputAuth.lastFailure.removeListener(_showInputFailure);
+      InputAuth.reset();
+    }
     _startCtl.dispose();
     _destCtl.dispose();
     _kmCtl.dispose();

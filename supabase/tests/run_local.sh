@@ -1,6 +1,6 @@
 #!/bin/sh
 # Kompletter lokaler Lauf gegen eine LEERE Wegwerf-Datenbank:
-#   auth_stub.sql → alle Migrationen → schema_test.sql → quota_test.sql
+#   auth_stub.sql → alle Migrationen → schema_test.sql → quota_test.sql → input_test.sql
 # und danach die Prüfung, dass die SQL-Tests keine Daten zurücklassen.
 #
 # Nie gegen Supabase ausführen (auth_stub.sql bricht dort ohnehin ab).
@@ -46,6 +46,7 @@ test_file() {
 before=$(snapshot)
 test_file "$DIR/tests/schema_test.sql"
 test_file "$DIR/tests/quota_test.sql"
+test_file "$DIR/tests/input_test.sql"
 after=$(snapshot)
 
 if [ "$before" != "$after" ]; then

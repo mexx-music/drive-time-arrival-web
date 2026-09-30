@@ -141,7 +141,17 @@ function gate(endpoint) {
     const tourId = params.tour_id;
     const hasAuth = Boolean(req.get('Authorization'));
     const needsTour = endpoint === 'directions' && (toursRequired() || hasAuth);
-    if (tourId === undefined && !needsTour) return next();
+    if (tourId === undefined && !needsTour) {
+      // Adresseingabe eines angemeldeten Nutzers: eigenes Tagesbudget statt
+      // Tour. Ohne Token bleibt es beim öffentlichen Weg wie bisher.
+      if (hasAuth && INPUT_SERVICES[endpoint]) {
+        return auth.requireAuth(req, res, () => {
+          req.inputCall = { userId: req.auth.userId, service: INPUT_SERVICES[endpoint] };
+          return next();
+        });
+      }
+      return next();
+    }
     if (typeof tourId !== 'string' || !UUID.test(tourId)) {
       return res.status(428).json({ error: 'tour_required' });
     }
@@ -150,6 +160,30 @@ function gate(endpoint) {
       return next();
     });
   };
+}
+
+// Eingabe-Aufrufe außerhalb einer Tour und ihr Dienst im Katalog.
+const INPUT_SERVICES = { geocode: 'geocode', autocomplete: 'places-autocomplete' };
+
+const INPUT_STATUS = {
+  input_quota_exhausted: [429, 'input_budget_exhausted'],
+  input_quota_not_configured: [403, 'input_quota_not_configured'],
+  no_entitlement: [403, 'no_entitlement'],
+  entitlement_inactive: [403, 'entitlement_inactive'],
+  not_member: [403, 'not_member'],
+  user_disabled: [403, 'user_disabled'],
+  account_disabled: [403, 'account_disabled'],
+  project_paused: [503, 'project_paused'],
+};
+
+/** Unmittelbar VOR einem Eingabe-Aufruf. Wirft TourDenied - dann kein Aufruf.
+ *  Nutzer aus dem Token, Konto/Plan/Limit/Tag bestimmt die Datenbank. */
+async function beginInputCall(input) {
+  const r = await callDb('select cc.try_input_call($1, $2, $3) as r',
+    [input.userId, PROJECT_KEY, input.service]);
+  if (r.status === 'ok') return;
+  const [status, code] = INPUT_STATUS[r.status] || [503, 'quota_unavailable'];
+  throw new TourDenied(status, code);
 }
 
 const USE_STATUS = {
@@ -198,6 +232,7 @@ module.exports = {
   gate,
   beginCall,
   endCall,
+  beginInputCall,
   handleReserve,
   handleComplete,
   handleRelease,

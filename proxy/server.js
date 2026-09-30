@@ -103,11 +103,13 @@ function traceFor(req, params) {
  * ok=false. Der Fehler selbst wird nicht angefasst und laeuft weiter nach
  * oben, als gaebe es dieses Modul nicht.
  */
-async function googleCall(endpoint, trace, run, tour) {
+async function googleCall(endpoint, trace, run, tour, input) {
   // Tour-Modus: erst das Budget verbindlich belegen. Lehnt die Datenbank ab
   // oder ist sie nicht erreichbar, wirft beginCall - Google wird dann gar
   // nicht erst angefragt.
   if (tour) await tours.beginCall(tour);
+  // Angemeldete Adresseingabe: Tagesbudget, ebenso vor Google.
+  else if (input) await tours.beginInputCall(input);
   let ok = false;
   try {
     const out = await run();
@@ -224,7 +226,7 @@ app.post('/api/geocode', tours.gate('geocode'), async (req, res) => {
       }
       const httpOk = res.status >= 200 && res.status < 300;
       return { ok: httpOk && googleStatusOk(status), value: res };
-    }, req.tourCall);
+    }, req.tourCall, req.inputCall);
     res.status(r.status).type('application/json').send(r.body);
   } catch (err) {
     if (err instanceof tours.TourDenied) return tours.sendDenied(err, res);
@@ -274,7 +276,7 @@ app.post('/api/autocomplete', tours.gate('autocomplete'), async (req, res) => {
       });
       // Places New meldet Fehler ueber den HTTP-Status, nicht im Koerper.
       return { ok: res.ok, value: res };
-    }, req.tourCall);
+    }, req.tourCall, req.inputCall);
     const responseBody = await response.text();
     res.status(response.status).type('application/json').send(responseBody);
   } catch (err) {
