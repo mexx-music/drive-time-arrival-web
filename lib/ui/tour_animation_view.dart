@@ -10,6 +10,7 @@ import '../animation/tour_playback.dart';
 import '../animation/tour_story.dart';
 import '../logic/eta_calculator.dart';
 import 'tour_story_overlay.dart';
+import 'tour_animation_scene_maplibre.dart';
 
 final NumberFormat _km = NumberFormat.decimalPattern('de');
 
@@ -36,7 +37,11 @@ class TourAnimationView extends StatefulWidget {
     this.storyMode = TourStoryMode.cinematic,
     this.fromName,
     this.toName,
+    this.startIn25D = false,
   });
+
+  /// EXPERIMENT: direkt in der MapLibre-2.5D-Ansicht starten (Demo-Seite).
+  final bool startIn25D;
 
   final TourPath path;
 
@@ -91,6 +96,30 @@ class _TourAnimationViewState extends State<TourAnimationView>
 
   /// Vom Nutzer gewählte Zoomstufe; null = automatische Kameraführung.
   double? _manualZoom;
+
+  /// EXPERIMENT: 2.5D mit MapLibre statt 2D mit flutter_map.
+  late bool _maplibre = widget.startIn25D;
+
+  /// 2.5D: Fahrt wartet, bis die MapLibre-Karte geladen ist.
+  bool _waitForMap = false;
+
+  void _setRenderer(bool maplibre) {
+    setState(() {
+      _maplibre = maplibre;
+      _manualZoom = null;
+      if (maplibre && _playback.playing) {
+        _waitForMap = true;
+        _playback.pause();
+        _ticker.stop();
+      }
+    });
+  }
+
+  void _onMapReady() {
+    if (!_waitForMap || !mounted) return;
+    _waitForMap = false;
+    _play();
+  }
   late final double _autoZoom = tourFollowZoom(widget.path.totalMeters);
 
   @override
@@ -101,7 +130,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
     _buildStory(null);
     final countries = widget.countries;
     if (countries == null) {
-      if (widget.autoplay) _play();
+      if (widget.autoplay) _autostart();
       return;
     }
     _preparing = true;
@@ -111,8 +140,16 @@ class _TourAnimationViewState extends State<TourAnimationView>
         _buildStory(c);
         _preparing = false;
       });
-      if (widget.autoplay) _play();
+      if (widget.autoplay) _autostart();
     });
+  }
+
+  void _autostart() {
+    if (_maplibre) {
+      _waitForMap = true; // startet in _onMapReady
+    } else {
+      _play();
+    }
   }
 
   /// Ereignisse aus Planung und Grenzen; ohne beides: reine Fahrt wie bisher.
@@ -196,6 +233,22 @@ class _TourAnimationViewState extends State<TourAnimationView>
     return Scaffold(
       appBar: AppBar(
         title: const Text('Tour animieren'),
+        actions: [
+          if (widget.storyMode == TourStoryMode.cinematic)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: SegmentedButton<bool>(
+                key: const Key('renderer-switch'),
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(value: false, label: Text('2D')),
+                  ButtonSegment(value: true, label: Text('2.5D (Test)')),
+                ],
+                selected: {_maplibre},
+                onSelectionChanged: (s) => _setRenderer(s.first),
+              ),
+            ),
+        ],
         leading: IconButton(
           tooltip: 'Schließen',
           icon: const Icon(Icons.close),
@@ -204,6 +257,26 @@ class _TourAnimationViewState extends State<TourAnimationView>
       ),
       body: Stack(
         children: [
+          if (_maplibre)
+            Positioned.fill(
+              child: TourAnimationSceneMapLibre(
+                path: widget.path,
+                position: position,
+                title: widget.title,
+                frame: frame,
+                stops: widget.stops,
+                finished: _playback.finished,
+                manualZoom: _manualZoom,
+                countries: _countries,
+                planKm: _planKm,
+                summary: _summary,
+                fromName: widget.fromName,
+                toName: widget.toName,
+                storyEvents: _timeline.events,
+                onReady: _onMapReady,
+              ),
+            )
+          else
           Positioned.fill(
             child: TourAnimationScene(
               path: widget.path,

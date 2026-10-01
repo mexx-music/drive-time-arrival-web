@@ -131,6 +131,13 @@ void main() {
       await tester.pump();
     }
 
+    testWidgets('Experiment: Standard bleibt 2D (flutter_map), 2.5D nur per Umschalter', (tester) async {
+      await pumpView(tester, autoplay: false);
+      expect(find.byKey(const Key('renderer-switch')), findsOneWidget);
+      expect(find.byType(FlutterMap), findsOneWidget);
+      expect(find.text('2.5D (Test)'), findsOneWidget);
+    });
+
     testWidgets('startet bei 0 %, fährt los und endet bei 100 % am Ziel', (tester) async {
       await pumpView(tester);
       expect(find.text('Lambach → Hamburg'), findsOneWidget);
@@ -431,6 +438,7 @@ void main() {
       final allowed = {
         'Lambach → Hamburg', 'Tour animieren', 'Pause', 'Weiter', 'Start', 'Neustart',
         '1×', '2×', '4×', 'Auto', '© OpenStreetMap-Mitwirkende', "Made with 'flutter_map'",
+        '2D', '2.5D (Test)', // Experiment-Umschalter in der Titelleiste
       };
 
       // Start: Österreich aktuell, Deutschland kommend.

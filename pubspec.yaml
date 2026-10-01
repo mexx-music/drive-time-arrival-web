@@ -25,6 +25,7 @@ dependencies:
   geolocator: ^13.0.2
   web: ^1.1.1
   supabase_flutter: ^2.17.2
+  maplibre_gl: ^0.27.1
 
 # optional (später):
 # flutter_polyline_points: ^2.0.0
