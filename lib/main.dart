@@ -36,6 +36,9 @@ import 'widgets/place_input.dart';
 import 'widgets/duration_input.dart';
 import 'widgets/tour_result_view.dart';
 import 'ui/map_osm_view.dart';
+import 'ui/tour_animation_view.dart';
+import 'animation/country_borders.dart';
+import 'animation/tour_path.dart';
 import 'utils/open_in_tab.dart';
 import 'services/map_launcher.dart' as map_launcher;
 import 'auth/auth_config.dart';
@@ -1907,22 +1910,25 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
+  /// Karte bzw. Animation – nur aus den Daten der letzten Berechnung.
+  map_launcher.RouteMapPlan _routeMapPlan() => map_launcher.planRouteMap(
+        hasResult: _etaResult != null,
+        ferryLegs: _ferryLegPlan,
+        encodedPolyline: _resultRoutePolyline,
+        startCoord: _startLat != null && _startLng != null
+            ? LatLng(_startLat!, _startLng!)
+            : null,
+        destCoord:
+            _destLat != null && _destLng != null ? LatLng(_destLat!, _destLng!) : null,
+        stopCoords: _stopCoords,
+        routeNote: _mapRouteNote(),
+      );
+
   Future<void> _openMapOsm() async {
     // Nur aus den Daten der letzten Berechnung – kein neuer Google-Aufruf,
     // keine eigene Tour. Früher fragte die Karte ohne gespeicherte Geometrie
     // jeden Abschnitt einzeln bei Google an, außerhalb jeder Tour.
-    final plan = map_launcher.planRouteMap(
-      hasResult: _etaResult != null,
-      ferryLegs: _ferryLegPlan,
-      encodedPolyline: _resultRoutePolyline,
-      startCoord: _startLat != null && _startLng != null
-          ? LatLng(_startLat!, _startLng!)
-          : null,
-      destCoord:
-          _destLat != null && _destLng != null ? LatLng(_destLat!, _destLng!) : null,
-      stopCoords: _stopCoords,
-      routeNote: _mapRouteNote(),
-    );
+    final plan = _routeMapPlan();
     if (!plan.available) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(plan.message!)));
@@ -1936,6 +1942,36 @@ class _HomeScreenState extends State<HomeScreen> {
         segments: plan.segments,
         stops: plan.stops,
         subtitle: plan.subtitle,
+      ),
+    ));
+  }
+
+  /// „Tour animieren“: dieselben Daten wie die Karte, ebenfalls ohne jeden
+  /// Provider-Aufruf. Ohne Streckenführung gibt es nichts zu animieren.
+  Future<void> _openTourAnimation() async {
+    final plan = _routeMapPlan();
+    final path = plan.available ? TourPath.fromMapPlan(plan) : null;
+    if (path == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(plan.message ??
+              'Für diese Route liegt keine Streckenführung vor – '
+                  'die Tour lässt sich nicht animieren.')));
+      return;
+    }
+    String short(String text) => text.split(',').first.trim();
+    final from = short(_startCtl.text);
+    final to = short(_destCtl.text);
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => TourAnimationView(
+        path: path,
+        title: from.isEmpty || to.isEmpty ? 'Deine Tour' : '$from → $to',
+        stops: plan.stops,
+        // Story nur aus vorhandenen Daten: Planung der Berechnung und die
+        // mitgelieferten Ländergrenzen – kein Aufruf bei Google.
+        eta: _etaResult,
+        countries: CountryIndex.load(),
+        fromName: from.isEmpty ? null : from,
+        toName: to.isEmpty ? null : to,
       ),
     ));
   }
@@ -2756,6 +2792,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   // stellt Fährabschnitte jetzt gesondert dar. Erst nach einer
                   // Berechnung: vorher gibt es keine Route, die sie zeigen könnte.
                   onPressed: _etaResult == null ? null : _openMapOsm,
+                ),
+              ),
+              Padding(
+                padding: pad,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.play_circle_outline),
+                  label: const Text('Tour animieren'),
+                  onPressed: _etaResult == null ? null : _openTourAnimation,
                 ),
               ),
               if (kDebugMode)
