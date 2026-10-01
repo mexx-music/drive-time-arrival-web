@@ -5,6 +5,8 @@ const http = require('http');
 
 function startFakeGoogle() {
   const calls = { directions: 0, geocode: 0, autocomplete: 0, total: 0 };
+  /** Abfrageparameter des letzten Aufrufs (ohne Schlüssel). */
+  const last = { params: null };
   let mode = 'ok';
 
   const server = http.createServer((req, res) => {
@@ -14,6 +16,9 @@ function startFakeGoogle() {
     if (path.includes('/directions/')) kind = 'directions';
     else if (path.includes('/geocode/')) kind = 'geocode';
     calls[kind] += 1;
+    const params = new URL(req.url, 'http://x').searchParams;
+    params.delete('key');
+    last.params = Object.fromEntries(params);
 
     const send = (status, body) => {
       res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -44,6 +49,7 @@ function startFakeGoogle() {
       resolve({
         base: `http://127.0.0.1:${server.address().port}`,
         calls,
+        last,
         setMode: (m) => { mode = m; },
         close: () => new Promise((r) => server.close(r)),
       });

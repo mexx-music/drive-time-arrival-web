@@ -37,6 +37,8 @@ import 'widgets/duration_input.dart';
 import 'widgets/tour_result_view.dart';
 import 'ui/map_osm_view.dart';
 import 'ui/tour_animation_view.dart';
+import 'ui/map_point_picker.dart';
+import 'models/map_waypoint.dart';
 import 'animation/country_borders.dart';
 import 'animation/tour_path.dart';
 import 'utils/open_in_tab.dart';
@@ -374,6 +376,42 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  /// „Auf Karte wählen“: Punkt antippen, als Zwischenpunkt übernehmen.
+  /// Kein Geocoding – die Koordinate ist maßgeblich, das Land kommt aus den
+  /// lokalen Grenzdaten.
+  Future<void> _pickStopOnMap() async {
+    if (_addingStop) return;
+    if (_stops.length >= 10) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Höchstens 10 Zwischenstopps sind möglich.')),
+      );
+      return;
+    }
+    final start = _startLat != null && _startLng != null ? LatLng(_startLat!, _startLng!) : null;
+    final dest = _destLat != null && _destLng != null ? LatLng(_destLat!, _destLng!) : null;
+    final known = [for (final c in _stopCoords) if (c != null) c];
+    final center = start != null && dest != null
+        ? LatLng((start.latitude + dest.latitude) / 2, (start.longitude + dest.longitude) / 2)
+        : (dest ?? start ?? const LatLng(48.5, 12.0));
+    final picked = await Navigator.of(context).push<PickedMapPoint>(MaterialPageRoute(
+      builder: (_) => MapPointPicker(
+        initialCenter: center,
+        initialZoom: start != null || dest != null ? 6 : 5,
+        start: start,
+        dest: dest,
+        stops: known,
+        countries: CountryIndex.load(),
+      ),
+    ));
+    if (picked == null || !mounted) return;
+    setState(() {
+      _stops.add(MapWaypoint.label(picked.point, country: picked.country));
+      _stopCoords.add(picked.point);
+      _etaResult = null;
+      _ferryLegPlan = null;
+    });
+  }
+
   Future<void> _loadPresets() async {
     final loaded = await RoutePresetStore.load();
     if (!mounted) return;
@@ -391,7 +429,8 @@ class _HomeScreenState extends State<HomeScreen> {
         ..addAll(applied.stops);
       _stopCoords
         ..clear()
-        ..addAll(List<LatLng?>.filled(applied.stops.length, null));
+        // Kartenpunkte bringen ihre Koordinate im Text mit.
+        ..addAll([for (final s in applied.stops) MapWaypoint.parse(s)]);
       _etaResult = null;
       _ferryLegPlan = null;
       _ferryRouteNote = null;
@@ -1265,7 +1304,8 @@ class _HomeScreenState extends State<HomeScreen> {
       ) = await _planDistanceAndFerryAuto(
         s,
         d,
-        _stops,
+        // Kartenpunkte gehen als Koordinate an Directions, Text-Stopps unverändert.
+        _stops.map(MapWaypoint.routing).toList(),
         _optimizeStops,
         start,
       );
@@ -1279,7 +1319,7 @@ class _HomeScreenState extends State<HomeScreen> {
         profile: _speedProfile,
         customKmh: _avgKmh,
         routedKmh: truckTime?.avgKmh ?? roadMix?.averageKmh,
-        routeLabels: [s, d, ..._stops],
+        routeLabels: [s, d, ..._stops.map(MapWaypoint.display)],
         heavyLoad: _heavyLoad,
       );
 
@@ -1608,7 +1648,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String get _stopsSummary => _stops.isEmpty
       ? 'Keine'
-      : '${_stops.length} · ${_stops.take(2).join(', ')}'
+      : '${_stops.length} · ${_stops.take(2).map(MapWaypoint.display).join(', ')}'
           '${_stops.length > 2 ? ' …' : ''}';
 
   String get _ferrySummary {
@@ -2120,22 +2160,38 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(height: 8),
                           Align(
                             alignment: Alignment.centerLeft,
-                            child: OutlinedButton.icon(
-                              onPressed: _addingStop ? null : _addStop,
-                              icon: _addingStop
-                                  ? const SizedBox.square(
-                                      dimension: 16,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.add_rounded),
-                              label: const Text('Zwischenstopp hinzufügen'),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                OutlinedButton.icon(
+                                  onPressed: _addingStop ? null : _addStop,
+                                  icon: _addingStop
+                                      ? const SizedBox.square(
+                                          dimension: 16,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        )
+                                      : const Icon(Icons.add_rounded),
+                                  label: const Text('Zwischenstopp hinzufügen'),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: _addingStop ? null : _pickStopOnMap,
+                                  icon: const Icon(Icons.add_location_alt_outlined),
+                                  label: const Text('Auf Karte wählen'),
+                                ),
+                              ],
                             ),
                           ),
                           for (var index = 0; index < _stops.length; index++)
                             Card(
                               child: ListTile(
-                                title: Text('${index + 1}. ${_stops[index]}'),
+                                title: Text(
+                                    '${index + 1}. ${MapWaypoint.display(_stops[index])}'),
+                                subtitle: MapWaypoint.shortCoordinates(_stops[index]) == null
+                                    ? null
+                                    : Text(MapWaypoint.shortCoordinates(_stops[index])!,
+                                        style: Theme.of(context).textTheme.bodySmall),
                                 trailing: Wrap(
                                   spacing: 0,
                                   children: [

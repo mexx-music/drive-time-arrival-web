@@ -11,6 +11,7 @@ import '../animation/tour_story.dart';
 import '../logic/eta_calculator.dart';
 import 'tour_story_overlay.dart';
 import 'tour_animation_scene_maplibre.dart';
+import 'truck_sprites.dart';
 
 final NumberFormat _km = NumberFormat.decimalPattern('de');
 
@@ -38,7 +39,11 @@ class TourAnimationView extends StatefulWidget {
     this.fromName,
     this.toName,
     this.startIn25D = false,
+    this.truckView = TruckView.top,
   });
+
+  /// EXPERIMENT: Fahrzeugansicht in 2.5D (Vergleich auf der Demo-Seite).
+  final TruckView truckView;
 
   /// EXPERIMENT: direkt in der MapLibre-2.5D-Ansicht starten (Demo-Seite).
   final bool startIn25D;
@@ -232,7 +237,8 @@ class _TourAnimationViewState extends State<TourAnimationView>
     final position = widget.path.at(frame.meters);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Tour animieren'),
+        // Auf dem Smartphone kürzer, damit der Umschalter Platz hat.
+        title: Text(MediaQuery.sizeOf(context).width < 520 ? 'Tour' : 'Tour animieren'),
         actions: [
           if (widget.storyMode == TourStoryMode.cinematic)
             Padding(
@@ -240,9 +246,11 @@ class _TourAnimationViewState extends State<TourAnimationView>
               child: SegmentedButton<bool>(
                 key: const Key('renderer-switch'),
                 showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(value: false, label: Text('2D')),
-                  ButtonSegment(value: true, label: Text('2.5D (Test)')),
+                segments: [
+                  const ButtonSegment(value: false, label: Text('2D')),
+                  ButtonSegment(
+                      value: true,
+                      label: Text(MediaQuery.sizeOf(context).width < 520 ? '2.5D' : '2.5D (Test)')),
                 ],
                 selected: {_maplibre},
                 onSelectionChanged: (s) => _setRenderer(s.first),
@@ -274,6 +282,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 toName: widget.toName,
                 storyEvents: _timeline.events,
                 onReady: _onMapReady,
+                truckView: widget.truckView,
               ),
             )
           else

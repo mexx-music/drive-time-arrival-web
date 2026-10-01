@@ -328,6 +328,21 @@ test('Proxy-Schutz', { concurrency: false }, async (t) => {
   });
 
   // --------------------------------------------------------------- Fehler
+  await t.test('Geocoding fragt lesbare Namen an: language=de, nur de/en erlaubt', async () => {
+    const lang = async (body) => {
+      const r = await call('POST', '/api/geocode', { body: JSON.stringify(body) });
+      assert.strictEqual(r.status, 200);
+      assert.strictEqual(r.googleCalls, 1); // kein zusätzlicher Aufruf
+      return google.last.params.language;
+    };
+    assert.strictEqual(await lang({ address: 'Thessaloniki' }), 'de');
+    assert.strictEqual(await lang({ lat: 40.64, lng: 22.94 }), 'de'); // auch rückwärts
+    assert.strictEqual(await lang({ address: 'Thessaloniki', language: 'en' }), 'en');
+    assert.strictEqual(await lang({ address: 'Thessaloniki', language: 'el' }), 'de');
+    assert.strictEqual(await lang({ address: 'X', language: 'de&key=fremd' }), 'de');
+    assert.ok(!('key' in google.last.params));
+  });
+
   await t.test('kaputtes JSON: 400 als JSON, kein Stacktrace, kein Google-Aufruf', async () => {
     const r = await call('POST', '/api/directions', { body: '{kaputt' });
     assert.strictEqual(r.status, 400);

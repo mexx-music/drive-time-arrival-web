@@ -1,7 +1,5 @@
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -15,6 +13,7 @@ import '../animation/tour_story.dart';
 import 'map_label_style.dart';
 import 'tour_animation_view.dart' show tourKmLabel;
 import 'tour_story_overlay.dart';
+import 'truck_sprites.dart';
 
 /// EXPERIMENT: dieselbe Cinematic-Szene in 2.5D mit MapLibre + Vektorkacheln
 /// (OpenFreeMap). Nutzt [TourPath], Story, Fahrleiste und Abschlusskarte
@@ -36,7 +35,11 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.toName,
     this.storyEvents = const [],
     this.onReady,
+    this.truckView = TruckView.top,
   });
+
+  /// Ansicht des Fahrzeugs in der geneigten Karte.
+  final TruckView truckView;
 
   /// Karte, Stil und Ebenen sind bereit – erst dann soll die Fahrt laufen.
   final VoidCallback? onReady;
@@ -102,44 +105,14 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   Map<String, dynamic> _collection(List<Map<String, dynamic>> features) =>
       {'type': 'FeatureCollection', 'features': features};
 
-  /// Fahrzeug als Bild (dasselbe Symbol wie in 2D), normal und gespiegelt.
-  Future<Uint8List> _truckPng({required bool mirrored}) async {
-    const size = 96.0;
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    const c = Offset(size / 2, size / 2);
-    canvas.drawCircle(c + const Offset(0, 2), size / 2 - 6,
-        Paint()..color = Colors.black26..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
-    canvas.drawCircle(c, size / 2 - 6, Paint()..color = Colors.white);
-    if (mirrored) {
-      canvas.translate(size, 0);
-      canvas.scale(-1, 1);
-    }
-    const icon = Icons.local_shipping;
-    final tp = TextPainter(
-      text: TextSpan(
-        text: String.fromCharCode(icon.codePoint),
-        style: TextStyle(
-          fontSize: 56,
-          fontFamily: icon.fontFamily,
-          package: icon.fontPackage,
-          color: const Color(0xFF0D47A1),
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
-    final image = await recorder.endRecording().toImage(size.toInt(), size.toInt());
-    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    return bytes!.buffer.asUint8List();
-  }
-
   Future<void> _onStyleLoaded() async {
     final map = _map;
     if (map == null) return;
     final path = widget.path;
-    await map.addImage('truck', await _truckPng(mirrored: false));
-    await map.addImage('truck-mirrored', await _truckPng(mirrored: true));
+    await map.addImage('truck-top', await truckTopPng());
+    await map.addImage('truck-rear', await truckRearPng());
+    await map.addImage('truck', await truckSidePng(mirrored: false));
+    await map.addImage('truck-mirrored', await truckSidePng(mirrored: true));
 
     await map.addGeoJsonSource('country', _collection(const []));
     await map.addFillLayer('country', 'country-fill',
@@ -177,19 +150,44 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       circleStrokeWidth: 2,
       circlePitchAlignment: 'map',
     ));
-    await map.addGeoJsonSource('truck', _collection([_point(widget.position.point, const {})]));
-    await map.addSymbolLayer('truck', 'truck-symbol', const ml.SymbolLayerProperties(
+    await map.addGeoJsonSource(
+        'truck', _collection([_point(widget.position.point, _truckProps(widget.position.bearing))]));
+    // Von oben: flach auf der Karte (dreht und neigt sich mit ihr).
+    // Von hinten / seitlich: aufrecht zum Betrachter.
+    final flat = widget.truckView == TruckView.top;
+    await map.addSymbolLayer('truck', 'truck-symbol', ml.SymbolLayerProperties(
       iconImage: ['get', 'icon'],
-      iconSize: 0.55,
+      iconSize: ['match', ['get', 'icon'], 'truck-top', 0.3, 'truck-rear', 0.32, 0.55],
       iconRotate: ['get', 'rot'],
-      iconRotationAlignment: 'viewport',
-      iconPitchAlignment: 'viewport',
+      iconRotationAlignment: flat ? 'map' : 'viewport',
+      iconPitchAlignment: flat ? 'map' : 'viewport',
       iconAllowOverlap: true,
       iconIgnorePlacement: true,
     ));
     _ready = true;
     _update(force: true);
     widget.onReady?.call();
+  }
+
+  /// Bild und Drehung des Fahrzeugs für die gewählte Ansicht.
+  Map<String, dynamic> _truckProps(double heading) {
+    final relative = angleDiff(_cameraBearing, heading); // zur Blickrichtung
+    switch (widget.truckView) {
+      case TruckView.top:
+        return {'icon': 'truck-top', 'rot': heading}; // Kartenrichtung
+      case TruckView.rear:
+        // Fährt die Kamera hinterher (Regelfall), zeigt sie das Heck; leichte
+        // Neigung in Kurven. Bei starker Abweichung seitlich.
+        if (relative.abs() <= 50) return {'icon': 'truck-rear', 'rot': relative * 0.35};
+        continue side;
+      side:
+      case TruckView.side:
+        final pose = truckPose(relative);
+        return {
+          'icon': pose.mirrored ? 'truck-mirrored' : 'truck',
+          'rot': pose.radians * 180 / math.pi,
+        };
+    }
   }
 
   Map<String, dynamic> _point(LatLng p, Map<String, dynamic> props) => {
@@ -250,14 +248,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       )));
     }
 
-    // Fahrzeug: Richtung relativ zur Kamera, nie kopfüber (wie in 2D).
-    final pose = truckPose(pos.bearing - _cameraBearing);
-    map.setGeoJsonSource('truck', _collection([
-      _point(pos.point, {
-        'icon': pose.mirrored ? 'truck-mirrored' : 'truck',
-        'rot': pose.radians * 180 / math.pi,
-      }),
-    ]));
+    map.setGeoJsonSource('truck', _collection([_point(pos.point, _truckProps(pos.bearing))]));
 
     // Gefahrene Spur: höchstens etwa 12-mal pro Sekunde neu.
     if (force || widget.finished || now.difference(_lastTrail).inMilliseconds > 80) {

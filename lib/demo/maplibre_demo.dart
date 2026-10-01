@@ -5,7 +5,8 @@
 // Planung – ohne jeden Google-Aufruf. Zum Vergleich 2D / 2.5D:
 //
 //   flutter build web -t lib/demo/maplibre_demo.dart -o build/demo
-//   …/?mode=2d   bzw.   …/?mode=25d
+//   …/?mode=2d   bzw.   …/?mode=25d   (Fahrzeug: &truck=top|rear|side)
+//   …/?mode=picker  – Zwischenpunkt auf der Vektorkarte wählen
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -15,6 +16,8 @@ import '../animation/country_borders.dart';
 import '../animation/tour_path.dart';
 import '../logic/eta_calculator.dart';
 import '../ui/tour_animation_view.dart';
+import '../ui/truck_sprites.dart';
+import '../ui/map_point_picker.dart';
 
 /// Grobe Strecke İpsala → Odense über die üblichen Korridore.
 const _via = [
@@ -90,7 +93,15 @@ Future<void> main() async {
     supportedLocales: const [Locale('de')],
     localizationsDelegates: GlobalMaterialLocalizations.delegates,
     theme: ThemeData(colorSchemeSeed: const Color(0xFF0A6EBD), useMaterial3: true),
-    home: TourAnimationView(
+    home: mode == 'picker'
+        ? MapPointPicker(
+            initialCenter: const LatLng(41.6, 23.5), // Balkan: Griechenland, Bulgarien
+            initialZoom: 7,
+            start: _via.first,
+            dest: _via.last,
+            countries: CountryIndex.load(),
+          )
+        : TourAnimationView(
       path: path,
       title: 'İpsala → Odense',
       fromName: 'İpsala',
@@ -98,6 +109,11 @@ Future<void> main() async {
       eta: _plan(path.roadMeters / 1000),
       countries: CountryIndex.load(),
       startIn25D: mode != '2d',
+      truckView: switch (Uri.base.queryParameters['truck']) {
+        'rear' => TruckView.rear,
+        'side' => TruckView.side,
+        _ => TruckView.top,
+      },
     ),
   ));
 }

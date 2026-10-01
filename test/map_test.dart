@@ -8,6 +8,9 @@ import 'package:driverroute_eta/services/maps_proxy.dart';
 import 'package:driverroute_eta/tour/tour_scope.dart';
 import 'package:driverroute_eta/tour/tour_service.dart';
 import 'package:driverroute_eta/ui/map_osm_view.dart';
+import 'package:driverroute_eta/ui/map_point_picker.dart';
+import 'package:driverroute_eta/animation/country_borders.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -108,6 +111,7 @@ void main() {
   late _Proxy proxy;
 
   setUp(() {
+    debugMapPickerUseMapLibre = false; // MapLibre in Widget-Tests nicht darstellbar
     proxy = _Proxy();
     debugMapsDirectCallsAllowed = false;
     debugMapsProxyBase = 'https://proxy.test';
@@ -231,6 +235,59 @@ void main() {
     expect(view.stops.length, 1);
     expect(view.stops.single.latitude, closeTo(49.45, 0.01));
     expect(proxy.providerCalls, afterCalc);
+    await finish(tester);
+  });
+
+  testWidgets('Kartenpunkt als Zwischenstopp: Koordinate an Directions, kein Geocoding',
+      (tester) async {
+    await pumpApp(tester);
+    // Grenzdaten vorab real laden (Datei-Lesen braucht echte Zeit im Test).
+    await tester.runAsync(() => CountryIndex.load());
+    await tester.ensureVisible(find.text('ZWISCHENSTOPPS'));
+    await tester.tap(find.text('ZWISCHENSTOPPS'));
+    await tester.pumpAndSettle();
+
+    final before = proxy.providerCalls;
+    final pick = find.text('Auf Karte wählen');
+    await tester.ensureVisible(pick);
+    await tester.tap(pick);
+    await tester.pumpAndSettle();
+    expect(find.byType(MapPointPicker), findsOneWidget);
+
+    await tester.tapAt(tester.getCenter(find.byType(FlutterMap)));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero)); // Land (lokal)
+    await tester.pump();
+    await tester.tap(find.text('Als Zwischenpunkt übernehmen'));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
+    expect(find.byType(MapPointPicker), findsNothing);
+
+    // Liste: kurz und lesbar, Koordinate klein darunter.
+    expect(find.textContaining('1. 📍 Kartenpunkt · Deutschland'), findsOneWidget);
+    expect(find.textContaining('@'), findsNothing);
+    expect(proxy.providerCalls, before); // Setzen kostet nichts
+
+    await calculate(tester);
+    final wps = [
+      for (final r in proxy.requests)
+        if (r.url.path == '/api/directions')
+          for (final w in ((jsonDecode(r.body) as Map)['waypoints'] as List? ?? const [])) w as String,
+    ];
+    expect(wps, isNotEmpty);
+    expect(wps.every((w) => RegExp(r'^-?\d+\.\d{6},-?\d+\.\d{6}$').hasMatch(w)), isTrue,
+        reason: '$wps');
+    // Geocoding nur für Start und Ziel – nicht für den Kartenpunkt.
+    final geocoded = [
+      for (final r in proxy.requests)
+        if (r.url.path == '/api/geocode') (jsonDecode(r.body) as Map)['address']
+    ];
+    expect(geocoded.where((a) => a.toString().contains('Kartenpunkt')), isEmpty);
+    expect(geocoded.where((a) => RegExp(r'^\d').hasMatch(a.toString())), isEmpty);
+
+    // Die Karte zeigt den Punkt als Stopp – aus der gespeicherten Koordinate.
+    final view = await openMap(tester);
+    expect(view.stops, hasLength(1));
     await finish(tester);
   });
 

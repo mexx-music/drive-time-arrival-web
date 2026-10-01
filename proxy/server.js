@@ -203,6 +203,8 @@ const handleDirections = async (req, res) => {
 app.get('/api/directions', tours.gate('directions'), handleDirections);
 app.post('/api/directions', tours.gate('directions'), handleDirections);
 
+const GEOCODE_LANGUAGES = new Set(['de', 'en']);
+
 app.post('/api/geocode', tours.gate('geocode'), async (req, res) => {
   try {
     const address = (req.body && req.body.address) || '';
@@ -214,8 +216,11 @@ app.post('/api/geocode', tours.gate('geocode'), async (req, res) => {
     const query = address
       ? `address=${encodeURIComponent(address)}`
       : `latlng=${encodeURIComponent(`${lat},${lng}`)}`;
+    // Ortsnamen in lesbarer (lateinischer) Schrift statt Landessprache –
+    // z. B. „Thessaloniki, Griechenland“ statt „Θεσσαλονίκη, Ελλάδα“. Nur de/en.
+    const language = GEOCODE_LANGUAGES.has(req.body && req.body.language) ? req.body.language : 'de';
     const trace = traceFor(req, req.body);
-    const url = `${GOOGLE_MAPS_BASE}/maps/api/geocode/json?${query}&key=${GOOGLE_KEY}`;
+    const url = `${GOOGLE_MAPS_BASE}/maps/api/geocode/json?${query}&language=${language}&key=${GOOGLE_KEY}`;
     const r = await googleCall('geocode', trace, async () => {
       const res = await forwardGet(url);
       let status = null;
