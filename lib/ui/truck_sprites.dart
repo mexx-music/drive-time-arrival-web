@@ -1,7 +1,10 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+
+import '../animation/truck_projection.dart';
 
 /// Wie das Fahrzeug in der geneigten (2.5D) Karte gezeigt wird.
 enum TruckView {
@@ -14,6 +17,15 @@ enum TruckView {
 
   /// Seitlich, wie in 2D (bisheriges Symbol).
   side,
+
+  /// 3/4 von oben, immer die linke Aufliegerseite sichtbar.
+  threeQuarterLeft,
+
+  /// 3/4 von oben, immer die rechte Aufliegerseite sichtbar.
+  threeQuarterRight,
+
+  /// 3/4 von oben, Seite automatisch nach Kurvenrichtung (mit Hysterese).
+  threeQuarterAuto,
 }
 
 /// Farben – neutral, ohne Marke. Später austauschbar (Fahrzeugtyp, Firma).
@@ -150,3 +162,177 @@ Future<Uint8List> truckSidePng({required bool mirrored}) => _png(const Size(96, 
       )..layout();
       tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
     });
+
+// ------------------------------------------------------- 3/4-Ansicht (2.5D)
+
+/// Aufliegertyp – getrennt vom Branding wählbar. (Tank folgt später.)
+enum TrailerKind { box, curtain, reefer }
+
+/// Farben und Beschriftung eines Fahrzeugs – getrennt vom Typ.
+class TruckBranding {
+  const TruckBranding({
+    required this.id,
+    this.sideText,
+    this.cab = const Color(0xFF0D47A1),
+    this.trailer = const Color(0xFFF5F7FA),
+    this.text = const Color(0xFF1B2733),
+  });
+
+  final String id;
+
+  /// Schriftzug auf beiden Aufliegerseiten; null = neutral.
+  final String? sideText;
+  final Color cab;
+  final Color trailer;
+  final Color text;
+
+  static const neutral = TruckBranding(id: 'neutral');
+
+  /// Testschriftzug zur Lesbarkeitsprüfung – KEIN echtes Firmen-Branding.
+  static const gartnerTest = TruckBranding(id: 'gartner-test', sideText: 'GARTNER');
+}
+
+/// Fahrzeug = Typ + Branding.
+class TruckModel {
+  const TruckModel({this.trailer = TrailerKind.box, this.branding = TruckBranding.neutral});
+
+  final TrailerKind trailer;
+  final TruckBranding branding;
+
+  String get id => '${trailer.name}-${branding.id}';
+
+  List<TruckBox> get boxes => [
+        ...standardTruck,
+        if (trailer == TrailerKind.reefer)
+          const TruckBox(name: 'reefer-unit', fromF: 5.4, toF: 5.8, halfWidth: 0.85, fromZ: 2.4, toZ: 3.6),
+      ];
+}
+
+/// Sattelzug in 3/4-Ansicht für Gierwinkel [yawDeg] relativ zur Blickrichtung
+/// und Kartenneigung [pitchDeg]. Bodenmitte des Zugs = Bildmitte, damit das
+/// Symbol mit Anker „Mitte“ genau auf der Straße steht.
+Future<Uint8List> truckThreeQuarterPng(
+  TruckModel model, {
+  required double yawDeg,
+  double pitchDeg = 42,
+  double pxPerMeter = 10,
+}) {
+  final proj = TruckProjection(pitchDeg: pitchDeg, yawDeg: yawDeg);
+  final boxes = model.boxes;
+  final faces = proj.visibleFaces(boxes);
+
+  // Bildgröße: symmetrisch um die Bodenmitte.
+  var ext = 0.0;
+  for (final f in faces) {
+    for (final c in f.corners) {
+      ext = math.max(ext, math.max(c.x.abs(), c.y.abs()));
+    }
+  }
+  final half = (ext * pxPerMeter).ceilToDouble() + 8;
+  final size = Size(half * 2, half * 2);
+
+  Offset px(ScreenPoint p) => Offset(half + p.x * pxPerMeter, half + p.y * pxPerMeter);
+
+  return _png(size, (c) {
+    // Schatten auf der Straße: Grundriss bei z = 0, weich.
+    final shadow = Path();
+    for (final b in boxes.where((b) => b.name != 'reefer-unit')) {
+      final pts = [
+        proj.world(b.toF, -b.halfWidth, 0),
+        proj.world(b.toF, b.halfWidth, 0),
+        proj.world(b.fromF, b.halfWidth, 0),
+        proj.world(b.fromF, -b.halfWidth, 0),
+      ].map((w) => px(proj.project(w))).toList();
+      shadow.addPolygon(pts, true);
+    }
+    c.drawPath(
+        shadow.shift(const Offset(1.5, 2)),
+        Paint()
+          ..color = const Color(0x55000000)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+
+    for (final f in faces) {
+      final base = switch (f.box.name) {
+        'cab' => model.branding.cab,
+        'trailer' => model.branding.trailer,
+        'reefer-unit' => const Color(0xFFB0BEC5),
+        _ => const Color(0xFF263238), // Fahrwerk
+      };
+      final color = Color.lerp(Colors.black, base, f.shade)!;
+      final poly = Path()..addPolygon([for (final p in f.corners) px(p)], true);
+      c.drawPath(poly, Paint()..color = color);
+      c.drawPath(
+          poly,
+          Paint()
+            ..color = const Color(0x33000000)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1);
+      if (f.box.name == 'trailer' && (f.side == FaceSide.left || f.side == FaceSide.right)) {
+        _decorateSide(c, f, px, model);
+      }
+      if (f.box.name == 'cab' && f.side == FaceSide.front) {
+        _windshield(c, f, px);
+      }
+    }
+  });
+}
+
+/// Zeichnet auf eine Seitenfläche im Flächen-Koordinatensystem (u nach
+/// rechts, v nach unten, je 0..1) – dadurch perspektivisch richtig und nie
+/// gespiegelt (Ecken kommen in Leserichtung von außen).
+void _inFace(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, void Function(Canvas c) draw) {
+  final o = px(f.corners[0]);
+  final u = px(f.corners[1]) - o;
+  final v = px(f.corners[3]) - o;
+  c.save();
+  c.transform(Float64List.fromList([
+    u.dx, u.dy, 0, 0, //
+    v.dx, v.dy, 0, 0, //
+    0, 0, 1, 0, //
+    o.dx, o.dy, 0, 1,
+  ]));
+  draw(c);
+  c.restore();
+}
+
+void _decorateSide(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, TruckModel model) {
+  _inFace(c, f, px, (c) {
+    if (model.trailer == TrailerKind.curtain) {
+      final strap = Paint()
+        ..color = const Color(0x22000000)
+        ..strokeWidth = 0.004;
+      for (var i = 1; i < 12; i++) {
+        c.drawLine(Offset(i / 12, 0.02), Offset(i / 12, 0.98), strap);
+      }
+    }
+    final text = model.branding.sideText;
+    if (text == null) return;
+    // Schrift in einem 1000 × 1000 Feld setzen und auf die Fläche skalieren.
+    c.scale(1 / 1000, 1 / 1000);
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontSize: 520,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 10,
+          color: model.branding.text,
+          height: 1,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    // Breite füllt 84 % der Fläche, Höhe höchstens 60 %.
+    final sx = 840 / tp.width;
+    final sy = math.min(600 / tp.height, sx * 3.2);
+    c.translate(80, 500 - tp.height * sy / 2);
+    c.scale(sx, sy);
+    tp.paint(c, Offset.zero);
+  });
+}
+
+void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px) {
+  _inFace(c, f, px, (c) {
+    c.drawRect(const Rect.fromLTWH(0.1, 0.12, 0.8, 0.32), Paint()..color = const Color(0xFF90CAF9));
+  });
+}

@@ -40,7 +40,17 @@ class TourAnimationView extends StatefulWidget {
     this.toName,
     this.startIn25D = false,
     this.truckView = TruckView.top,
+    this.truckModel = const TruckModel(),
+    this.truckBias = 22,
+    this.truckPitch = 42,
+    this.truckScale = 1,
   });
+
+  /// EXPERIMENT: Fahrzeug (Typ + Branding) und 3/4-Darstellung.
+  final TruckModel truckModel;
+  final double truckBias;
+  final double truckPitch;
+  final double truckScale;
 
   /// EXPERIMENT: Fahrzeugansicht in 2.5D (Vergleich auf der Demo-Seite).
   final TruckView truckView;
@@ -283,6 +293,10 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 storyEvents: _timeline.events,
                 onReady: _onMapReady,
                 truckView: widget.truckView,
+                truckModel: widget.truckModel,
+                truckBias: widget.truckBias,
+                truckPitch: widget.truckPitch,
+                truckScale: widget.truckScale,
               ),
             )
           else

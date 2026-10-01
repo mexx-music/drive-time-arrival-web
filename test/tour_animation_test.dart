@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:driverroute_eta/animation/country_borders.dart';
 import 'package:driverroute_eta/animation/tour_path.dart';
@@ -8,7 +9,9 @@ import 'package:driverroute_eta/logic/eta_calculator.dart';
 import 'package:driverroute_eta/main.dart';
 import 'package:driverroute_eta/services/maps_proxy.dart';
 import 'package:driverroute_eta/tour/tour_scope.dart';
+import 'package:driverroute_eta/ui/map_osm_view.dart';
 import 'package:driverroute_eta/ui/tour_animation_view.dart';
+import 'package:driverroute_eta/utils/polyline.dart' show decodePolyline;
 import 'package:driverroute_eta/ui/tour_story_overlay.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -26,6 +29,11 @@ import 'helpers/fake_directions.dart';
 class _Proxy {
   final List<http.Request> requests = [];
   bool zeroResults = false;
+
+  /// Eigene Routengeometrie (Etappen); [straightOverview]: Googles Übersicht
+  /// nur als Gerade Start → Ziel – die Animation darf sie nicht benutzen.
+  List<List<double>>? geometry;
+  bool straightOverview = false;
 
   int get providerCalls => requests
       .where((r) => const {'/api/directions', '/api/geocode', '/api/autocomplete'}.contains(r.url.path))
@@ -52,12 +60,14 @@ class _Proxy {
     }
     if (p == '/api/autocomplete') return _j(200, {'suggestions': []});
     if (zeroResults) return _j(200, {'status': 'ZERO_RESULTS', 'routes': []});
-    final pts = densify([[48.09, 13.87], [49.45, 11.08], [53.55, 9.99]], stepKm: 20);
+    final pts = geometry ?? densify([[48.09, 13.87], [49.45, 11.08], [53.55, 9.99]], stepKm: 20);
     final resp = directionsResponse([
       [pts]
     ]);
     final route0 = Map<String, dynamic>.from((resp['routes'] as List).first as Map);
-    route0['overview_polyline'] = {'points': encodePolyline(pts)};
+    route0['overview_polyline'] = {
+      'points': encodePolyline(straightOverview ? [pts.first, pts.last] : pts)
+    };
     resp['routes'] = [route0];
     return _j(200, resp);
   }
@@ -716,6 +726,65 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(TourAnimationView), findsNothing);
       expect(proxy.requests.length, afterCalc); // weder Maps noch sonst etwas
+    });
+
+    testWidgets('Animation folgt der vollständigen Etappen-Geometrie, nicht der Übersichtslinie',
+        (tester) async {
+      // Umfahrung, Autobahnkreuz (Schleife) und enge Kurvenfolge.
+      final geometry = <List<double>>[
+        [48.09, 13.87],
+        for (var i = 0; i < 12; i++) [48.40 + (i.isOdd ? 0.003 : -0.003), 13.60 - i * 0.004], // Kurven
+        [48.70, 13.20],
+        for (var k = 0; k <= 16; k++) // Kleeblatt-Schleife, Radius ~400 m
+          [49.00 + 0.0036 * math.sin(k * math.pi / 8), 12.50 + 0.0055 * math.cos(k * math.pi / 8)],
+        [49.30, 11.40],
+        [49.40, 11.20], [49.38, 11.08], [49.42, 10.95], [49.50, 10.98], [49.55, 11.05], // Umfahrung
+        [53.55, 9.99],
+      ];
+      await pumpApp(tester);
+      proxy
+        ..geometry = geometry
+        ..straightOverview = true;
+      await calculate(tester);
+      await tester.runAsync(() => CountryIndex.load());
+      await tester.ensureVisible(animateButton);
+      await tester.tap(animateButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      final path = tester.widget<TourAnimationView>(find.byType(TourAnimationView)).path;
+
+      // Genau die Etappen-Punkte (so wie Google sie kodiert liefert).
+      final steps = decodePolyline(encodePolyline(densify(geometry)));
+      expect(path.points.length, steps.length);
+      const d = Distance(calculator: Haversine());
+      for (var i = 0; i < steps.length; i += 7) {
+        expect(d(path.points[i], steps[i]), lessThan(1.0));
+      }
+      // Jede Ecke von Kurven, Schleife und Umfahrung liegt auf der Animationslinie.
+      for (final g in geometry) {
+        final p = LatLng(g[0], g[1]);
+        final nearest = path.points.map((q) => d(p, q)).reduce(math.min);
+        expect(nearest, lessThan(2.0), reason: '$g');
+      }
+      // Länge = Etappen-Geometrie, nicht die Luftlinie.
+      var len = 0.0;
+      for (var i = 1; i < steps.length; i++) {
+        len += d(steps[i - 1], steps[i]);
+      }
+      expect(path.totalMeters, closeTo(len, len * 0.001));
+      expect(path.totalMeters, greaterThan(d(steps.first, steps.last) * 1.05));
+
+      // Auch „Karte anzeigen“ zeigt dieselbe vollständige Geometrie.
+      await tester.tap(find.byTooltip('Schließen'));
+      await tester.pumpAndSettle();
+      final mapButton = find.ancestor(
+          of: find.text('Karte anzeigen'), matching: find.byWidgetPredicate((w) => w is OutlinedButton));
+      await tester.ensureVisible(mapButton);
+      await tester.tap(mapButton);
+      await tester.pumpAndSettle();
+      expect(tester.widget<MapOsmView>(find.byType(MapOsmView)).route.length, steps.length);
+      Navigator.of(tester.element(find.byType(MapOsmView))).pop();
+      await tester.pumpAndSettle();
     });
 
     testWidgets('ohne Streckenführung (manuelle km): Hinweis statt Animation, kein Aufruf',

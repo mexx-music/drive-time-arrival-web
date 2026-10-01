@@ -5,7 +5,10 @@
 // Planung – ohne jeden Google-Aufruf. Zum Vergleich 2D / 2.5D:
 //
 //   flutter build web -t lib/demo/maplibre_demo.dart -o build/demo
-//   …/?mode=2d   bzw.   …/?mode=25d   (Fahrzeug: &truck=top|rear|side)
+//   …/?mode=2d   bzw.   …/?mode=25d
+//   Fahrzeug: &truck=top|threequarter-left|threequarter-right|threequarter-auto|rear|side
+//             &brand=gartner|neutral  &trailer=box|curtain|reefer
+//             &bias=22 (Schrägstellung °)  &tpitch=42 (Fahrzeug-Neigung °)  &tscale=1
 //   …/?mode=picker  – Zwischenpunkt auf der Vektorkarte wählen
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -86,7 +89,8 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('de');
   final path = TourPath([TourLeg(points: _densify(_via))]);
-  final mode = Uri.base.queryParameters['mode'] ?? '25d';
+  final q = Uri.base.queryParameters;
+  final mode = q['mode'] ?? '25d';
   runApp(MaterialApp(
     debugShowCheckedModeBanner: false,
     locale: const Locale('de'),
@@ -109,11 +113,25 @@ Future<void> main() async {
       eta: _plan(path.roadMeters / 1000),
       countries: CountryIndex.load(),
       startIn25D: mode != '2d',
-      truckView: switch (Uri.base.queryParameters['truck']) {
+      truckView: switch (q['truck']) {
         'rear' => TruckView.rear,
         'side' => TruckView.side,
+        'threequarter-left' => TruckView.threeQuarterLeft,
+        'threequarter-right' => TruckView.threeQuarterRight,
+        'threequarter-auto' => TruckView.threeQuarterAuto,
         _ => TruckView.top,
       },
+      truckModel: TruckModel(
+        trailer: switch (q['trailer']) {
+          'curtain' => TrailerKind.curtain,
+          'reefer' => TrailerKind.reefer,
+          _ => TrailerKind.box,
+        },
+        branding: q['brand'] == 'neutral' ? TruckBranding.neutral : TruckBranding.gartnerTest,
+      ),
+      truckBias: double.tryParse(q['bias'] ?? '') ?? 22,
+      truckPitch: double.tryParse(q['tpitch'] ?? '') ?? 42,
+      truckScale: double.tryParse(q['tscale'] ?? '') ?? 1,
     ),
   ));
 }

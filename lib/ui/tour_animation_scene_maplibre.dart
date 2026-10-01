@@ -14,6 +14,7 @@ import 'map_label_style.dart';
 import 'tour_animation_view.dart' show tourKmLabel;
 import 'tour_story_overlay.dart';
 import 'truck_sprites.dart';
+import '../animation/truck_projection.dart';
 
 /// EXPERIMENT: dieselbe Cinematic-Szene in 2.5D mit MapLibre + Vektorkacheln
 /// (OpenFreeMap). Nutzt [TourPath], Story, Fahrleiste und Abschlusskarte
@@ -36,7 +37,23 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.storyEvents = const [],
     this.onReady,
     this.truckView = TruckView.top,
+    this.truckModel = const TruckModel(),
+    this.truckBias = 22,
+    this.truckPitch = 42,
+    this.truckScale = 1,
   });
+
+  /// Fahrzeugtyp und Branding (getrennt wählbar).
+  final TruckModel truckModel;
+
+  /// 3/4: Schrägstellung in Grad, die die Aufliegerseite zeigt.
+  final double truckBias;
+
+  /// 3/4: Neigung, mit der das Fahrzeug gezeichnet wird (Karte: 42°).
+  final double truckPitch;
+
+  /// 3/4: Größenfaktor des Fahrzeugs.
+  final double truckScale;
 
   /// Ansicht des Fahrzeugs in der geneigten Karte.
   final TruckView truckView;
@@ -120,9 +137,10 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     await map.addLineLayer('country', 'country-line',
         const ml.LineLayerProperties(lineColor: '#1565C0', lineWidth: 2, lineOpacity: 0.0));
 
-    final full = path.trailUpTo(path.totalMeters, maxPointsPerLeg: 1500);
+    // Die ganze Route mit ALLEN Punkten der Berechnung (Etappen-Geometrie),
+    // nicht ausgedünnt – MapLibre vereinfacht je Zoomstufe selbst passend.
     await map.addGeoJsonSource('route', _collection([
-      for (final t in full) _line(t.points, {'ferry': t.kind != TourLegKind.road}),
+      for (final leg in path.legs) _line(leg.points, {'ferry': leg.kind != TourLegKind.road}),
     ]));
     await map.addLineLayer('route', 'route-line', const ml.LineLayerProperties(
       lineColor: ['case', ['get', 'ferry'], '#26A69A', '#3F51B5'],
@@ -151,34 +169,154 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       circlePitchAlignment: 'map',
     ));
     await map.addGeoJsonSource(
-        'truck', _collection([_point(widget.position.point, _truckProps(widget.position.bearing))]));
-    // Von oben: flach auf der Karte (dreht und neigt sich mit ihr).
-    // Von hinten / seitlich: aufrecht zum Betrachter.
-    final flat = widget.truckView == TruckView.top;
-    await map.addSymbolLayer('truck', 'truck-symbol', ml.SymbolLayerProperties(
-      iconImage: ['get', 'icon'],
-      iconSize: ['match', ['get', 'icon'], 'truck-top', 0.3, 'truck-rear', 0.32, 0.55],
-      iconRotate: ['get', 'rot'],
-      iconRotationAlignment: flat ? 'map' : 'viewport',
-      iconPitchAlignment: flat ? 'map' : 'viewport',
-      iconAllowOverlap: true,
-      iconIgnorePlacement: true,
-    ));
+        'truck', _collection([_point(widget.position.point, _truckProps(_localHeading(widget.position.meters)))]));
+    // Zwei Ebenen, je Feature gewählt: flach auf der Karte (von oben; dreht
+    // und neigt sich mit ihr) oder aufrecht zum Betrachter (Heck, seitlich,
+    // 3/4 – das Bild bringt die Perspektive selbst mit).
+    for (final flat in [true, false]) {
+      await map.addSymbolLayer('truck', flat ? 'truck-flat' : 'truck-upright', ml.SymbolLayerProperties(
+        iconImage: ['get', 'icon'],
+        iconSize: ['get', 'size'],
+        iconRotate: ['get', 'rot'],
+        iconRotationAlignment: flat ? 'map' : 'viewport',
+        iconPitchAlignment: flat ? 'map' : 'viewport',
+        iconAllowOverlap: true,
+        iconIgnorePlacement: true,
+      ), filter: ['==', ['get', 'flat'], flat]);
+    }
     _ready = true;
     _update(force: true);
     widget.onReady?.call();
   }
 
+  // ------------------------------------------------ Geometrie, unvereinfacht
+
+  /// Alle Punkte der Linie und ihre Strecke ab Start – einmal berechnet.
+  late final List<LatLng> _pts = widget.path.points;
+  late final List<double> _cum = () {
+    const d = Distance(calculator: Haversine());
+    final out = <double>[0];
+    for (var i = 1; i < _pts.length; i++) {
+      out.add(out.last + d(_pts[i - 1], _pts[i]));
+    }
+    return out;
+  }();
+
+  int _indexAt(double meters) {
+    var lo = 0, hi = _cum.length - 1;
+    while (hi - lo > 1) {
+      final mid = (lo + hi) >> 1;
+      if (_cum[mid] <= meters) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  /// Gefahrene Spur: die letzten [window] Meter punktgenau aus der vollen
+  /// Geometrie (Kreuze, Umfahrungen, enge Kurven), weiter hinten leicht
+  /// ausgedünnt – die Spur wird etwa 12-mal pro Sekunde neu übergeben.
+  List<Map<String, dynamic>> _drivenFeatures(TourPosition pos, {double window = 60000}) {
+    final m = pos.meters;
+    final split = math.max(0.0, m - window);
+    final older = split > 0
+        ? widget.path.trailUpTo(split, maxPointsPerLeg: 1500)
+        : const <TourTrail>[];
+    final from = _indexAt(split);
+    final to = _indexAt(m);
+    final recent = <LatLng>[
+      if (split > 0) widget.path.at(split).point,
+      for (var i = from + 1; i <= to; i++) _pts[i],
+      pos.point,
+    ];
+    return [
+      for (final t in older) _line(t.points, {'ferry': t.kind != TourLegKind.road}),
+      if (recent.length >= 2) _line(recent, {'ferry': pos.kind != TourLegKind.road}),
+    ];
+  }
+
+  /// Fahrtrichtung des Fahrzeugs: lokal über ±150 m der vollen Geometrie,
+  /// damit es auch in Kreuzen und engen Kurven der Straße folgt. (Die
+  /// Kamera nutzt ihre eigene, bewusst weiche Richtung.)
+  double _localHeading(double meters) {
+    const span = 150.0;
+    final a = widget.path.at(math.max(0, meters - span)).point;
+    final b = widget.path.at(math.min(widget.path.totalMeters, meters + span)).point;
+    if (a == b) return widget.position.bearing;
+    return (const Distance(calculator: Haversine()).bearing(a, b) + 360) % 360;
+  }
+
   /// Bild und Drehung des Fahrzeugs für die gewählte Ansicht.
+  // ------------------------------------------------------ 3/4-Fahrzeug
+
+  /// Aktuell gezeigte Seite (Auto mit Hysterese) und weicher Seitenwinkel.
+  final SideChooser _sideChooser = SideChooser();
+  double? _bias;
+  int _frame = 0;
+  String? _shownFrame;
+  final Set<String> _framesReady = {};
+  final Set<String> _framesPending = {};
+  Duration _dt = Duration.zero;
+
+  String _frameName(int frame) =>
+      '34-${widget.truckModel.id}-p${widget.truckPitch.round()}-$frame';
+
+  /// Bild für einen Gierwinkel bei Bedarf erzeugen und der Karte geben.
+  void _ensureFrame(int frame) {
+    final name = _frameName(frame);
+    if (_framesReady.contains(name) || _framesPending.contains(name)) return;
+    _framesPending.add(name);
+    truckThreeQuarterPng(widget.truckModel,
+            yawDeg: frame * _frameStep, pitchDeg: widget.truckPitch, pxPerMeter: 10)
+        .then((png) async {
+      await _map?.addImage(name, png);
+      _framesPending.remove(name);
+      _framesReady.add(name);
+    });
+  }
+
+  static const _frameStep = 4.0;
+
   Map<String, dynamic> _truckProps(double heading) {
     final relative = angleDiff(_cameraBearing, heading); // zur Blickrichtung
+    if (widget.finished) {
+      // Übersicht von oben am Ziel: flach.
+      return {'icon': 'truck-top', 'rot': heading, 'flat': true, 'size': 0.3};
+    }
     switch (widget.truckView) {
       case TruckView.top:
-        return {'icon': 'truck-top', 'rot': heading}; // Kartenrichtung
+        return {'icon': 'truck-top', 'rot': heading, 'flat': true, 'size': 0.3}; // Kartenrichtung
+      case TruckView.threeQuarterLeft:
+      case TruckView.threeQuarterRight:
+      case TruckView.threeQuarterAuto:
+        final TruckSide side;
+        if (widget.truckView == TruckView.threeQuarterAuto) {
+          side = _sideChooser.update(relative, _dt);
+        } else {
+          side = widget.truckView == TruckView.threeQuarterLeft ? TruckSide.left : TruckSide.right;
+        }
+        final target = biasFor(side, widget.truckBias);
+        _bias = _bias == null ? target : easeBias(_bias!, target, _dt);
+        _frame = frameFor(relative + _bias!, _frame, step: _frameStep);
+        _ensureFrame(_frame);
+        final name = _frameName(_frame);
+        if (_framesReady.contains(name)) _shownFrame = name;
+        // Solange das neue Bild entsteht, bleibt das vorige stehen.
+        final icon = _shownFrame ?? 'truck-top';
+        return {
+          'icon': icon,
+          'rot': _shownFrame == null ? heading : 0.0,
+          'flat': _shownFrame == null,
+          'size': _shownFrame == null ? 0.3 : 0.5 * widget.truckScale,
+        };
       case TruckView.rear:
         // Fährt die Kamera hinterher (Regelfall), zeigt sie das Heck; leichte
         // Neigung in Kurven. Bei starker Abweichung seitlich.
-        if (relative.abs() <= 50) return {'icon': 'truck-rear', 'rot': relative * 0.35};
+        if (relative.abs() <= 50) {
+          return {'icon': 'truck-rear', 'rot': relative * 0.35, 'flat': false, 'size': 0.32};
+        }
         continue side;
       side:
       case TruckView.side:
@@ -186,6 +324,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         return {
           'icon': pose.mirrored ? 'truck-mirrored' : 'truck',
           'rot': pose.radians * 180 / math.pi,
+          'flat': false,
+          'size': 0.55,
         };
     }
   }
@@ -212,6 +352,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final now = DateTime.now();
     final dt = _lastFrame == null ? Duration.zero : now.difference(_lastFrame!);
     _lastFrame = now;
+    _dt = dt;
     final pos = widget.position;
 
     // Kamera: ruhig in Fahrtrichtung, am Ziel Übersicht von oben.
@@ -248,15 +389,12 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       )));
     }
 
-    map.setGeoJsonSource('truck', _collection([_point(pos.point, _truckProps(pos.bearing))]));
+    map.setGeoJsonSource('truck', _collection([_point(pos.point, _truckProps(_localHeading(pos.meters)))]));
 
     // Gefahrene Spur: höchstens etwa 12-mal pro Sekunde neu.
     if (force || widget.finished || now.difference(_lastTrail).inMilliseconds > 80) {
       _lastTrail = now;
-      final trail = widget.path.trailUpTo(pos.meters, maxPointsPerLeg: 800);
-      map.setGeoJsonSource('driven', _collection([
-        for (final t in trail) _line(t.points, {'ferry': t.kind != TourLegKind.road}),
-      ]));
+      map.setGeoJsonSource('driven', _collection(_drivenFeatures(pos)));
     }
 
     // Länder-Hervorhebung beim Grenzübertritt.

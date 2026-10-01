@@ -25,6 +25,7 @@ import 'logic/speed_profile.dart';
 import 'logic/truck_speed.dart';
 import 'logic/time_budget.dart';
 import 'models/route_candidate.dart';
+import 'utils/polyline.dart' as poly_utils;
 import 'models/route_preset.dart';
 import 'services/route_preset_store.dart';
 import 'widgets/route_preset_selector.dart';
@@ -1009,12 +1010,23 @@ class _HomeScreenState extends State<HomeScreen> {
       hasFerry ? '🛳️ Fähre erkannt ($why)' : '',
       routedWaypoints,
       // Geometrie GENAU der Route, aus der oben km, Fahrzeit und Straßenmix
-      // stammen – Grundlage für Karte, Timeline und Export.
-      (route?.raw['overview_polyline'] as Map<String, dynamic>?)?['points']
-          as String?,
+      // stammen – Grundlage für Karte, Timeline, Animation und Export.
+      // Vollständig aus allen Etappen (steps[].polyline): jede Umfahrung,
+      // jedes Autobahnkreuz. Googles overview_polyline ist nur eine
+      // geglättete Näherung und dient bloß als Rückfall ohne Etappen.
+      _fullRouteGeometry(route),
       null,
       null,
     );
+  }
+
+  /// Vollständige Routengeometrie (alle Etappen), kodiert wie eine
+  /// Google-Polyline; ohne Etappen die Übersichtslinie.
+  static String? _fullRouteGeometry(RouteCandidate? route) {
+    if (route == null) return null;
+    final pts = route.points;
+    if (pts.length >= 2) return poly_utils.encodePolyline(pts);
+    return (route.raw['overview_polyline'] as Map<String, dynamic>?)?['points'] as String?;
   }
 
   /// Baut aus der gewählten Fähre die beiden Landwege und liefert damit

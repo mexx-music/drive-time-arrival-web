@@ -36,3 +36,30 @@ List<LatLng> decodePolyline(String encoded) {
   }
   return points;
 }
+
+/// Kodiert Koordinaten als Google-"encoded polyline" (Faktor 1e5) – die
+/// Umkehrung von [decodePolyline]. Ohne Bit-Tricks mit Vorzeichen, damit VM
+/// und Web (dart2js) identisch rechnen.
+String encodePolyline(List<LatLng> points) {
+  final out = StringBuffer();
+  var lastLat = 0;
+  var lastLng = 0;
+  void enc(int v) {
+    var x = v < 0 ? (-v) * 2 - 1 : v * 2;
+    while (x >= 0x20) {
+      out.writeCharCode((0x20 | (x & 0x1f)) + 63);
+      x = x ~/ 32;
+    }
+    out.writeCharCode(x + 63);
+  }
+
+  for (final p in points) {
+    final lat = (p.latitude * 1e5).round();
+    final lng = (p.longitude * 1e5).round();
+    enc(lat - lastLat);
+    enc(lng - lastLng);
+    lastLat = lat;
+    lastLng = lng;
+  }
+  return out.toString();
+}
