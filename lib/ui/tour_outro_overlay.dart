@@ -40,7 +40,11 @@ OutroData buildOutroData({
 /// Bild, auch Bild für Bild im späteren Videoexport. Der Truck selbst ist
 /// Teil der Karte; hier liegen nur Text, Länder und Signatur.
 class TourOutroOverlay extends StatelessWidget {
-  const TourOutroOverlay({super.key, required this.data, required this.timeline, required this.t});
+  const TourOutroOverlay({super.key, required this.data, required this.timeline, required this.t, this.heroPhoto});
+
+  /// Test/Export: echtes Foto des Lkw, blendet nach dem Licht über das
+  /// Modell (null = nur Modell).
+  final String? heroPhoto;
 
   final OutroData data;
   final OutroTimeline timeline;
@@ -66,8 +70,22 @@ class TourOutroOverlay extends StatelessWidget {
       final listBottom = portrait ? 0.64 * h : 0.70 * h;
       final statsTop = portrait ? 0.70 * h : 0.76 * h;
 
+      final photo = heroPhoto == null ? 0.0 : timeline.photo(t);
       return IgnorePointer(
         child: Stack(children: [
+          if (heroPhoto != null) // früh laden, damit es bereitsteht
+            Positioned.fill(
+              child: Opacity(
+                opacity: photo,
+                child: ClipRect(
+                  child: Transform.scale(
+                    // Ganz langsamer Zoom – das Foto lebt.
+                    scale: 1.0 + 0.05 * ((t - timeline.photoReveal) / math.max(1, timeline.end - timeline.photoReveal)).clamp(0.0, 1.0),
+                    child: Image.network(heroPhoto!, fit: BoxFit.cover, alignment: Alignment.center),
+                  ),
+                ),
+              ),
+            ),
           // Ruhige Abdunklung für die Lesbarkeit: links bzw. oben/unten.
           Positioned.fill(
             child: Opacity(

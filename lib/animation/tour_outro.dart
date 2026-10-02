@@ -140,6 +140,10 @@ class OutroTimeline {
   }
 
   double stats(double t) => _ramp(t, statsReveal, statsReveal + 0.8);
+
+  /// Echtes Foto des Lkw: nach dem Lichtlauf weich über das Modell.
+  double get photoReveal => lightsOn + 2.0;
+  double photo(double t) => _ramp(t, photoReveal, photoReveal + 1.4);
   double logo(double t) => _ramp(t, finalLogo, finalLogo + 0.9);
 
   // ---------------------------------------------------------------- Licht

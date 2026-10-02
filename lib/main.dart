@@ -2039,6 +2039,7 @@ class _HomeScreenState extends State<HomeScreen> {
         // Videoexport (Entwicklung): nur mit ?export=1 – ohne Bedienelemente,
         // Bild für Bild über window.drivetimeExport.
         videoExport: Uri.base.queryParameters['export'] == '1',
+        heroPhoto: Uri.base.queryParameters['heroPhoto'],
       ),
     ));
   }

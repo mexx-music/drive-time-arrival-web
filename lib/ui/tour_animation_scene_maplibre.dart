@@ -64,7 +64,11 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.cinematicHeading,
     this.frameDt,
     this.onPendingProbe,
+    this.heroPhoto,
   });
+
+  /// Test/Export: echtes Foto des Lkw im Outro.
+  final String? heroPhoto;
 
   /// Videoexport: fester Bildtakt statt Uhrzeit (deterministisch).
   final Duration? frameDt;
@@ -1053,7 +1057,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       ),
       if (_inOutro)
         Positioned.fill(
-          child: TourOutroOverlay(data: widget.outro!, timeline: widget.outroTimeline!, t: widget.outroTime!),
+          child: TourOutroOverlay(
+              data: widget.outro!, timeline: widget.outroTimeline!, t: widget.outroTime!, heroPhoto: widget.heroPhoto),
         ),
       if (widget.cameraDebug && _camState != null)
         Positioned(

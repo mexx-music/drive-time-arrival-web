@@ -55,7 +55,11 @@ class TourAnimationView extends StatefulWidget {
     this.cameraDebug = false,
     this.dayNight = DayNightMode.off,
     this.videoExport = false,
+    this.heroPhoto,
   });
+
+  /// Test/Export: echtes Foto des Lkw fürs Outro (URL), sonst null.
+  final String? heroPhoto;
 
   /// Renderzustand für den Videoexport: nur filmische Bestandteile (Karte,
   /// Route, Fahrzeug, Licht, Fahrleiste, Outro) – keine Bedienelemente,
@@ -454,6 +458,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 cameraDebug: widget.cameraDebug && !widget.videoExport,
                 frameDt: widget.videoExport ? _exportDt : null,
                 onPendingProbe: (f) => _exportPending = f,
+                heroPhoto: widget.videoExport ? widget.heroPhoto : null,
                 dayNight: widget.dayNight,
                 eta: widget.eta,
                 outro: _outroEnabled ? _outroData : null,
