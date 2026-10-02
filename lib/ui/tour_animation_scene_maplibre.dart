@@ -10,12 +10,15 @@ import '../animation/articulation.dart';
 import '../animation/cinematic_camera.dart';
 import '../animation/country_borders.dart';
 import '../animation/daylight.dart';
+import '../animation/ferry_cinematic.dart';
+import '../animation/ship_model.dart';
 import '../animation/tour_camera.dart';
 import '../logic/eta_calculator.dart';
 import '../animation/tour_path.dart';
 import '../animation/tour_story.dart';
 import 'map_label_style.dart';
 import 'tour_animation_view.dart' show tourKmLabel;
+import 'ship_sprites.dart';
 import 'tour_story_overlay.dart';
 import 'truck_sprites.dart';
 import '../animation/truck_projection.dart';
@@ -144,11 +147,22 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         widget.path,
         plan: widget.cameraMode == CameraMode.follow
             ? CinematicPlan.followOnly
-            : (widget.cinematicDemo
-                ? CinematicPlan.demo()
-                : CinematicPlan.standard(tourAnimationDuration(widget.path.totalMeters))),
+            // Mit Fähre: Straßen-Regie plus Fährablauf; ohne Fähre unverändert.
+            : ferryAwarePlan(
+                widget.cinematicDemo
+                    ? CinematicPlan.demo()
+                    : CinematicPlan.standard(tourAnimationDuration(widget.path.totalMeters)),
+                widget.path,
+                tourAnimationDuration(widget.path.totalMeters)),
         aspect: size.height <= 0 ? 1.6 : size.width / size.height,
       );
+  /// Fährabschnitte der Tour (leer: Tour ohne Fähre – alles wie bisher).
+  late final List<FerryCrossing> _crossings = ferryCrossings(widget.path);
+  VehicleMix? _mix;
+  int _shipYawFrame = 0;
+  String? _shownShip;
+  bool _shipVisible = false;
+
   ml.MapLibreMapController? _map;
   bool _ready = false;
   DateTime? _lastFrame;
@@ -243,10 +257,23 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         iconRotate: ['get', 'rot'],
         iconRotationAlignment: flat ? 'map' : 'viewport',
         iconPitchAlignment: flat ? 'map' : 'viewport',
+        // Deckkraft je Feature (Überblendung LKW ↔ Fähre), sonst voll.
+        iconOpacity: ['coalesce', ['get', 'op'], 1],
         iconAllowOverlap: true,
         iconIgnorePlacement: true,
       ), filter: ['==', ['get', 'flat'], flat]);
     }
+    // Fähre: aufrecht zum Betrachter wie der Sattelzug, über ihm.
+    await map.addGeoJsonSource('ship', _collection(const []));
+    await map.addSymbolLayer('ship', 'ship-upright', const ml.SymbolLayerProperties(
+      iconImage: ['get', 'icon'],
+      iconSize: ['get', 'size'],
+      iconRotationAlignment: 'viewport',
+      iconPitchAlignment: 'viewport',
+      iconOpacity: ['get', 'op'],
+      iconAllowOverlap: true,
+      iconIgnorePlacement: true,
+    ));
     // Lichtkegel: flach auf der Straße, gedreht mit der ZUGMASCHINE (nicht mit
     // der Kamera) – unter dem Fahrzeug.
     await map.addGeoJsonSource('lights', _collection(const []));
@@ -400,6 +427,42 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     return {'icon': shown, 'rot': 0.0, 'flat': false, 'size': size};
   }
 
+  /// Fähre an ihrer Stelle: Bild nach Kurs zur Blickrichtung, Neigung und
+  /// Nachtstufe (bei Bedarf erzeugt und behalten), Größe wie der LKW über
+  /// den Kamerazoom.
+  void _updateShip(ml.MapLibreMapController map, VehicleMix? mix) {
+    if (mix == null || mix.ship <= 0.001) {
+      if (_shipVisible) {
+        _shipVisible = false;
+        map.setGeoJsonSource('ship', _collection(const []));
+      }
+      return;
+    }
+    final heading = shipHeading(widget.path, mix.crossing!, mix.shipMeters);
+    _shipYawFrame = frameFor(angleDiff(_cameraBearing, heading), _shipYawFrame, step: 4);
+    final pitch = ((_cameraPitch / 5).round() * 5).clamp(20, 60);
+    final night = nightStep(_night);
+    final name = 'ship-p$pitch-y$_shipYawFrame-n${(night * 8).round()}';
+    if (!_framesReady.contains(name) && !_framesPending.contains(name)) {
+      _framesPending.add(name);
+      ferryShipPng(yawDeg: _shipYawFrame * 4.0, pitchDeg: pitch.toDouble(), night: night).then((png) async {
+        await _map?.addImage(name, png);
+        _framesPending.remove(name);
+        _framesReady.add(name);
+      });
+    }
+    if (_framesReady.contains(name)) _shownShip = name;
+    final shown = _shownShip;
+    if (shown == null) return;
+    final size = shipPointsPerMeter(_pointsPerMeter, FerryShipModel.length) /
+        shipSpritePx *
+        math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
+    _shipVisible = true;
+    map.setGeoJsonSource('ship', _collection([
+      _point(widget.path.at(mix.shipMeters).point, {'icon': shown, 'size': size, 'op': mix.ship}),
+    ]));
+  }
+
   Map<String, dynamic> _truckProps(double heading) {
     final relative = angleDiff(_cameraBearing, heading); // zur Blickrichtung
     if (widget.finished) {
@@ -480,7 +543,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         iconRotationAlignment: 'map',
         iconPitchAlignment: 'map',
         iconAnchor: 'bottom',
-        iconOpacity: opacity,
+        // Mit dem LKW ausgeblendet, wenn er am Hafen der Fähre Platz macht.
+        iconOpacity: ['*', opacity, ['coalesce', ['get', 'op'], 1]],
         iconAllowOverlap: true,
         iconIgnorePlacement: true,
       );
@@ -570,25 +634,36 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     }
 
     if (widget.truckView == TruckView.articulated && !widget.finished) {
-      final props = _articulatedProps(pos);
+      // Fähre: LKW hält am Hafen und blendet aus, die Fähre übernimmt – und
+      // am Zielhafen umgekehrt. Ohne Fähre ist mix null und alles wie bisher.
+      final mix = _mix = _crossings.isEmpty ? null : vehicleAt(widget.path, _crossings, pos.meters);
+      final truckPos = mix == null || mix.truckMeters == pos.meters ? pos : widget.path.at(mix.truckMeters);
+      final truckOp = mix?.truck ?? 1.0;
+      final props = _articulatedProps(truckPos);
       final pose = _pose!;
       map.setGeoJsonSource('truck', _collection([
-        props == null
-            ? _point(pos.point, {'icon': 'truck-top', 'rot': pose.tractorHeading, 'flat': true, 'size': 0.3})
-            : _point(pose.kingpin, props),
+        if (truckOp > 0.001)
+          props == null
+              ? _point(truckPos.point, {
+                  'icon': 'truck-top', 'rot': pose.tractorHeading, 'flat': true, 'size': 0.3,
+                  if (mix != null) 'op': truckOp,
+                })
+              : _point(pose.kingpin, {...props, if (mix != null) 'op': truckOp}),
       ]));
       if (widget.dayNight != DayNightMode.off && _night > 0.01) {
         // Abblendlicht ab der Kabinenfront, headlightConeMeters Fahrzeugmeter
         // lang, gedreht mit der Zugmaschine; wächst wie der LKW mit dem
         // Kamerazoom.
-        final unit = _unitAt(pos.point);
+        final unit = _unitAt(truckPos.point);
         final light = headlightPlacement(pose, metersPerUnit: unit);
         final scale = math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
         final coneSize = headlightConeMeters * _pointsPerMeter * scale / headlightConeSize.height;
         map.setGeoJsonSource('lights', _collection([
-          _point(light.apex, {'rot': light.heading, 'size': coneSize}),
+          if (truckOp > 0.001)
+            _point(light.apex, {'rot': light.heading, 'size': coneSize, if (mix != null) 'op': truckOp}),
         ]));
       }
+      _updateShip(map, mix);
     } else {
       map.setGeoJsonSource('truck', _collection([_point(pos.point, _truckProps(_localHeading(pos.meters)))]));
     }
@@ -699,7 +774,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
                 'Shot ${_camState!.shot}\n'
                 'Bahn ${_camState!.orbit.toStringAsFixed(0)}°  Richtung ${_camState!.bearing.toStringAsFixed(0)}°\n'
                 'Neigung ${_camState!.pitch.toStringAsFixed(0)}°  Zoom ${_camState!.zoom.toStringAsFixed(2)}\n'
-                'Knick ${(_pose?.knick ?? 0).toStringAsFixed(1)}°  Nacht ${(_night * 100).round()} %',
+                'Knick ${(_pose?.knick ?? 0).toStringAsFixed(1)}°  Nacht ${(_night * 100).round()} %'
+                '${_mix == null ? '' : '\nFähre ${(_mix!.ship * 100).round()} %'}',
                 style: const TextStyle(color: Colors.white, fontSize: 12, fontFamily: 'monospace'),
               ),
             ),

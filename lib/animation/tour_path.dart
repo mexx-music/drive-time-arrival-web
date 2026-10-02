@@ -127,6 +127,13 @@ class TourPath {
   }
 
   List<LatLng> get points => List.unmodifiable(_points);
+
+  /// Streckenbereich je Abschnitt (von/bis in Metern ab Start), mit Art und
+  /// Beschriftung – z. B. um eine Fährüberfahrt auf der Linie zu finden.
+  List<({double from, double to, TourLegKind kind, String? label})> get legSpans => [
+        for (var k = 0; k < legs.length; k++)
+          (from: _cum[_legRanges[k].$1], to: _cum[_legRanges[k].$2], kind: legs[k].kind, label: legs[k].label),
+      ];
   double get totalMeters => _cum.isEmpty ? 0 : _cum.last;
   double get roadMeters => _roadCum.isEmpty ? 0 : _roadCum.last;
   LatLng get start => _points.first;

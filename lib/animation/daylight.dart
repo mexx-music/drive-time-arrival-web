@@ -64,21 +64,39 @@ class TourClock {
   TourClock._(this._segments);
 
   /// null, wenn die Planung keine Zeiten hat.
+  ///
+  /// Fähren: Der Fährschritt der Planung (Beginn/Ende der Überfahrt) liegt
+  /// auf dem Fährabschnitt der Linie – die n-te Überfahrt der Planung auf
+  /// dem n-ten Fährabschnitt. Die Fahrt danach beginnt erst am Zielhafen.
+  /// Ohne Fähre ändert sich nichts.
   static TourClock? fromEta(EtaResult eta, TourPath path) {
     final totalKm = etaDriveKm(eta);
     if (totalKm <= 0) return null;
+    final ferries = [
+      for (final s in path.legSpans)
+        if (s.kind == TourLegKind.ferry && s.to > s.from) s,
+    ];
+    var ferryIndex = 0;
     final segs = <(double, DateTime, double, DateTime)>[];
     var km = 0.0;
+    var reached = 0.0; // weiter vorn als hier kann keine Zeit mehr beginnen
     for (final s in eta.steps) {
+      if (s.type == EtaEventType.ferry) {
+        if (ferryIndex < ferries.length && s.start != null && s.end != null) {
+          final f = ferries[ferryIndex];
+          segs.add((f.from, s.start!, f.to, s.end!));
+          reached = f.to;
+        }
+        ferryIndex++;
+        continue;
+      }
       if (s.type != EtaEventType.drive) continue;
       final d = s.distanceKm ?? 0;
       if (s.start != null && s.end != null) {
-        segs.add((
-          metersForPlanKm(path, km, totalKm),
-          s.start!,
-          metersForPlanKm(path, km + d, totalKm),
-          s.end!,
-        ));
+        final m0 = math.max(metersForPlanKm(path, km, totalKm), reached);
+        final m1 = math.max(metersForPlanKm(path, km + d, totalKm), m0);
+        segs.add((m0, s.start!, m1, s.end!));
+        reached = m1;
       }
       km += d;
     }
