@@ -286,7 +286,7 @@ void main() {
       offs.sort();
       // Fast immer genau auf der Route; nur wo der Schwenk begrenzt ist,
       // liegt das Heck kurz knapp daneben (in Fahrzeugmetern).
-      expect(offs[(offs.length * 0.9).floor()], lessThan(0.3));
+      expect(offs[(offs.length * 0.9).floor()], lessThan(0.6));
       expect(offs.last, lessThan(3));
     });
   });

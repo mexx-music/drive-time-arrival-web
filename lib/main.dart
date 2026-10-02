@@ -2036,6 +2036,9 @@ class _HomeScreenState extends State<HomeScreen> {
         truckView: TruckView.articulated,
         truckModel: const TruckModel(branding: TruckBranding.gartnerTest),
         dayNight: DayNightMode.plan,
+        // Videoexport (Entwicklung): nur mit ?export=1 – ohne Bedienelemente,
+        // Bild für Bild über window.drivetimeExport.
+        videoExport: Uri.base.queryParameters['export'] == '1',
       ),
     ));
   }

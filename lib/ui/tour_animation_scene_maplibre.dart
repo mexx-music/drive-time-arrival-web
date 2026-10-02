@@ -62,7 +62,15 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.outroTime,
     this.cinematicPlan,
     this.cinematicHeading,
+    this.frameDt,
+    this.onPendingProbe,
   });
+
+  /// Videoexport: fester Bildtakt statt Uhrzeit (deterministisch).
+  final Duration? frameDt;
+
+  /// Videoexport: meldet eine Abfrage „wie viele Bilder entstehen noch“.
+  final void Function(int Function() pending)? onPendingProbe;
 
   /// Filmische Richtungsstabilisierung des Sattelzugs (null = Fahrspur ohne).
   final CinematicHeading? cinematicHeading;
@@ -327,6 +335,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     await map.addGeoJsonSource('lights', _collection(const []));
     await map.addSymbolLayer('lights', 'headlight-cone', _coneProps(0), belowLayerId: 'truck-flat');
     _ready = true;
+    widget.onPendingProbe?.call(() => _framesPending.length);
     _update(force: true);
     widget.onReady?.call();
   }
@@ -734,7 +743,10 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final map = _map;
     if (!_ready || map == null) return;
     final now = DateTime.now();
-    final dt = _lastFrame == null ? Duration.zero : now.difference(_lastFrame!);
+    final fixed = widget.frameDt;
+    final dt = fixed != null
+        ? (_lastFrame == null ? Duration.zero : fixed)
+        : (_lastFrame == null ? Duration.zero : now.difference(_lastFrame!));
     _lastFrame = now;
     _dt = dt;
     final pos = widget.position;
@@ -876,7 +888,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     }
 
     // Gefahrene Spur: höchstens etwa 12-mal pro Sekunde neu.
-    if (force || widget.finished || now.difference(_lastTrail).inMilliseconds > 80) {
+    if (force || widget.finished || fixed != null || now.difference(_lastTrail).inMilliseconds > 80) {
       _lastTrail = now;
       // Cinematic: die Spur endet an der Achsgruppe des Aufliegers – der
       // Sattelzug zieht die Linie hinter sich her.

@@ -13,6 +13,7 @@ import '../animation/tour_outro.dart';
 import '../animation/tour_playback.dart';
 import '../animation/tour_story.dart';
 import '../logic/eta_calculator.dart';
+import '../export/export_hook.dart';
 import 'tour_outro_overlay.dart' show buildOutroData;
 import 'tour_story_overlay.dart';
 import 'tour_animation_scene_maplibre.dart';
@@ -53,7 +54,16 @@ class TourAnimationView extends StatefulWidget {
     this.cinematicDemo = false,
     this.cameraDebug = false,
     this.dayNight = DayNightMode.off,
+    this.videoExport = false,
   });
+
+  /// Renderzustand für den Videoexport: nur filmische Bestandteile (Karte,
+  /// Route, Fahrzeug, Licht, Fahrleiste, Outro) – keine Bedienelemente,
+  /// kein Debug. Die Zeit läuft nicht von selbst, sondern Bild für Bild im
+  /// festen Takt ([exportFrameRate]) über `window.drivetimeExport.step()`.
+  final bool videoExport;
+
+  static const int exportFrameRate = 30;
 
   /// EXPERIMENT: Kamera-Regie und Tag/Nacht in 2.5D.
   final CameraMode cameraMode;
@@ -267,6 +277,23 @@ class _TourAnimationViewState extends State<TourAnimationView>
   }
 
   void _autostart() {
+    if (widget.videoExport) {
+      // Export: die Zeit kommt Bild für Bild von außen.
+      _playback.play();
+      _playback.pause();
+      registerExportHook(
+        step: () {
+          _playback.play();
+          _playback.tick(_exportDt);
+          _playback.pause();
+          if (mounted) setState(() {});
+          return _playback.elapsed.inMicroseconds / 1e6;
+        },
+        total: () => _playback.duration.inMicroseconds / 1e6,
+        pending: () => _exportPending?.call() ?? 0,
+      );
+      return;
+    }
     if (_maplibre) {
       _waitForMap = true; // startet in _onMapReady
     } else {
@@ -309,6 +336,11 @@ class _TourAnimationViewState extends State<TourAnimationView>
     _outroTimeline = OutroTimeline(countryCount: outro.countries.length);
     _playback = TourPlayback(duration: _playbackLength);
   }
+
+  static const _exportDt = Duration(microseconds: 1000000 ~/ TourAnimationView.exportFrameRate);
+
+  /// Vom Szenenbild gemeldet: noch entstehende Fahrzeugbilder.
+  int Function()? _exportPending;
 
   @override
   void dispose() {
@@ -364,7 +396,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
     final frame = _timeline.frameAt(_playback.elapsed);
     final position = widget.path.at(frame.meters);
     return Scaffold(
-      appBar: AppBar(
+      appBar: widget.videoExport ? null : AppBar(
         // Auf dem Smartphone kürzer, damit der Umschalter Platz hat.
         title: Text(MediaQuery.sizeOf(context).width < 520 ? 'Tour' : 'Tour animieren'),
         actions: [
@@ -418,7 +450,9 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 truckScale: _truckScale,
                 cameraMode: widget.cameraMode,
                 cinematicDemo: widget.cinematicDemo,
-                cameraDebug: widget.cameraDebug,
+                cameraDebug: widget.cameraDebug && !widget.videoExport,
+                frameDt: widget.videoExport ? _exportDt : null,
+                onPendingProbe: (f) => _exportPending = f,
                 dayNight: widget.dayNight,
                 eta: widget.eta,
                 outro: _outroEnabled ? _outroData : null,
@@ -473,7 +507,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
             ),
           // Rechts mittig: frei von Anzeige oben und Kartenhinweis unten.
           // Im Outro ausgeblendet – das Finale gehört dem Truck.
-          if (_outroTime == null)
+          if (_outroTime == null && !widget.videoExport)
           Positioned(
             right: 12,
             top: 0,
@@ -491,7 +525,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
           ),
         ],
       ),
-      bottomNavigationBar: SafeArea(
+      bottomNavigationBar: widget.videoExport ? null : SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Wrap(

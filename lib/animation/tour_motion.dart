@@ -298,7 +298,8 @@ class CinematicHeading {
         // Route vorne → Zugmaschine → Sattelpunkt → Achsgruppe → Route hinten.
         final u = unitAt!(motion.path.at(m).point);
         final front = motion.path.at(m).point;
-        final rear = _behind(m, dims.tractorWheelbase * u);
+        // Lange Basis (≈ halbe Zuglänge): kleine Schlenker zählen nicht.
+        final rear = _behind(m, 2 * dims.tractorWheelbase * u);
         final king = _behind(m, dims.kingpinBehindFront * u);
         final axle = _behind(m, (dims.kingpinBehindFront + dims.trailerWheelbase) * u);
         final tr = _brg(rear, front), tl = _brg(axle, king);
@@ -432,7 +433,6 @@ class CinematicHeading {
     final rearS = <double>[];
     final trailer = <double>[];
     var prevS = double.negativeInfinity;
-    double? prevH;
     const d = Distance(calculator: Haversine());
     for (var k = 0; k < n; k++) {
       final m = motion.metersAt(k / _hz);
@@ -466,19 +466,19 @@ class CinematicHeading {
       prevS = sOut;
       final rear = sOut >= 0 ? motion.path.at(sOut).point : destination(motion.path.start, -sOut, (motion.path.at(0).bearing + 180) % 360);
       var h = rear == kp ? tractor : _brg(rear, kp);
-      var knick = angleDiff(tractor, h);
-      if (knick.abs() > dims.maxKnick) h = (tractor + knick.sign * dims.maxKnick + 360) % 360;
-      if (prevH != null) {
-        const lim = trailerMaxTurn / _hz;
-        h = (prevH + angleDiff(prevH, h).clamp(-lim, lim) + 360) % 360;
-        knick = angleDiff(tractor, h);
-        if (knick.abs() > dims.maxKnick) h = (tractor + knick.sign * dims.maxKnick + 360) % 360;
-      }
-      prevH = h;
+      // Als Knick relativ zur Zugmaschine sammeln (glatt, ohne Umbruch).
+      final knick = angleDiff(tractor, h);
       rearS.add(sOut);
-      trailer.add(h);
+      trailer.add(knick);
     }
-    return (rearS, trailer);
+    // Erst glätten (das Heck sitzt auf jedem kleinen Schlenker der Route),
+    // dann die Knickänderung vor- und rückwärts begrenzen – kein Jagen.
+    var k = _average(trailer, (0.8 * _hz).round());
+    k = [for (final v in k) v.clamp(-dims.maxKnick, dims.maxKnick).toDouble()];
+    k = _limit(k, trailerMaxTurn / _hz);
+    k = _average(k, (0.15 * _hz).round());
+    final out = [for (var i = 0; i < n; i++) ((_tractor[i] + k[i]) % 360 + 360) % 360];
+    return (rearS, out);
   }();
 
   /// Streckenmeter des Routenpunkts, auf dem das Heck liegt (für die Spur).
@@ -569,7 +569,7 @@ const bool cinematicTrailRearDefine = bool.fromEnvironment('CINEMATIC_TRAIL_REAR
     heading: guide > 0
         ? (CinematicHeading(motion, track,
             maxTurn: maxTurn > 0 ? maxTurn.toDouble() : 60,
-            smoothSeconds: 0.35,
+            smoothSeconds: 1.0,
             knickScale: 1,
             maxKnick: 45,
             routeGuided: guide == 1 || guide == 3,
