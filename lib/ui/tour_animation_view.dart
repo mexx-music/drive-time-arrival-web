@@ -8,6 +8,7 @@ import '../animation/cinematic_camera.dart';
 import '../animation/country_borders.dart';
 import '../animation/daylight.dart';
 import '../animation/tour_path.dart';
+import '../animation/tour_motion.dart';
 import '../animation/tour_outro.dart';
 import '../animation/tour_playback.dart';
 import '../animation/tour_story.dart';
@@ -143,6 +144,17 @@ class _TourAnimationViewState extends State<TourAnimationView>
       widget.storyMode == TourStoryMode.cinematic;
 
   OutroData? _outroData;
+
+  /// Cinematic mit gekoppeltem Sattelzug: ruhiges Filmtempo (Trägheit,
+  /// langsamer in Kurven) und die darauf umgesetzte Kameraregie. Sonst null –
+  /// Fahrt wie bisher.
+  late final ({TourMotion motion, CinematicPlan plan})? _cinematic =
+      widget.cameraMode == CameraMode.cinematic &&
+              widget.truckView == TruckView.articulated &&
+              widget.storyMode == TourStoryMode.cinematic &&
+              widget.path.totalMeters > 0
+          ? cinematicMotionFor(widget.path, demo: widget.cinematicDemo, truckScale: widget.truckScale)
+          : null;
   OutroTimeline? _outroTimeline;
 
   /// Wiedergabedauer: Fahrt plus – in 2.5D – das Outro ab Ankunft.
@@ -236,9 +248,10 @@ class _TourAnimationViewState extends State<TourAnimationView>
     ];
     _timeline = TourTimeline(
       path: path,
-      drive: tourAnimationDuration(path.totalMeters),
+      drive: _cinematic?.motion.duration ?? tourAnimationDuration(path.totalMeters),
       events: events,
       mode: widget.storyMode,
+      motion: _cinematic?.motion,
     );
     _summary = eta == null
         ? null
@@ -372,6 +385,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 outro: _outroEnabled ? _outroData : null,
                 outroTimeline: _outroTimeline,
                 outroTime: _outroTime,
+                cinematicPlan: _cinematic?.plan,
               ),
             )
           else

@@ -241,3 +241,11 @@ List<ShotKey> _dropManoeuvres(List<ShotKey> keys, double from, double to) {
   }
   return out;
 }
+
+/// Die Cinematic-Regie einer Tour (Straßen-Regie plus Fähren) – dieselbe für
+/// Kamera und Tempo. Geplant nach der bisherigen Fahrdauer, damit Anzahl und
+/// Timing der Kamerafahrten gleich bleiben.
+CinematicPlan cinematicPlanFor(TourPath path, {bool demo = false}) {
+  final d = tourAnimationDuration(path.totalMeters);
+  return ferryAwarePlan(demo ? CinematicPlan.demo() : CinematicPlan.standard(d), path, d);
+}

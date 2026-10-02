@@ -59,7 +59,12 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.outro,
     this.outroTimeline,
     this.outroTime,
+    this.cinematicPlan,
   });
+
+  /// Kameraregie passend zum Filmtempo (siehe [cinematicMotionFor]); null =
+  /// Regie wie bisher aus der Fahrdauer.
+  final CinematicPlan? cinematicPlan;
 
   /// Cinematic-Outro: Daten der fertigen Tour; null = bisherige Abschlusskarte.
   final OutroData? outro;
@@ -163,6 +168,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         widget.path,
         plan: widget.cameraMode == CameraMode.follow
             ? CinematicPlan.followOnly
+            : widget.cinematicPlan != null
+            ? widget.cinematicPlan!
             // Mit Fähre: Straßen-Regie plus Fährablauf; ohne Fähre unverändert.
             : ferryAwarePlan(
                 widget.cinematicDemo
@@ -422,6 +429,18 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
 
   /// Kartenmeter je Fahrzeugmeter – aus dem FOLGE-Zoom, nicht aus dem Zoom
   /// der aktuellen Kamerafahrt: die Kamera verändert die Fahrzeuggeometrie nie.
+  /// Fahrzeugpose: im Cinematic-Filmtempo mit Trägheit ([ArticulatedTrack],
+  /// einmal je Tour berechnet), sonst wie bisher. Hängt nur von der
+  /// Streckenposition ab – nie von der Kamera.
+  ArticulatedPose _poseAt(double meters) {
+    final unit = _unitAt(widget.path.at(meters).point);
+    if (widget.cinematicPlan == null) return articulate(widget.path, meters, metersPerUnit: unit);
+    final track = _track ??= ArticulatedTrack(widget.path, unitAt: _unitAt, inertia: cinematicTruckInertia);
+    return track.pose(meters, metersPerUnit: unit);
+  }
+
+  ArticulatedTrack? _track;
+
   double _unitAt(LatLng p) =>
       _pointsPerMeter * metersPerScreenPoint(_cam?.followZoom ?? _rig.zoom, p.latitude);
 
@@ -504,7 +523,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   OutroCamera _makeOutroCamera(OutroTimeline tl) {
     final cam = _cam ?? _cameraFor(const Size(1000, 700));
     final end = widget.path.totalMeters;
-    final pose = articulate(widget.path, end, metersPerUnit: _unitAt(widget.path.end));
+    final pose = _poseAt(end);
     final size = (context.findRenderObject() as RenderBox?)?.size ?? MediaQuery.sizeOf(context);
     return OutroCamera(
       // Exakt der letzte Zustand der Fahrt – kein Sprung.
@@ -524,7 +543,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   final List<(int, int, int, double, OutroLights?)> _prewarmQueue = [];
 
   Map<String, dynamic>? _articulatedProps(TourPosition pos) {
-    final pose = _pose = articulate(widget.path, pos.meters, metersPerUnit: _unitAt(pos.point));
+    final pose = _pose = _poseAt(pos.meters);
     // Bild nach Winkel der Zugmaschine zur Blickrichtung und Knick (mit
     // Hysterese gegen Flackern), Neigung wie die Kamera.
     _yawFrame = frameFor(angleDiff(_cameraBearing, pose.tractorHeading), _yawFrame, step: 4);
@@ -729,7 +748,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       _outroPrewarmed = true;
       final end = widget.path.totalMeters;
       _prewarmOutro(_makeOutroCamera(outroTl), outroTl,
-          articulate(widget.path, end, metersPerUnit: _unitAt(widget.path.end)));
+          _poseAt(end));
     }
     if (_inOutro) {
       final tl = widget.outroTimeline!;

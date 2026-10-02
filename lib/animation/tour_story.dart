@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import '../logic/eta_calculator.dart';
 import 'country_borders.dart';
+import 'tour_motion.dart';
 import 'tour_path.dart';
 
 /// Was auf der Tour passiert. Erweiterbar (später z. B. Fähre, Stopps).
@@ -281,6 +282,7 @@ class TourTimeline {
     required this.drive,
     Iterable<TourStoryEvent> events = const [],
     this.mode = TourStoryMode.cinematic,
+    this.motion,
   }) : events = sortStory(events) {
     var story = Duration.zero;
     var lastDrive = 0.0;
@@ -299,6 +301,9 @@ class TourTimeline {
 
   /// Reine Fahrzeit der Animation (ohne Haltezeiten).
   final Duration drive;
+
+  /// Cinematic: ruhiges Filmtempo statt [tourEase] (null = wie bisher).
+  final TourMotion? motion;
   final List<TourStoryEvent> events;
   final TourStoryMode mode;
 
@@ -323,6 +328,8 @@ class TourTimeline {
   /// Fahrzeit (s), zu der das Fahrzeug [meters] erreicht – Umkehrung von
   /// [tourEase] per Halbierung.
   double _driveTimeAt(double meters) {
+    final mo = motion;
+    if (mo != null) return mo.secondsAt(meters);
     final total = path.totalMeters;
     if (total <= 0) return 0;
     final target = (meters / total).clamp(0.0, 1.0);
@@ -365,11 +372,14 @@ class TourTimeline {
       holdBefore += hold;
       passed = math.max(passed, e.meters);
     }
+    final driveT = _seconds(t - holdBefore);
+    final mo = motion;
     final meters = heldAt ??
         math.max(
             passed,
-            tourEase(driveS <= 0 ? 1 : (_seconds(t - holdBefore) / driveS).clamp(0.0, 1.0)) *
-                total);
+            mo != null
+                ? mo.metersAt(driveT)
+                : tourEase(driveS <= 0 ? 1 : (driveT / driveS).clamp(0.0, 1.0)) * total);
     if (t >= this.total) {
       final arrival = events.where((e) => e.kind == TourStoryKind.arrival);
       return TourFrame(

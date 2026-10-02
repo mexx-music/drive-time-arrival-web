@@ -133,3 +133,160 @@ double metersPerScreenPoint(double zoom, double lat) =>
 ({LatLng apex, double heading}) headlightPlacement(ArticulatedPose pose,
         {required double metersPerUnit, double ahead = 0.9}) =>
     (apex: destination(pose.frontAxle, ahead * metersPerUnit, pose.tractorHeading), heading: pose.tractorHeading);
+
+// ------------------------------------------------ Fahrspur mit Trägheit
+
+/// Trägheit der Cinematic-Fahrt (siehe [ArticulatedTrack.inertia]).
+const double cinematicTruckInertia = 3;
+
+/// Sattelzug mit Trägheit entlang einer [TourPath] – Einspurmodell.
+///
+/// Die Vorderachse fährt exakt auf der Route. Hinterachse der Zugmaschine
+/// und Achse des Aufliegers werden wie bei einem echten Gespann nachgezogen
+/// (Schleppkurve): Jede folgt ihrem Zugpunkt im festen Abstand. Dadurch
+///
+/// - steht die Zugmaschine tangential zur gefahrenen Straße, folgt aber
+///   kleinen Schlenkern unterhalb ihres Radstands nicht mehr zitternd,
+/// - entsteht der Knick allmählich und baut sich nach der Kurve wieder ab,
+/// - kann der Auflieger die Zugmaschine nie überholen oder wegschwingen.
+///
+/// Weiterhin nur eine Funktion der Streckenposition: Die Spur wird einmal
+/// für die ganze Tour berechnet (Raster ≤ ¼ Radstand) und dann interpoliert.
+class ArticulatedTrack {
+  ArticulatedTrack(this.path,
+      {required double Function(LatLng) unitAt, this.dims = const TruckDimensions(), this.inertia = 1}) {
+    final total = path.totalMeters;
+    if (total <= 0) return;
+    final u0 = unitAt(path.start);
+    _step = math.max(5.0, dims.tractorWheelbase * u0 / 4);
+    // Ruhige Gesamtrichtung (Trägheit) …
+    final calm = _run(unitAt, inertia).$1;
+    // … und der Knick aus dem geometrischen Gespann (echte Kurvenwirkung).
+    final (tractorGeo, trailerGeo) = _run(unitAt, 1);
+    final half = math.max(1, (dims.tractorWheelbase * inertia * u0 / _step / 2).round());
+    // Ruhig wie ein schweres Fahrzeug: über eine Zugmaschinenlänge mitteln
+    // (Vektormittel, ohne Verzögerung) – Schlenker unterhalb der
+    // Fahrzeuggröße verschwinden ganz.
+    _smoothInPlace(calm, half);
+    final knick = [
+      for (var i = 0; i < calm.length; i++) () {
+        var k = (trailerGeo[i] - tractorGeo[i]) % 360;
+        if (k > 180) k -= 360;
+        return k;
+      }(),
+    ];
+    _smoothLinear(knick, half * 2);
+    for (var i = 0; i < calm.length; i++) {
+      final k = knick[i].clamp(-dims.maxKnick, dims.maxKnick);
+      _tractor.add(calm[i]);
+      _trailer.add((calm[i] + k + 360) % 360);
+    }
+  }
+
+  /// Gespann einmal über die ganze Tour ziehen: (Zugmaschine, Auflieger).
+  (List<double>, List<double>) _run(double Function(LatLng) unitAt, double lag) {
+    final total = path.totalMeters;
+    final u0 = unitAt(path.start);
+    final n = (total / _step).ceil();
+    final dir0 = path.at(0).bearing;
+    var rear = destination(path.start, dims.tractorWheelbase * lag * u0, (dir0 + 180) % 360);
+    var tractor = dir0;
+    var kingpin = destination(path.start, dims.kingpinBehindFront * u0, (dir0 + 180) % 360);
+    var axle = destination(kingpin, dims.trailerWheelbase * u0, (dir0 + 180) % 360);
+    final tr = <double>[], tl = <double>[];
+    for (var i = 0; i <= n; i++) {
+      final m = math.min(total, i * _step);
+      final front = path.at(m).point;
+      final u = unitAt(front);
+      // Hinterachse folgt der Vorderachse im (Trägheits-)Radstand.
+      if (_dist(rear, front) > 1e-3) tractor = _bearing(rear, front);
+      rear = destination(front, dims.tractorWheelbase * lag * u, (tractor + 180) % 360);
+      kingpin = destination(front, dims.kingpinBehindFront * u, (tractor + 180) % 360);
+      // Aufliegerachse folgt dem Sattelpunkt.
+      var trailer = _dist(axle, kingpin) > 1e-3 ? _bearing(axle, kingpin) : tractor;
+      var knick = (trailer - tractor) % 360;
+      if (knick > 180) knick -= 360;
+      if (knick.abs() > dims.maxKnick) trailer = (tractor + knick.sign * dims.maxKnick + 360) % 360;
+      axle = destination(kingpin, dims.trailerWheelbase * u, (trailer + 180) % 360);
+      tr.add(tractor);
+      tl.add(trailer);
+    }
+    return (tr, tl);
+  }
+
+  static void _smoothLinear(List<double> a, int half) {
+    final n = a.length;
+    final c = List<double>.filled(n + 1, 0);
+    for (var i = 0; i < n; i++) {
+      c[i + 1] = c[i] + a[i];
+    }
+    final out = [
+      for (var i = 0; i < n; i++)
+        (c[math.min(n - 1, i + half) + 1] - c[math.max(0, i - half)]) / (math.min(n - 1, i + half) - math.max(0, i - half) + 1),
+    ];
+    a.setAll(0, out);
+  }
+
+  static void _smoothInPlace(List<double> a, int half) {
+    final n = a.length;
+    final cx = List<double>.filled(n + 1, 0), cy = List<double>.filled(n + 1, 0);
+    for (var i = 0; i < n; i++) {
+      final r = a[i] * math.pi / 180;
+      cx[i + 1] = cx[i] + math.sin(r);
+      cy[i + 1] = cy[i] + math.cos(r);
+    }
+    for (var i = 0; i < n; i++) {
+      final lo = math.max(0, i - half), hi = math.min(n - 1, i + half);
+      final x = cx[hi + 1] - cx[lo], y = cy[hi + 1] - cy[lo];
+      if (x.abs() + y.abs() > 1e-9) a[i] = (math.atan2(x, y) * 180 / math.pi + 360) % 360;
+    }
+  }
+
+  final TourPath path;
+  final TruckDimensions dims;
+
+  /// Trägheit der Lenkung: Die Richtung der Zugmaschine folgt der Straße
+  /// über [inertia] Radstände (1 = Geometrie). Größer = schwerer, ruhiger –
+  /// das stark vergrößerte Symbol folgt so keinen Schlenkern, die kleiner
+  /// sind als es selbst. Die Vorderachse bleibt exakt auf der Route.
+  final double inertia;
+  double _step = 1;
+  final List<double> _tractor = [];
+  final List<double> _trailer = [];
+
+  static double _dist(LatLng a, LatLng b) => _hav(a, b);
+
+  static double _lerpAngle(double a, double b, double t) {
+    var d = (b - a) % 360;
+    if (d > 180) d -= 360;
+    return (a + d * t + 360) % 360;
+  }
+
+  /// Richtung der Zugmaschine bei [meters] (0 = Norden).
+  double tractorHeadingAt(double meters) => _sample(_tractor, meters);
+
+  double _sample(List<double> list, double meters) {
+    if (list.isEmpty) return path.at(meters).bearing;
+    final x = (meters.clamp(0.0, path.totalMeters)) / _step;
+    final i = x.floor().clamp(0, list.length - 1);
+    final j = math.min(i + 1, list.length - 1);
+    return _lerpAngle(list[i], list[j], x - i);
+  }
+
+  /// Pose bei [meters]: Vorderachse exakt auf der Route, Richtungen aus der
+  /// Schleppkurve, [metersPerUnit] wie bei [articulate].
+  ArticulatedPose pose(double meters, {required double metersPerUnit}) {
+    final m = meters.clamp(0.0, path.totalMeters);
+    final front = path.at(m).point;
+    final tractor = _sample(_tractor, m);
+    final trailer = _sample(_trailer, m);
+    final kingpin = destination(front, dims.kingpinBehindFront * metersPerUnit, (tractor + 180) % 360);
+    return ArticulatedPose(
+      frontAxle: front,
+      kingpin: kingpin,
+      trailerAxle: destination(kingpin, dims.trailerWheelbase * metersPerUnit, (trailer + 180) % 360),
+      tractorHeading: tractor,
+      trailerHeading: trailer,
+    );
+  }
+}
