@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:driverroute_eta/animation/articulation.dart';
+import 'package:driverroute_eta/animation/camera_dramaturgy.dart';
 import 'package:driverroute_eta/animation/cinematic_camera.dart';
 import 'package:driverroute_eta/animation/tour_camera.dart';
 import 'package:driverroute_eta/animation/tour_motion.dart';
@@ -206,8 +207,8 @@ void main() {
       final m = cinematicMotionFor(p);
       expect(m.motion.duration.inMilliseconds, greaterThan(old.inMilliseconds * 1.5));
       final before = CinematicPlan.standard(old).keys;
-      final after = m.plan.keys;
-      expect(after.map((k) => k.shot), before.map((k) => k.shot));
+      final after = m.plan.keys.where((k) => !isDramaturgyShot(k.shot)).toList();
+      expect(after.map((k) => k.shot).where((s) => s != 'FOLLOW'), before.map((k) => k.shot).where((s) => s != 'FOLLOW'));
       // Jede Kamerafahrt beginnt am selben Ort und dauert gleich lang.
       final oldWin = cameraWindows(CinematicPlan.standard(old));
       final newWin = cameraWindows(m.plan);
@@ -280,6 +281,39 @@ void main() {
         if (pose.knick.abs() < 69) expect(_d(rear, onRoute), lessThan(_unit * 0.5), reason: 'm=$m knick=${pose.knick} kp→Route ${_d(pose.kingpin, onRoute)}');
         expect(pose.knick.abs(), lessThanOrEqualTo(70));
       }
+    });
+  });
+
+  group('Kamera-Rhythmus', () {
+    final p = _course([(20000, 0), ..._arc(60, 0, 90), (20000, 90)]);
+
+    test('nah am Start, weit unterwegs, heran zum Ziel – Lkw nie vergrößert', () {
+      final c = cinematicMotionFor(p, truckScale: 0.6, motionTruckScale: 1);
+      final plan = c.plan;
+      expect(plan.at(0).shot, 'START');
+      expect(plan.at(0).zoom, greaterThan(1));
+      expect(plan.at(1).shot, 'APPROACH');
+      expect(plan.at(1).zoom, greaterThan(0.5));
+      final shots = plan.keys.map((k) => k.shot).toSet();
+      expect(shots, contains('WIDE'));
+      // Weich: keine Sprünge in Zoom/Neigung.
+      var last = plan.at(0);
+      for (var i = 1; i <= 20000; i++) {
+        final s = plan.at(i / 20000);
+        expect((s.zoom - last.zoom).abs(), lessThan(0.03));
+        expect((s.pitch - last.pitch).abs(), lessThan(0.5));
+        last = s;
+      }
+      // Kleiner gezeichneter Lkw fährt die Tour nicht länger.
+      expect(c.motion.duration, cinematicMotionFor(p).motion.duration);
+    });
+
+    test('nachts näher heran statt weit', () {
+      final day = cinematicMotionFor(p, nightAt: (_) => 0).plan.keys.map((k) => k.shot);
+      final night = cinematicMotionFor(p, nightAt: (_) => 1).plan.keys.map((k) => k.shot);
+      expect(day, contains('WIDE'));
+      expect(night, contains('NIGHT'));
+      expect(night, isNot(contains('WIDE')));
     });
   });
 }

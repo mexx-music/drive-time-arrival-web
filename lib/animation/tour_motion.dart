@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'articulation.dart';
 import 'cinematic_camera.dart';
 import 'tour_camera.dart';
+import 'camera_dramaturgy.dart';
 import 'ferry_cinematic.dart';
 import 'tour_path.dart';
 
@@ -148,7 +149,11 @@ class TourMotion {
 /// Streckenbereiche (Anteil 0..1), in denen die Kamera eine Fahrt macht –
 /// vom letzten FOLLOW-Stützpunkt davor bis zum ersten danach.
 List<(double, double)> cameraWindows(CinematicPlan plan) {
-  final keys = plan.keys;
+  // Stützpunkte des Kamera-Rhythmus zählen wie FOLLOW (keine Kamerafahrt).
+  final keys = [
+    for (final k in plan.keys)
+      isDramaturgyShot(k.shot) ? ShotKey(k.p, 'FOLLOW', orbit: k.orbit, pitch: k.pitch, zoom: k.zoom, ahead: k.ahead) : k,
+  ];
   final out = <(double, double)>[];
   var i = 0;
   while (i < keys.length) {
@@ -451,6 +456,15 @@ class CinematicHeading {
 const int cinematicMaxTurnDefine = int.fromEnvironment('CINEMATIC_MAX_TURN');
 const int cinematicTruckScaleDefine = int.fromEnvironment('CINEMATIC_TRUCK_SCALE', defaultValue: 100);
 
+/// Gezeichnete Größe des Sattelzugs in der Cinematic-Fahrt gegenüber dem
+/// bisherigen Symbol. Nähe entsteht über den Kamerazoom.
+const double cinematicDriveScale = 0.6;
+
+/// Die Kamera rückt dafür insgesamt näher (Zoomstufen): ≈ 85 % des
+/// Ausgleichs – der Lkw wirkt etwas kleiner als früher, liegt auf der Karte
+/// aber deutlich kürzer.
+final double cinematicCameraZoomOffset = 0.85 * math.log(1 / cinematicDriveScale) / math.ln2;
+
 /// Vergleichsschalter: Auflieger geschleppt (0), Achsgruppe an der Route (1)
 /// oder Heck an der gefahrenen Route verankert (2).
 const int cinematicGuideDefine = int.fromEnvironment('CINEMATIC_GUIDE', defaultValue: 3);
@@ -465,16 +479,27 @@ const bool cinematicTrailRearDefine = bool.fromEnvironment('CINEMATIC_TRAIL_REAR
 ({TourMotion motion, CinematicPlan plan, CinematicHeading? heading}) cinematicMotionFor(TourPath path,
     {bool demo = false,
     double truckScale = 1,
+    double? motionTruckScale,
+    double Function(double meters)? nightAt,
+    bool dramaturgy = true,
     int maxTurn = cinematicMaxTurnDefine,
     int guide = cinematicGuideDefine}) {
   final oldDrive = tourAnimationDuration(path.totalMeters);
   final zoom = (tourFollowZoom(path.totalMeters) + 0.6).clamp(tourMinZoom, tourMaxZoom);
   double unitAt(LatLng p) => 5 * truckScale * 0.62 * metersPerScreenPoint(zoom, p.latitude);
   final track = ArticulatedTrack(path, unitAt: unitAt, inertia: cinematicTruckInertia);
-  final motion = TourMotion(path: path, oldDrive: oldDrive, track: track);
+  // Tempo nach der Bezugsgröße – ein kleiner gezeichneter Lkw fährt die
+  // Tour nicht länger.
+  final ms = motionTruckScale ?? truckScale;
+  final motionTrack = ms == truckScale
+      ? track
+      : ArticulatedTrack(path,
+          unitAt: (p) => 5 * ms * 0.62 * metersPerScreenPoint(zoom, p.latitude), inertia: cinematicTruckInertia);
+  final motion = TourMotion(path: path, oldDrive: oldDrive, track: motionTrack);
+  final plan = retimePlan(cinematicPlanFor(path, demo: demo), motion, oldDrive);
   return (
     motion: motion,
-    plan: retimePlan(cinematicPlanFor(path, demo: demo), motion, oldDrive),
+    plan: dramaturgy ? dramatizePlan(plan, motion, nightAt: nightAt) : plan,
     heading: guide > 0
         ? (CinematicHeading(motion, track,
             maxTurn: maxTurn > 0 ? maxTurn.toDouble() : 60,

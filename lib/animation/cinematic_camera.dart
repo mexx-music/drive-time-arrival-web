@@ -161,7 +161,13 @@ class CinematicCamera {
     this.plan = CinematicPlan.followOnly,
     this.aspect = 1.6,
     this.maxTurn = 45,
+    this.zoomOffset = 0,
   }) : rig = TourCameraRig(path);
+
+  /// Zusätzliche Nähe der ganzen Regie (Zoomstufen, im Hochformat nicht
+  /// gedämpft) – gleicht einen kleiner gezeichneten Lkw aus, ohne ihn auf
+  /// der Karte länger zu machen.
+  final double zoomOffset;
 
   final TourPath path;
   final CinematicPlan plan;
@@ -206,7 +212,7 @@ class CinematicCamera {
       target: target,
       bearing: bearing,
       pitch: s.pitch,
-      zoom: manualZoom ?? (followZoom + zoomBoost).clamp(tourMinZoom, tourMaxZoom),
+      zoom: manualZoom ?? (followZoom + zoomOffset + zoomBoost).clamp(tourMinZoom, tourMaxZoom),
       shot: s.shot,
       orbit: s.orbit,
     );

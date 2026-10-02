@@ -147,7 +147,38 @@ class _TourAnimationViewState extends State<TourAnimationView>
 
   /// Sichtbare Fahrzeuggröße; per CINEMATIC_TRUCK_SCALE nur zum Vergleich
   /// veränderbar (Standard 100 %).
-  double get _truckScale => widget.truckScale * cinematicTruckScaleDefine / 100;
+  double get _truckScale =>
+      widget.truckScale * cinematicTruckScaleDefine / 100 * (_cinematicEnabled ? cinematicDriveScale : 1);
+
+  bool get _cinematicEnabled =>
+      widget.cameraMode == CameraMode.cinematic &&
+      widget.truckView == TruckView.articulated &&
+      widget.storyMode == TourStoryMode.cinematic;
+
+  /// Dunkelheit an einer Stelle der Tour (für den Kamera-Rhythmus), wie die
+  /// Szene sie berechnet; ohne Tag/Nacht null.
+  double Function(double meters)? get _nightAt {
+    final path = widget.path;
+    switch (widget.dayNight) {
+      case DayNightMode.off:
+        return null;
+      case DayNightMode.plan:
+        final eta = widget.eta;
+        final clock = eta == null ? null : TourClock.fromEta(eta, path);
+        if (clock == null) return null;
+        return (m) {
+          final p = path.at(m).point;
+          return nightLevel(sunElevation(p.latitude, p.longitude, clock.at(m).toUtc()));
+        };
+      case DayNightMode.simulated:
+        return (m) {
+          final p = path.at(m).point;
+          final f = path.totalMeters <= 0 ? 0.0 : m / path.totalMeters;
+          return nightLevel(sunElevation(
+              p.latitude, p.longitude, DateTime.utc(2026, 10, 5, 13).add(Duration(minutes: (24 * 60 * f).round()))));
+        };
+    }
+  }
 
   /// Cinematic mit gekoppeltem Sattelzug: ruhiges Filmtempo (Trägheit,
   /// langsamer in Kurven) und die darauf umgesetzte Kameraregie. Sonst null –
@@ -157,7 +188,11 @@ class _TourAnimationViewState extends State<TourAnimationView>
               widget.truckView == TruckView.articulated &&
               widget.storyMode == TourStoryMode.cinematic &&
               widget.path.totalMeters > 0
-          ? cinematicMotionFor(widget.path, demo: widget.cinematicDemo, truckScale: _truckScale)
+          ? cinematicMotionFor(widget.path,
+              demo: widget.cinematicDemo,
+              truckScale: _truckScale,
+              motionTruckScale: widget.truckScale,
+              nightAt: _nightAt)
           : null;
   OutroTimeline? _outroTimeline;
 

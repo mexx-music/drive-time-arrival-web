@@ -183,6 +183,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
                 widget.path,
                 tourAnimationDuration(widget.path.totalMeters)),
         aspect: size.height <= 0 ? 1.6 : size.width / size.height,
+        zoomOffset: widget.cinematicPlan != null ? cinematicCameraZoomOffset : 0,
       );
   /// Fährabschnitte der Tour (leer: Tour ohne Fähre – alles wie bisher).
   late final List<FerryCrossing> _crossings = ferryCrossings(widget.path);
