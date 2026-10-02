@@ -472,45 +472,138 @@ void _headlamps(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, doub
   });
 }
 
-/// Lichtkegel vor der Zugmaschine, flach auf der Straße. Ansatz unten in
-/// der Mitte (= Front der Zugmaschine), Fahrtrichtung nach oben. 256 × 448.
+/// Abblendlicht vor der Zugmaschine, flach auf der Straße. Ansatz unten in
+/// der Mitte (= Front der Zugmaschine), Fahrtrichtung nach oben.
 ///
-/// Zwei überlappende, weiche Lichtfelder: am Ansatz am hellsten und breit
-/// genug, nach vorn und zu den Rändern sanft auslaufend – keine harte
-/// Dreiecksform. Neutral- bis warmweiß.
-const Size headlightConeSize = Size(256, 448);
+/// Zwei getrennte Scheinwerfer links und rechts der Front: je ein
+/// länglicher, leicht nach außen gerichteter Lichtteppich, am hellsten
+/// einige Meter vor dem Fahrzeug (nicht an der Kabine), weiter vorn zu
+/// einem Feld zusammenlaufend und ohne Kante ausblendend. Rechts etwas
+/// weiter und flacher nach außen (Abblendlicht-Asymmetrie, Rechtsverkehr).
+/// Warm- bis neutralweiß. Pro Pixel berechnet, einmal erzeugt.
+const Size headlightConeSize = Size(384, 640);
 
-Future<Uint8List> headlightConePng() => _png(headlightConeSize, (c) {
-      const w = 256.0, h = 448.0;
-      const warm = Color(0xFFFFF4D6);
-      for (final dx in [-22.0, 22.0]) {
-        // Lichtfeld eines Scheinwerfers: schlanker Fächer.
-        final beam = Path()
-          ..moveTo(w / 2 + dx - 10, h - 6)
-          ..lineTo(w / 2 + dx * 1.6 - 74, h * 0.18)
-          ..quadraticBezierTo(w / 2 + dx * 1.6, h * 0.02, w / 2 + dx * 1.6 + 74, h * 0.18)
-          ..lineTo(w / 2 + dx + 10, h - 6)
-          ..close();
-        c.drawPath(
-          beam,
-          Paint()
-            ..shader = ui.Gradient.linear(
-              const Offset(0, h - 6),
-              const Offset(0, h * 0.06),
-              [warm.withValues(alpha: 0.9), warm.withValues(alpha: 0.55), warm.withValues(alpha: 0.0)],
-              [0.0, 0.35, 1.0],
-            )
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14),
-        );
+/// Länge des Bildes in Fahrzeugmetern (Maßstab des Lichts in der Szene).
+const double headlightConeMeters = 26;
+
+/// Deckkraft des Lichts aus dem Nachtfaktor (0 = Tag, 1 = Nacht): am Tag
+/// unsichtbar, in der Dämmerung sehr schwach, nachts klar, aber nicht
+/// dominant. Stetig – gleitet mit dem bestehenden Nachtfaktor.
+double headlightOpacity(double night) => 0.9 * math.pow(night.clamp(0.0, 1.0), 1.3).toDouble();
+
+/// Ein Scheinwerfer: seitlicher Versatz [x] (m, + = rechts), Abstrahlwinkel
+/// nach außen [outward] (°), Reichweite bis Null [reach] (m).
+typedef _Beam = ({double x, double outward, double reach});
+
+const List<_Beam> _lowBeams = [
+  (x: -0.95, outward: -2.5, reach: 21),
+  (x: 0.95, outward: 3.5, reach: 24),
+];
+
+/// Hellste Stelle: so viele Meter vor der Front.
+const double _beamPeak = 3.5;
+
+double _smooth(double t) {
+  final x = t.clamp(0.0, 1.0);
+  return x * x * (3 - 2 * x);
+}
+
+/// Deckkraft (0..1) eines Scheinwerfers im Abstand [d] (m) vor der Front,
+/// [lateral] m seitlich der Fahrzeugmitte.
+double _beamAlpha(_Beam b, double d, double lateral) {
+  if (d < 0 || d >= b.reach) return 0;
+  // Längs: von 55 % am Scheinwerfer weich auf 100 % bei _beamPeak, danach
+  // lang und ohne Kante auf 0 bei der Reichweite (Ableitung dort 0).
+  final rise = d < _beamPeak ? 0.55 + 0.45 * _smooth(d / _beamPeak) : 1.0;
+  final t = d <= _beamPeak ? 0.0 : (d - _beamPeak) / (b.reach - _beamPeak);
+  final fall = math.pow(1 - t * t * t, 2).toDouble();
+  // Quer: Gauß um die leicht nach außen laufende Strahlachse, nach vorn breiter.
+  final centre = b.x + d * math.tan(b.outward * math.pi / 180);
+  final sigma = 0.32 + 0.095 * d;
+  final q = (lateral - centre) / sigma;
+  return rise * fall * math.exp(-0.5 * q * q);
+}
+
+/// Deckkraft beider Scheinwerfer zusammen (wie Licht addiert, ≤ 1).
+double headlightAlphaAt(double d, double lateral) {
+  var dark = 1.0;
+  for (final b in _lowBeams) {
+    dark *= 1 - 0.85 * _beamAlpha(b, d, lateral);
+  }
+  return 1 - dark;
+}
+
+Future<Uint8List> headlightConePng() async {
+  final w = headlightConeSize.width.toInt(), h = headlightConeSize.height.toInt();
+  final pxPerMeter = h / headlightConeMeters;
+  const near = Color(0xFFFFEFD0), far = Color(0xFFFFF7EC);
+  // Zeilen mit Filterbyte 0, nicht vormultipliert (PNG-Standard).
+  final raw = Uint8List(h * (w * 4 + 1));
+  var i = 0;
+  for (var y = 0; y < h; y++) {
+    raw[i++] = 0;
+    final d = (h - 0.5 - y) / pxPerMeter;
+    final c = Color.lerp(near, far, (d / 20).clamp(0.0, 1.0))!;
+    final r = (c.r * 255).round(), g = (c.g * 255).round(), b = (c.b * 255).round();
+    for (var x = 0; x < w; x++) {
+      raw[i++] = r;
+      raw[i++] = g;
+      raw[i++] = b;
+      raw[i++] = (headlightAlphaAt(d, (x + 0.5 - w / 2) / pxPerMeter) * 255).round();
+    }
+  }
+  return _encodePng(w, h, raw);
+}
+
+/// Minimaler PNG-Kodierer (RGBA, unkomprimierte Deflate-Blöcke): eindeutig
+/// auf allen Plattformen, ohne Vormultiplizieren.
+Uint8List _encodePng(int w, int h, Uint8List raw) {
+  final out = BytesBuilder(copy: false)..add(const [137, 80, 78, 71, 13, 10, 26, 10]);
+  void chunk(String type, List<int> data) {
+    final body = Uint8List.fromList([...type.codeUnits, ...data]);
+    out
+      ..add(_u32(data.length))
+      ..add(body)
+      ..add(_u32(_crc32(body)));
+  }
+
+  chunk('IHDR', [..._u32(w), ..._u32(h), 8, 6, 0, 0, 0]);
+  final z = BytesBuilder(copy: false)..add(const [0x78, 0x01]);
+  for (var o = 0; o < raw.length; o += 65535) {
+    final n = math.min(65535, raw.length - o);
+    z
+      ..addByte(o + n == raw.length ? 1 : 0)
+      ..add([n & 0xFF, n >> 8, ~n & 0xFF, (~n >> 8) & 0xFF])
+      ..add(Uint8List.sublistView(raw, o, o + n));
+  }
+  var s1 = 1, s2 = 0;
+  for (final v in raw) {
+    s1 = (s1 + v) % 65521;
+    s2 = (s2 + s1) % 65521;
+  }
+  z.add(_u32((s2 << 16) | s1));
+  chunk('IDAT', z.takeBytes());
+  chunk('IEND', const []);
+  return out.takeBytes();
+}
+
+List<int> _u32(int v) => [(v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF];
+
+final List<int> _crcTable = [
+  for (var n = 0; n < 256; n++)
+    () {
+      var c = n;
+      for (var k = 0; k < 8; k++) {
+        c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
       }
-      // Helle Zone direkt vor dem Fahrzeug.
-      c.drawOval(
-        const Rect.fromLTWH(w / 2 - 70, h - 150, 140, 150),
-        Paint()
-          ..shader = ui.Gradient.radial(
-            const Offset(w / 2, h - 30),
-            110,
-            [warm.withValues(alpha: 0.55), warm.withValues(alpha: 0.0)],
-          ),
-      );
-    });
+      return c;
+    }(),
+];
+
+int _crc32(List<int> bytes) {
+  var c = 0xFFFFFFFF;
+  for (final b in bytes) {
+    c = _crcTable[(c ^ b) & 0xFF] ^ (c >> 8);
+  }
+  return c ^ 0xFFFFFFFF;
+}

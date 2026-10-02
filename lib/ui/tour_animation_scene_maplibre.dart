@@ -565,7 +565,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       if ((_night - _shownVeil).abs() > 0.004) {
         _shownVeil = _night;
         map.setLayerProperties('night-veil', _veilProps(0.55 * _night));
-        map.setLayerProperties('headlight-cone', _coneProps(0.95 * _night));
+        map.setLayerProperties('headlight-cone', _coneProps(headlightOpacity(_night)));
       }
     }
 
@@ -578,12 +578,13 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
             : _point(pose.kingpin, props),
       ]));
       if (widget.dayNight != DayNightMode.off && _night > 0.01) {
-        // Kegel ab der Kabinenfront, ≈ 16 Fahrzeugmeter lang, gedreht mit
-        // der Zugmaschine; wächst wie der LKW mit dem Kamerazoom.
+        // Abblendlicht ab der Kabinenfront, headlightConeMeters Fahrzeugmeter
+        // lang, gedreht mit der Zugmaschine; wächst wie der LKW mit dem
+        // Kamerazoom.
         final unit = _unitAt(pos.point);
         final light = headlightPlacement(pose, metersPerUnit: unit);
         final scale = math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
-        final coneSize = 16 * _pointsPerMeter * scale / headlightConeSize.height;
+        final coneSize = headlightConeMeters * _pointsPerMeter * scale / headlightConeSize.height;
         map.setGeoJsonSource('lights', _collection([
           _point(light.apex, {'rot': light.heading, 'size': coneSize}),
         ]));
