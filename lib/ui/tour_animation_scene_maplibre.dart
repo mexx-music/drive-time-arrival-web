@@ -194,7 +194,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   double _shownOutroVeil = -1;
 
   /// Auflösung der Fahrzeugbilder im Outro (näher dran → schärfer).
-  static const _outroSpritePx = 36.0;
+  static const _outroSpritePx = 24.0;
 
   ml.MapLibreMapController? _map;
   bool _ready = false;
@@ -434,7 +434,11 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   /// Fahrzeugbild anfordern (einmal erzeugen und behalten); liefert den Namen.
   String _requestArticulated(int yaw, int knick, int pitch, double night, OutroLights? lights) {
     final name = _articulatedName(yaw, knick, pitch, night) + (lights == null ? '' : '-o${lights.key}');
-    if (!_framesReady.contains(name) && !_framesPending.contains(name)) {
+    // Im Outro höchstens zwei Bilder gleichzeitig erzeugen – viele parallel
+    // blockierten die Seite (gemessen mehrere Sekunden); bis dahin zeigt die
+    // Szene das nächstliegende fertige Bild.
+    final busy = widget.outro != null && _framesPending.length >= 2 && (lights != null || _inOutro || _outroPrewarmed);
+    if (!_framesReady.contains(name) && !_framesPending.contains(name) && !busy) {
       _framesPending.add(name);
       truckArticulatedPng(widget.truckModel,
               tractorYaw: yaw * 4.0,
@@ -449,9 +453,27 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         await _map?.addImage(name, png);
         _framesPending.remove(name);
         _framesReady.add(name);
+        (_readyYaws[_poseKey(knick, pitch, night, lights)] ??= {})[yaw] = name;
       });
     }
     return name;
+  }
+
+  /// Fertige Bilder je Pose ohne Gierwinkel – für den nächstliegenden Ersatz.
+  final Map<String, Map<int, String>> _readyYaws = {};
+  String _poseKey(int knick, int pitch, double night, OutroLights? lights) =>
+      'k$knick-p$pitch-n${(night * 8).round()}-${lights?.key}';
+
+  /// Nächstliegendes fertiges Bild derselben Pose (Gierwinkel), sonst null.
+  String? _nearestReady(int yaw, int knick, int pitch, double night, OutroLights? lights) {
+    final m = _readyYaws[_poseKey(knick, pitch, night, lights)];
+    if (m == null || m.isEmpty) return null;
+    var best = m.keys.first;
+    int dist(int a) => ((a - yaw) % 90 + 90) % 90 > 45 ? 90 - ((a - yaw) % 90 + 90) % 90 : ((a - yaw) % 90 + 90) % 90;
+    for (final k in m.keys) {
+      if (dist(k) < dist(best)) best = k;
+    }
+    return m[best];
   }
 
   /// Zu Beginn des Outros die Bilder des Licht-Reveals (Endperspektive)
@@ -459,19 +481,47 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   void _prewarmOutro(OutroCamera oc, OutroTimeline tl, ArticulatedPose pose) {
     final night = nightStep(_night);
     final seen = <String>{};
-    for (var t = OutroTimeline.lightsOn - 0.2; t <= tl.end; t += 1 / 30) {
+    // Zuerst die Endperspektive (Ende des Schwenks und erstes Licht), dann
+    // alles in zeitlicher Reihenfolge.
+    for (final t in [OutroTimeline.lightsOn - 0.25, OutroTimeline.lightsOn, ...[for (var t = 0.0; t <= tl.end; t += 1 / 30) t]]) {
       final st = oc.at(t);
-      final yaw = (angleDiff(st.bearing, pose.tractorHeading) / 4).round();
-      final pitch = ((st.pitch / 5).round() * 5).clamp(30, 60);
-      final lights = OutroLights.at(tl, t);
-      final key = '$yaw-$pitch-${lights.key}';
+      final (yaw, pitch) = _outroFrame(angleDiff(st.bearing, pose.tractorHeading), st.pitch, t);
+      final lights = t >= OutroTimeline.lightsOn - 0.2 ? OutroLights.at(tl, t) : null;
+      final key = '$yaw-$pitch-${lights?.key}';
       if (seen.add(key)) _prewarmQueue.add((yaw, (pose.knick / 3).round(), pitch, night, lights));
     }
   }
 
+  /// Bildstufen im Outro: während des Schwenks gröber (8° Gier, 10°
+  /// Neigung) – die Bewegung verdeckt es, und es braucht halb so viele Bilder.
+  (int, int) _outroFrame(double yawDeg, double pitchDeg, double t) {
+    if (t < OutroTimeline.lightsOn - 0.2) {
+      return ((yawDeg / 8).round() * 2, ((pitchDeg / 10).round() * 10).clamp(30, 60));
+    }
+    return ((yawDeg / 4).round(), ((pitchDeg / 5).round() * 5).clamp(30, 60));
+  }
+
+  OutroCamera _makeOutroCamera(OutroTimeline tl) {
+    final cam = _cam ?? _cameraFor(const Size(1000, 700));
+    final end = widget.path.totalMeters;
+    final pose = articulate(widget.path, end, metersPerUnit: _unitAt(widget.path.end));
+    final size = (context.findRenderObject() as RenderBox?)?.size ?? MediaQuery.sizeOf(context);
+    return OutroCamera(
+      // Exakt der letzte Zustand der Fahrt – kein Sprung.
+      from: _camState ?? cam.step(end, Duration.zero),
+      truck: pose.kingpin,
+      heading: pose.tractorHeading,
+      followZoom: cam.followZoom,
+      truckPointsPerMeter: _pointsPerMeter,
+      width: size.width,
+      height: size.height,
+      timeline: tl,
+    );
+  }
+
   /// Vorbereitete Outro-Bilder: höchstens eines je Bild anstoßen – alle auf
   /// einmal blockierten die Seite gemessen mehrere Sekunden.
-  final List<(int, int, int, double, OutroLights)> _prewarmQueue = [];
+  final List<(int, int, int, double, OutroLights?)> _prewarmQueue = [];
 
   Map<String, dynamic>? _articulatedProps(TourPosition pos) {
     final pose = _pose = articulate(widget.path, pos.meters, metersPerUnit: _unitAt(pos.point));
@@ -486,10 +536,21 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     // folgen), ab dem Licht-Reveal scharfe Bilder mit Lichtzustand.
     final lights = _inOutro && widget.outroTime! >= OutroTimeline.lightsOn - 0.2 ? _outroLights : null;
     final spritePx = lights == null ? _spritePx : _outroSpritePx;
-    final name = _requestArticulated(_yawFrame, _knickFrame, pitch, night, lights);
+    var yaw = _yawFrame, pitchFrame = pitch;
+    if (_inOutro) {
+      (yaw, pitchFrame) = _outroFrame(angleDiff(_cameraBearing, pose.tractorHeading), _cameraPitch, widget.outroTime!);
+    }
+    final name = _requestArticulated(yaw, _knickFrame, pitchFrame, night, lights);
     if (_framesReady.contains(name)) {
       _shownFrame = name;
       _shownFramePx = spritePx;
+    } else if (_inOutro) {
+      // Im Outro lieber das nächstliegende fertige Bild als ein veraltetes.
+      final near = _nearestReady(yaw, _knickFrame, pitchFrame, night, lights);
+      if (near != null) {
+        _shownFrame = near;
+        _shownFramePx = spritePx;
+      }
     }
     final shown = _shownFrame;
     if (shown == null) return null;
@@ -655,40 +716,26 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
 
     // Kamera: ruhig in Fahrtrichtung, am Ziel Übersicht von oben – oder
     // das Cinematic-Outro.
-    if (!_inOutro) {
-      _outroCam = null;
-      _outroPrewarmed = false;
+    if (!_inOutro) _outroCam = null;
+    // Outro-Bilder vorbereiten: schon beim Heranfahren ans Ziel (letzte
+    // ≈ 5 % der Strecke), je Bild höchstens eines.
+    if (_prewarmQueue.isNotEmpty && _framesPending.isEmpty) {
+      final (y, k, p, n, l) = _prewarmQueue.removeAt(0);
+      _requestArticulated(y, k, p, n, l);
+    }
+    final outroTl = widget.outroTimeline;
+    if (widget.outro != null && outroTl != null && !_outroPrewarmed &&
+        (_inOutro || pos.meters >= widget.path.totalMeters * 0.95)) {
+      _outroPrewarmed = true;
+      final end = widget.path.totalMeters;
+      _prewarmOutro(_makeOutroCamera(outroTl), outroTl,
+          articulate(widget.path, end, metersPerUnit: _unitAt(widget.path.end)));
     }
     if (_inOutro) {
       final tl = widget.outroTimeline!;
       final t = widget.outroTime!;
       _outroLights = OutroLights.at(tl, t);
-      final oc = _outroCam ??= () {
-        final cam = _cam ?? _cameraFor(const Size(1000, 700));
-        final end = widget.path.totalMeters;
-        final pose = articulate(widget.path, end, metersPerUnit: _unitAt(widget.path.end));
-        final size = (context.findRenderObject() as RenderBox?)?.size ?? MediaQuery.sizeOf(context);
-        return OutroCamera(
-          // Exakt der letzte Zustand der Fahrt – kein Sprung.
-          from: _camState ?? cam.step(end, Duration.zero),
-          truck: pose.kingpin,
-          heading: pose.tractorHeading,
-          followZoom: cam.followZoom,
-          truckPointsPerMeter: _pointsPerMeter,
-          width: size.width,
-          height: size.height,
-          timeline: tl,
-        );
-      }();
-      if (_prewarmQueue.isNotEmpty) {
-        final (y, k, p, n, l) = _prewarmQueue.removeAt(0);
-        _requestArticulated(y, k, p, n, l);
-      }
-      if (!_outroPrewarmed) {
-        _outroPrewarmed = true;
-        final end = widget.path.totalMeters;
-        _prewarmOutro(oc, tl, articulate(widget.path, end, metersPerUnit: _unitAt(widget.path.end)));
-      }
+      final oc = _outroCam ??= _makeOutroCamera(tl);
       final st = _camState = oc.at(t);
       _cameraBearing = st.bearing;
       _cameraZoom = st.zoom;

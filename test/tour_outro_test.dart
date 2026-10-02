@@ -222,7 +222,7 @@ void main() {
         final l = OutroLights.at(tl, t);
         expect(l.tail, greaterThanOrEqualTo(tail));
         expect(l.head, greaterThanOrEqualTo(head));
-        expect(l.tail - tail, lessThanOrEqualTo(0.25)); // höchstens zwei Achtel je Bild
+        expect(l.tail - tail, lessThanOrEqualTo(0.25)); // höchstens eine Viertelstufe je Bild
         tail = l.tail;
         head = l.head;
         if (l.head > 0) expect(l.tail, greaterThan(0)); // Rücklichter zuerst
@@ -230,9 +230,9 @@ void main() {
       expect(OutroLights.at(tl, OutroTimeline.lightsOn - 0.1).tail, 0); // vorher aus
       expect(tl.sweep(OutroTimeline.lightsOn + 1.5), isNotNull);
       expect(tl.sweep(tl.end), isNull); // Schlussbild ohne Lichtlauf
-      // Wenige Zustände: unter 40 verschiedene Bilder für das Reveal.
+      // Wenige Zustände: das Reveal braucht nur wenige große Bilder.
       final keys = {for (var t = 0.0; t <= tl.end; t += 1 / 60) OutroLights.at(tl, t).key};
-      expect(keys.length, lessThan(40));
+      expect(keys.length, lessThan(20)); // wenige große Bilder
     });
 
     test('Outro-Truck = derselbe Truck wie während der Fahrt (nur Licht dazu)', () async {

@@ -154,16 +154,16 @@ class OutroLights {
   final double? sweep;
 
   factory OutroLights.at(OutroTimeline tl, double t) {
-    double q8(double v) => (v.clamp(0.0, 1.0) * 8).round() / 8;
+    double q4(double v) => (v.clamp(0.0, 1.0) * 4).round() / 4;
     final s = tl.sweep(t);
     return OutroLights(
-      tail: q8(tl.tailLights(t)),
-      head: q8(tl.headLights(t)),
-      sweep: s == null ? null : (s * 16).round() / 16,
+      tail: q4(tl.tailLights(t)),
+      head: q4(tl.headLights(t)),
+      sweep: s == null ? null : (s * 8).round() / 8,
     );
   }
 
-  String get key => 't${(tail * 8).round()}h${(head * 8).round()}s${sweep == null ? '-' : (sweep! * 16).round()}';
+  String get key => 't${(tail * 4).round()}h${(head * 4).round()}s${sweep == null ? '-' : (sweep! * 8).round()}';
 }
 
 // ---------------------------------------------------------------- Kamera
