@@ -834,7 +834,12 @@ void main() {
       expect(view.truckView, TruckView.articulated);
       expect(view.dayNight, DayNightMode.plan); // Planzeit, keine Demo-Zeit
       expect(view.cinematicDemo, isFalse);
-      expect(view.truckModel.branding.id, 'gartner-test');
+      // Öffentlicher Build: neutraler Lkw, Exportmodus und Hero-Bilder aus,
+      // auch wenn die URL sie verlangt (nur im Film-Build DRIVETIME_FILM).
+      expect(view.truckModel.branding.id, 'neutral');
+      expect(view.videoExport, isFalse);
+      expect(view.heroPhoto, isNull);
+      expect(view.heroCutout, isNull);
       // Im Test lädt die Vektorkarte nicht (kein Netz): die Ansicht fällt
       // von selbst auf die bisherige 2D-Karte zurück und fährt dort.
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));

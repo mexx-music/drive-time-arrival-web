@@ -56,6 +56,10 @@ import 'tour/input_auth.dart';
 import 'tour/tour_scope.dart';
 import 'tour/tour_service.dart';
 
+/// Lokaler Film-Build (`--dart-define=DRIVETIME_FILM=true`): Videoexport
+/// per URL und GARTNER-Lackierung. Nie im öffentlichen Build gesetzt.
+const bool _filmBuild = bool.fromEnvironment('DRIVETIME_FILM');
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('de');
@@ -2034,13 +2038,16 @@ class _HomeScreenState extends State<HomeScreen> {
         startIn25D: true,
         cameraMode: CameraMode.cinematic,
         truckView: TruckView.articulated,
-        truckModel: const TruckModel(branding: TruckBranding.gartnerTest),
+        // Öffentlich neutral; GARTNER-Lackierung nur im Film-Build.
+        truckModel: TruckModel(
+            branding: _filmBuild ? TruckBranding.gartnerTest : TruckBranding.neutral),
         dayNight: DayNightMode.plan,
-        // Videoexport (Entwicklung): nur mit ?export=1 – ohne Bedienelemente,
-        // Bild für Bild über window.drivetimeExport.
-        videoExport: Uri.base.queryParameters['export'] == '1',
-        heroPhoto: Uri.base.queryParameters['heroPhoto'],
-        heroCutout: Uri.base.queryParameters['heroCutout'],
+        // Videoexport (Entwicklung): nur im Film-Build und mit ?export=1 –
+        // ohne Bedienelemente, Bild für Bild über window.drivetimeExport.
+        // Production (ohne DRIVETIME_FILM) ignoriert diese URL-Parameter.
+        videoExport: _filmBuild && Uri.base.queryParameters['export'] == '1',
+        heroPhoto: _filmBuild ? Uri.base.queryParameters['heroPhoto'] : null,
+        heroCutout: _filmBuild ? Uri.base.queryParameters['heroCutout'] : null,
       ),
     ));
   }
