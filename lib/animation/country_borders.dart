@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show AssetBundle, rootBundle;
@@ -55,14 +56,41 @@ class CountryShape {
       for (var i = 0; i < lon.length; i++) {
         final yi = lat[i];
         final yj = lat[j];
-        if ((yi > y) != (yj > y) &&
-            x < (lon[j] - lon[i]) * (y - yi) / (yj - yi) + lon[i]) {
+        if ((yi > y) != (yj > y) && x < (lon[j] - lon[i]) * (y - yi) / (yj - yi) + lon[i]) {
           inside = !inside;
         }
         j = i;
       }
     }
     return inside;
+  }
+
+  /// Abstand von [p] zur nächsten Grenzlinie dieses Landes in Metern
+  /// (lokal eben gerechnet – für Abstände von einigen Kilometern genau
+  /// genug). Ringe, deren Rahmen weiter als [within] Meter entfernt ist,
+  /// werden übersprungen; dann ist das Ergebnis höchstens [within].
+  double edgeDistanceMeters(LatLng p, {double within = 50000}) {
+    const mPerDeg = 111320.0;
+    final x0 = p.longitude, y0 = p.latitude;
+    final kx = mPerDeg * math.cos(y0 * math.pi / 180);
+    final padLat = within / mPerDeg, padLon = within / kx;
+    var best = within * within;
+    for (final (lon, lat, w, e, s, n) in _rings) {
+      if (x0 < w - padLon || x0 > e + padLon || y0 < s - padLat || y0 > n + padLat) continue;
+      var j = lon.length - 1;
+      for (var i = 0; i < lon.length; i++) {
+        final ax = (lon[j] - x0) * kx, ay = (lat[j] - y0) * mPerDeg;
+        final bx = (lon[i] - x0) * kx, by = (lat[i] - y0) * mPerDeg;
+        final dx = bx - ax, dy = by - ay;
+        final len2 = dx * dx + dy * dy;
+        final t = len2 == 0 ? 0.0 : (-(ax * dx + ay * dy) / len2).clamp(0.0, 1.0);
+        final qx = ax + t * dx, qy = ay + t * dy;
+        final d2 = qx * qx + qy * qy;
+        if (d2 < best) best = d2;
+        j = i;
+      }
+    }
+    return math.sqrt(best);
   }
 }
 
@@ -89,8 +117,7 @@ class CountryIndex {
   static List<LatLng> _decode(List<num> ring, double q) {
     var x = 0, y = 0;
     return [
-      for (var i = 0; i + 1 < ring.length; i += 2)
-        LatLng((y += ring[i + 1].toInt()) / q, (x += ring[i].toInt()) / q),
+      for (var i = 0; i + 1 < ring.length; i += 2) LatLng((y += ring[i + 1].toInt()) / q, (x += ring[i].toInt()) / q),
     ];
   }
 
@@ -145,11 +172,19 @@ class BorderCrossing {
 /// kein Flattern. Die Stelle wird danach per Halbierung auf
 /// [precisionMeters] genau bestimmt. Auf See (Fähre) gibt es kein Land; der
 /// Wechsel erscheint dort, wo die Route nach der Überfahrt wieder Land hat.
+///
+/// Danach fallen Grenzberührungen weg: Ein Land zwischen zwei Übertritten
+/// zählt nur, wenn die Route darin mindestens [minDepthMeters] Abstand zu den
+/// Grenzen der Nachbarländer davor und danach gewinnt. Läuft eine Straße
+/// lange direkt an der Grenze (Donau am Eisernen Tor, Serbien/Rumänien),
+/// pendelt die vereinfachte Grenzlinie sonst über viele Kilometer hin und
+/// her. Echte kurze Durchfahrten (Deutsches Eck, Neum) liegen tiefer.
 List<BorderCrossing> detectBorderCrossings(
   TourPath path,
   CountryIndex index, {
   double sampleMeters = 1000,
   double minStayMeters = 2000,
+  double minDepthMeters = 2500,
   double precisionMeters = 25,
 }) {
   final total = path.totalMeters;
@@ -201,6 +236,53 @@ List<BorderCrossing> detectBorderCrossings(
       out.add(BorderCrossing(meters: hi, fromIso: current, toIso: iso));
       current = candidate;
       candidate = null;
+    }
+  }
+  return _dropBorderTouches(out, path, index, minDepthMeters, sampleMeters / 4);
+}
+
+/// Entfernt flache Abstecher (siehe [detectBorderCrossings]), den flachsten
+/// zuerst – so lösen sich auch mehrfache Pendel A→B→A→B→A ganz auf. Führt
+/// der Abstecher in ein drittes Land weiter (A→B→C), bleibt ein Übertritt
+/// A→C an der ersten Stelle.
+List<BorderCrossing> _dropBorderTouches(
+  List<BorderCrossing> crossings,
+  TourPath path,
+  CountryIndex index,
+  double minDepth,
+  double step,
+) {
+  if (minDepth <= 0) return crossings;
+  final out = List<BorderCrossing>.of(crossings);
+  double depth(int i) {
+    final a = index.byIso(out[i].fromIso), c = index.byIso(out[i + 1].toIso);
+    if (a == null || c == null) return double.infinity;
+    final from = out[i].meters, to = out[i + 1].meters;
+    var best = 0.0;
+    for (var m = from + step / 2; m < to; m += step) {
+      final p = path.at(m).point;
+      final d = math.min(a.edgeDistanceMeters(p, within: minDepth), c.edgeDistanceMeters(p, within: minDepth));
+      if (d > best) best = d;
+      if (best >= minDepth) break;
+    }
+    return best;
+  }
+
+  while (out.length >= 2) {
+    var worst = -1;
+    var worstDepth = minDepth;
+    for (var i = 0; i + 1 < out.length; i++) {
+      final d = depth(i);
+      if (d < worstDepth) {
+        worst = i;
+        worstDepth = d;
+      }
+    }
+    if (worst < 0) break;
+    final a = out[worst], c = out[worst + 1];
+    out.removeRange(worst, worst + 2);
+    if (a.fromIso != c.toIso) {
+      out.insert(worst, BorderCrossing(meters: a.meters, fromIso: a.fromIso, toIso: c.toIso));
     }
   }
   return out;
