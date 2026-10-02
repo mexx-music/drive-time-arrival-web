@@ -273,8 +273,10 @@ class CinematicHeading {
       double? knickTurn,
       this.routeGuided = false,
       this.rearAnchor = false,
-      this.unitAt})
-      : knickTurn = knickTurn ?? maxTurn * 0.6 {
+      this.unitAt,
+      DisplayPath? displayPath})
+      : _display = displayPath
+        ,knickTurn = knickTurn ?? maxTurn * 0.6 {
     final end = motion.duration.inMicroseconds / 1e6;
     final n = math.max(2, (end * _hz).ceil());
     final raw = <double>[];
@@ -296,12 +298,12 @@ class CinematicHeading {
       } else if (routeGuided) {
         // Zugmaschine und Auflieger-Achsgruppe an der gefahrenen Route:
         // Route vorne → Zugmaschine → Sattelpunkt → Achsgruppe → Route hinten.
-        final u = unitAt!(motion.path.at(m).point);
-        final front = motion.path.at(m).point;
-        // Lange Basis (≈ halbe Zuglänge): kleine Schlenker zählen nicht.
-        final rear = _behind(m, 2 * dims.tractorWheelbase * u);
-        final king = _behind(m, dims.kingpinBehindFront * u);
-        final axle = _behind(m, (dims.kingpinBehindFront + dims.trailerWheelbase) * u);
+        final md = _dm(m);
+        final front = this.displayPath.at(md).point;
+        final u = unitAt!(front);
+        final rear = _behind(md, (_display == null ? 2 : 1) * dims.tractorWheelbase * u);
+        final king = _behind(md, dims.kingpinBehindFront * u);
+        final axle = _behind(md, (dims.kingpinBehindFront + dims.trailerWheelbase) * u);
         final tr = _brg(rear, front), tl = _brg(axle, king);
         raw.add(tr);
         knick.add(angleDiff(tr, tl) * knickScale);
@@ -350,10 +352,33 @@ class CinematicHeading {
   LatLng? _lastKing;
   final double Function(LatLng)? unitAt;
 
-  LatLng _behind(double m, double d) {
-    if (m - d >= 0) return motion.path.at(m - d).point;
-    final start = motion.path.start;
-    return destination(start, d - m, (motion.path.at(0).bearing + 180) % 360);
+  /// Punkt [d] Meter hinter [m] auf der Darstellungslinie ([m] in deren
+  /// Metern); vor dem Start gerade verlängert.
+  LatLng _behind(double m, double d) => _onDisplay(m - d);
+
+  LatLng _onDisplay(double s) => s >= 0
+      ? displayPath.at(s).point
+      : destination(displayPath.start, -s, (displayPath.at(0).bearing + 180) % 360);
+
+  final DisplayPath? _display;
+
+  /// Linie, auf der der Lkw gezeichnet wird: die Route, für die Cinematic-
+  /// Fahrt auf Lkw-Maßstab geglättet ([smoothDisplayPath]).
+  TourPath get displayPath => _display?.path ?? motion.path;
+
+  /// Streckenmeter der Route → Meter der Darstellungslinie (gleicher Ort).
+  double _dm(double m) => _display?.map(m) ?? m;
+
+  /// Meter der Darstellungslinie zu Streckenmetern der Route.
+  double displayMetersAt(double meters) => _dm(meters);
+
+  /// Zugmaschine geometrisch auf der Darstellungslinie: Vorderachse vorn,
+  /// Hinterachse einen Radstand dahinter.
+  double _tractorOnDisplay(double md, double u) {
+    // Tangente über ±1 Radstand – unabhängig von den Stützpunkten der Linie.
+    final b = track.dims.tractorWheelbase * u;
+    final ahead = math.min(displayPath.totalMeters, md + b);
+    return _brg(_behind(md, b), displayPath.at(ahead).point);
   }
 
   static double _brg(LatLng a, LatLng b) =>
@@ -417,7 +442,7 @@ class CinematicHeading {
   static const double trailerRearBehindKingpin = 12.4;
 
   /// Höchste Schwenkgeschwindigkeit des Aufliegers (°/s Fahrzeit).
-  static const double trailerMaxTurn = 80;
+  static const double trailerMaxTurn = 400;
 
   /// Heckpunkt auf der Route je Bild (Streckenmeter) und Aufliegerrichtung,
   /// einmal für die ganze Fahrt verfolgt (60 Werte je Sekunde):
@@ -435,23 +460,23 @@ class CinematicHeading {
     var prevS = double.negativeInfinity;
     const d = Distance(calculator: Haversine());
     for (var k = 0; k < n; k++) {
-      final m = motion.metersAt(k / _hz);
-      final front = motion.path.at(m).point;
+      final m = _dm(motion.metersAt(k / _hz));
+      final front = displayPath.at(m).point;
       final u = unit(front);
-      final tractor = (_tractor[k] % 360 + 360) % 360;
+      final tractor = _display != null ? _tractorOnDisplay(m, u) : (_tractor[k] % 360 + 360) % 360;
       final kp = destination(front, dims.kingpinBehindFront * u, (tractor + 180) % 360);
       final len = trailerRearBehindKingpin * u;
       // Rückwärts in kleinen Schritten bis zum ersten Punkt im Abstand len.
       final step = len / 12;
       var sOut = m - dims.kingpinBehindFront * u - len; // Fallback: gerade
       for (var s = m - dims.kingpinBehindFront * u; s >= m - 4 * len; s -= step) {
-        final q = s >= 0 ? motion.path.at(s).point : destination(motion.path.start, -s, (motion.path.at(0).bearing + 180) % 360);
+        final q = _onDisplay(s);
         if (d(q, kp) >= len) {
           // fein zwischen s und s + step
           var lo = s, hi = s + step;
           for (var r = 0; r < 20; r++) {
             final mid = (lo + hi) / 2;
-            final qm = mid >= 0 ? motion.path.at(mid).point : destination(motion.path.start, -mid, (motion.path.at(0).bearing + 180) % 360);
+            final qm = _onDisplay(mid);
             if (d(qm, kp) >= len) {
               lo = mid;
             } else {
@@ -464,41 +489,35 @@ class CinematicHeading {
       }
       sOut = math.max(sOut, prevS); // nur vorwärts
       prevS = sOut;
-      final rear = sOut >= 0 ? motion.path.at(sOut).point : destination(motion.path.start, -sOut, (motion.path.at(0).bearing + 180) % 360);
+      final rear = _onDisplay(sOut);
       var h = rear == kp ? tractor : _brg(rear, kp);
       // Als Knick relativ zur Zugmaschine sammeln (glatt, ohne Umbruch).
       final knick = angleDiff(tractor, h);
       rearS.add(sOut);
       trailer.add(knick);
     }
-    // Erst glätten (das Heck sitzt auf jedem kleinen Schlenker der Route),
-    // dann die Knickänderung vor- und rückwärts begrenzen – kein Jagen.
-    var k = _average(trailer, (0.8 * _hz).round());
-    k = [for (final v in k) v.clamp(-dims.maxKnick, dims.maxKnick).toDouble()];
+    // Auf der geglätteten Darstellungslinie sitzt das Heck exakt; nur ganz
+    // leicht glätten, Grenzen als Sicherheit.
+    var k = [for (final v in trailer) v.clamp(-dims.maxKnick, dims.maxKnick).toDouble()];
     k = _limit(k, trailerMaxTurn / _hz);
-    k = _average(k, (0.15 * _hz).round());
-    final out = [for (var i = 0; i < n; i++) ((_tractor[i] + k[i]) % 360 + 360) % 360];
-    return (rearS, out);
+    k = _average(k, (0.05 * _hz).round());
+    return (rearS, k);
   }();
 
-  /// Streckenmeter des Routenpunkts, auf dem das Heck liegt (für die Spur).
+  /// Meter der Darstellungslinie, auf denen das Heck liegt (für die Spur).
   double rearMetersAt(double meters, LatLng kingpin, double metersPerUnit) =>
       math.max(0.0, _at(_rearTrack.$1, meters.clamp(0.0, motion.path.totalMeters)));
-
-  double _atAngle(List<double> a, double meters) {
-    final x = motion.secondsAt(meters) * _hz;
-    final i = x.floor().clamp(0, a.length - 1);
-    final j = math.min(i + 1, a.length - 1);
-    return (a[i] + angleDiff(a[i], a[j]) * (x - i) + 360) % 360;
-  }
 
   /// Pose bei [meters]: Vorderachse exakt auf der Route, Richtungen stabilisiert.
   ArticulatedPose pose(double meters, {required double metersPerUnit}) {
     final m = meters.clamp(0.0, motion.path.totalMeters);
-    final front = motion.path.at(m).point;
-    final tractor = (_at(_tractor, m) % 360 + 360) % 360;
+    final md = _dm(m);
+    final front = displayPath.at(md).point;
+    final tractor = _display != null && rearOnRoute
+        ? _tractorOnDisplay(md, metersPerUnit)
+        : (_at(_tractor, m) % 360 + 360) % 360;
     var trailer = (tractor + _at(_knick, m) + 360) % 360;
-    if (rearOnRoute) trailer = _atAngle(_rearTrack.$2, m);
+    if (rearOnRoute) trailer = (tractor + _at(_rearTrack.$2, m) + 360) % 360;
     final dims = track.dims;
     // An der Route geführt: Sattelpunkt auf der gefahrenen Linie.
     final kingpin = rearAnchor || rearOnRoute
@@ -569,13 +588,90 @@ const bool cinematicTrailRearDefine = bool.fromEnvironment('CINEMATIC_TRAIL_REAR
     heading: guide > 0
         ? (CinematicHeading(motion, track,
             maxTurn: maxTurn > 0 ? maxTurn.toDouble() : 60,
-            smoothSeconds: 1.0,
+            smoothSeconds: 0.4,
             knickScale: 1,
             maxKnick: 45,
             routeGuided: guide == 1 || guide == 3,
             rearAnchor: guide == 2,
-            unitAt: unitAt)
+            unitAt: unitAt,
+            displayPath: guide == 3 ? smoothDisplayPath(path, 16.8 * unitAt(path.start)) : null)
           ..rearOnRoute = guide == 3)
         : (maxTurn > 0 ? CinematicHeading(motion, track, maxTurn: maxTurn.toDouble()) : null),
   );
+}
+
+/// Darstellungslinie der Cinematic-Fahrt mit Zuordnung zur echten Route.
+class DisplayPath {
+  DisplayPath(this.path, this._orig, this._disp);
+  final TourPath path;
+  final List<double> _orig;
+  final List<double> _disp;
+
+  /// Meter der echten Route → Meter der Darstellungslinie (gleicher Ort).
+  double map(double meters) {
+    if (_orig.length < 2) return meters;
+    var lo = 0, hi = _orig.length - 1;
+    if (meters <= _orig.first) return _disp.first;
+    if (meters >= _orig.last) return _disp.last;
+    while (hi - lo > 1) {
+      final mid = (lo + hi) >> 1;
+      if (_orig[mid] <= meters) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    final f = (meters - _orig[lo]) / (_orig[hi] - _orig[lo]);
+    return _disp[lo] + (_disp[hi] - _disp[lo]) * f;
+  }
+}
+
+/// Darstellungslinie der Cinematic-Fahrt: die Route je Abschnitt in Schritten
+/// von [window]/8 neu abgetastet und über ±[window]/2 gemittelt. Schlenker,
+/// die kleiner sind als der (stark vergrößert gezeichnete) Lkw, verschwinden;
+/// große Kurven bleiben. Start und Ende jedes Abschnitts bleiben exakt.
+DisplayPath smoothDisplayPath(TourPath path, double window) {
+  final legs = <TourLeg>[];
+  final orig = <double>[];
+  var legStart = 0.0;
+  for (final leg in path.legs) {
+    final lp = TourPath([TourLeg(points: leg.points)]);
+    final len = lp.totalMeters;
+    final step = window <= 0 ? len : window / 8;
+    final n = math.max(1, (len / step).ceil());
+    final pts = [for (var i = 0; i <= n; i++) lp.at(math.min(len, i * len / n)).point];
+    const half = 4;
+    // Zwei Durchgänge gleitender Mittelwert ≈ Gauß: weiche Bögen, keine Ecken.
+    List<LatLng> pass(List<LatLng> src) => [
+          for (var i = 0; i <= n; i++)
+            () {
+              final h = math.min(half, math.min(i, n - i)); // zu den Enden hin kleiner
+              var la = 0.0, lo = 0.0;
+              for (var j = i - h; j <= i + h; j++) {
+                la += src[j].latitude;
+                lo += src[j].longitude;
+              }
+              return LatLng(la / (2 * h + 1), lo / (2 * h + 1));
+            }(),
+        ];
+    final out = pass(pass(pts));
+    for (var i = 0; i <= n; i++) {
+      orig.add(legStart + i * len / n);
+    }
+    legs.add(TourLeg(points: out, kind: leg.kind, label: leg.label));
+    legStart += len;
+  }
+  final dp = TourPath(legs);
+  // Meter der neuen Linie an jedem Stützpunkt (Abschnitte hintereinander).
+  final disp = <double>[];
+  var acc = 0.0;
+  const d = Distance(calculator: Haversine());
+  for (final leg in legs) {
+    for (var i = 0; i < leg.points.length; i++) {
+      if (i > 0) acc += d(leg.points[i - 1], leg.points[i]);
+      disp.add(acc);
+    }
+  }
+  // TourPath verbindet Abschnitte ohne Lücke (gleiche Endpunkte) – Längen passen.
+  return DisplayPath(dp, orig, disp.length == orig.length ? disp : orig);
 }

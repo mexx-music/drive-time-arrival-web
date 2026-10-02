@@ -930,15 +930,14 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       final pose = _pose;
       final heading = widget.cinematicHeading;
       if (heading != null && heading.rearOnRoute && pose != null && _mix?.crossing == null) {
-        // Heck klebt auf der Route: die Spur läuft bis zum Heckpunkt auf der
-        // Route und endet exakt am gezeichneten Heck des Aufliegers.
+        // Heck klebt auf der (geglätteten) Darstellungslinie: die Spur ist
+        // genau diese Linie bis zum Heck – im Outro die ganze Strecke.
         final u = _unitAt(pos.point);
-        final features = _drivenFeatures(widget.path.at(heading.rearMetersAt(pos.meters, pose.kingpin, u)));
-        final rear = destination(pose.kingpin, CinematicHeading.trailerRearBehindKingpin * u, (pose.trailerHeading + 180) % 360);
-        if (features.isNotEmpty) {
-          ((features.last['geometry'] as Map)['coordinates'] as List).add([rear.longitude, rear.latitude]);
-        }
-        map.setGeoJsonSource('driven', _collection(features));
+        final dp = heading.displayPath;
+        final upTo = _inOutro ? dp.totalMeters : heading.rearMetersAt(pos.meters, pose.kingpin, u);
+        map.setGeoJsonSource('driven', _collection([
+          for (final t in dp.trailUpTo(upTo)) _line(t.points, {'ferry': t.kind != TourLegKind.road}),
+        ]));
       } else if (widget.cinematicHeading != null && cinematicTrailRearDefine && pose != null && _mix?.crossing == null) {
         final u = _unitAt(pos.point);
         final back = (pos.meters - 14.0 * u).clamp(0.0, widget.path.totalMeters);

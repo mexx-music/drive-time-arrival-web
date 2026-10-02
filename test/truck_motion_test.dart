@@ -276,18 +276,22 @@ void main() {
       for (var m = p.totalMeters * 0.05; m < p.totalMeters; m += p.totalMeters / 300) {
         final u = h.unitAt!(p.at(m).point);
         final pose = h.pose(m, metersPerUnit: u);
-        expect(_d(pose.frontAxle, p.at(m).point), lessThan(0.01));
+        final dp = h.displayPath;
+        // Vorderachse auf der Darstellungslinie (Route auf Lkw-Maßstab geglättet).
+        expect(_d(pose.frontAxle, dp.at(h.displayMetersAt(m)).point), lessThan(0.01));
+        // Die geglättete Linie bleibt nah an der echten Route (≤ ½ Lkw-Länge).
+        expect(_d(pose.frontAxle, p.at(m).point), lessThan(8.4 * u));
         final rear = destination(pose.kingpin, CinematicHeading.trailerRearBehindKingpin * u,
             (pose.trailerHeading + 180) % 360);
-        final onRoute = p.at(h.rearMetersAt(m, pose.kingpin, u)).point;
+        final onRoute = h.displayPath.at(h.rearMetersAt(m, pose.kingpin, u)).point;
         offs.add(_d(rear, onRoute) / u);
         expect(pose.knick.abs(), lessThanOrEqualTo(70));
       }
       offs.sort();
       // Fast immer genau auf der Route; nur wo der Schwenk begrenzt ist,
       // liegt das Heck kurz knapp daneben (in Fahrzeugmetern).
-      expect(offs[(offs.length * 0.9).floor()], lessThan(0.6));
-      expect(offs.last, lessThan(3));
+      expect(offs[(offs.length * 0.9).floor()], lessThan(0.15));
+      expect(offs.last, lessThan(1));
     });
   });
 
