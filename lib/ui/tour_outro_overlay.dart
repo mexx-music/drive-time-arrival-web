@@ -40,7 +40,13 @@ OutroData buildOutroData({
 /// Bild, auch Bild für Bild im späteren Videoexport. Der Truck selbst ist
 /// Teil der Karte; hier liegen nur Text, Länder und Signatur.
 class TourOutroOverlay extends StatelessWidget {
-  const TourOutroOverlay({super.key, required this.data, required this.timeline, required this.t, this.heroPhoto});
+  const TourOutroOverlay(
+      {super.key, required this.data, required this.timeline, required this.t, this.heroPhoto, this.heroCutout});
+
+  /// Test/Export: freigestellter Hero-Lkw in derselben Perspektive wie das
+  /// Modell. Blendet deckungsgleich über das Modell und wird dann langsam
+  /// größer (die Kamera „rückt näher“). null = nur Modell.
+  final String? heroCutout;
 
   /// Test/Export: echtes Foto des Lkw, blendet nach dem Licht über das
   /// Modell (null = nur Modell).
@@ -65,14 +71,35 @@ class TourOutroOverlay extends StatelessWidget {
       // Größen an der kürzeren Seite ausrichten – lesbar auf 9:16 wie Desktop.
       final unit = math.min(w, h * 0.62);
 
-      final titleTop = portrait ? 0.05 * h : 0.07 * h;
+      final titleTop = portrait ? 0.075 * h : 0.08 * h;
       final listTop = portrait ? 0.25 * h : 0.30 * h;
       final listBottom = portrait ? 0.64 * h : 0.70 * h;
       final statsTop = portrait ? 0.70 * h : 0.76 * h;
 
       final photo = heroPhoto == null ? 0.0 : timeline.photo(t);
+      final cut = heroCutout == null ? 0.0 : timeline.photo(t);
+      // Größe/Ort: zuerst genau über dem Modell, dann größer nach rechts unten.
+      final comp = outroComposition(portrait: portrait);
+      final grow = heroCutout == null
+          ? 0.0
+          : (((t - timeline.photoReveal - 0.6) / 2.6).clamp(0.0, 1.0));
+      final g = grow * grow * (3 - 2 * grow);
+      final cw = (0.30 + 0.12 * g) * (portrait ? w : math.min(w, h * 0.9));
+      final right = (comp.x + 0.20 + 0.10 * g) * w;
+      final bottom = (comp.y + 0.04 + 0.04 * g) * h;
       return IgnorePointer(
         child: Stack(children: [
+          if (heroCutout != null) // früh laden
+            Positioned(
+              left: right - cw,
+              top: bottom - cw,
+              width: cw,
+              height: cw,
+              child: Opacity(
+                opacity: cut,
+                child: Image.network(heroCutout!, fit: BoxFit.contain, alignment: Alignment.bottomRight),
+              ),
+            ),
           if (heroPhoto != null) // früh laden, damit es bereitsteht
             Positioned.fill(
               child: Opacity(

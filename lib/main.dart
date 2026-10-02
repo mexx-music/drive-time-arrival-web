@@ -2040,6 +2040,7 @@ class _HomeScreenState extends State<HomeScreen> {
         // Bild für Bild über window.drivetimeExport.
         videoExport: Uri.base.queryParameters['export'] == '1',
         heroPhoto: Uri.base.queryParameters['heroPhoto'],
+        heroCutout: Uri.base.queryParameters['heroCutout'],
       ),
     ));
   }

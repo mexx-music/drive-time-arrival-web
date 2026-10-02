@@ -56,7 +56,11 @@ class TourAnimationView extends StatefulWidget {
     this.dayNight = DayNightMode.off,
     this.videoExport = false,
     this.heroPhoto,
+    this.heroCutout,
   });
+
+  /// Test/Export: freigestellter Hero-Lkw (URL), sonst null.
+  final String? heroCutout;
 
   /// Test/Export: echtes Foto des Lkw fürs Outro (URL), sonst null.
   final String? heroPhoto;
@@ -459,6 +463,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 frameDt: widget.videoExport ? _exportDt : null,
                 onPendingProbe: (f) => _exportPending = f,
                 heroPhoto: widget.videoExport ? widget.heroPhoto : null,
+                heroCutout: widget.videoExport ? widget.heroCutout : null,
                 dayNight: widget.dayNight,
                 eta: widget.eta,
                 outro: _outroEnabled ? _outroData : null,

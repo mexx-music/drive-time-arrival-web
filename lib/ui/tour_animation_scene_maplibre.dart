@@ -65,7 +65,11 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.frameDt,
     this.onPendingProbe,
     this.heroPhoto,
+    this.heroCutout,
   });
+
+  /// Test/Export: freigestellter Hero-Lkw im Outro.
+  final String? heroCutout;
 
   /// Test/Export: echtes Foto des Lkw im Outro.
   final String? heroPhoto;
@@ -902,7 +906,9 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       // am Zielhafen umgekehrt. Ohne Fähre ist mix null und alles wie bisher.
       final mix = _mix = _crossings.isEmpty ? null : vehicleAt(widget.path, _crossings, pos.meters);
       final truckPos = mix == null || mix.truckMeters == pos.meters ? pos : widget.path.at(mix.truckMeters);
-      final truckOp = mix?.truck ?? 1.0;
+      // Mit freigestelltem Hero-Bild: Modell gleichzeitig ausblenden.
+      final cutFade = widget.heroCutout != null && _inOutro ? widget.outroTimeline!.photo(widget.outroTime!) : 0.0;
+      final truckOp = (mix?.truck ?? 1.0) * (1 - cutFade);
       final props = _articulatedProps(truckPos);
       final pose = _pose!;
       map.setGeoJsonSource('truck', _collection([
@@ -912,7 +918,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
                   'icon': 'truck-top', 'rot': pose.tractorHeading, 'flat': true, 'size': 0.3,
                   if (mix != null) 'op': truckOp,
                 })
-              : _point(pose.kingpin, {...props, if (mix != null) 'op': truckOp}),
+              : _point(pose.kingpin, {...props, if (mix != null || cutFade > 0) 'op': truckOp}),
       ]));
       if (_shownCone > 0.01) {
         // Abblendlicht ab der Kabinenfront, headlightConeMeters Fahrzeugmeter
@@ -1058,7 +1064,11 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       if (_inOutro)
         Positioned.fill(
           child: TourOutroOverlay(
-              data: widget.outro!, timeline: widget.outroTimeline!, t: widget.outroTime!, heroPhoto: widget.heroPhoto),
+              data: widget.outro!,
+              timeline: widget.outroTimeline!,
+              t: widget.outroTime!,
+              heroPhoto: widget.heroPhoto,
+              heroCutout: widget.heroCutout),
         ),
       if (widget.cameraDebug && _camState != null)
         Positioned(
@@ -1083,7 +1093,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       Positioned(
         left: 12,
         right: 12,
-        top: 12,
+        // Export: Sicherheitsabstand oben (Player-Leisten, Social-Media-UI).
+        top: widget.frameDt != null ? MediaQuery.sizeOf(context).height * 0.065 : 12,
         child: Opacity(
           opacity: 1 - arrivalFade,
           child: TourStoryHud(
