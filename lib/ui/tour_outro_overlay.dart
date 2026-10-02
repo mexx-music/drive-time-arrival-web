@@ -80,26 +80,13 @@ class TourOutroOverlay extends StatelessWidget {
       final cut = heroCutout == null ? 0.0 : timeline.photo(t);
       // Größe/Ort: zuerst genau über dem Modell, dann größer nach rechts unten.
       final comp = outroComposition(portrait: portrait);
-      final grow = heroCutout == null
-          ? 0.0
-          : (((t - timeline.photoReveal - 0.6) / 2.6).clamp(0.0, 1.0));
+      final grow = heroCutout == null ? 0.0 : (((t - timeline.photoReveal - 0.6) / 2.6).clamp(0.0, 1.0));
       final g = grow * grow * (3 - 2 * grow);
       final cw = (0.30 + 0.12 * g) * (portrait ? w : math.min(w, h * 0.9));
       final right = (comp.x + 0.20 + 0.10 * g) * w;
       final bottom = (comp.y + 0.04 + 0.04 * g) * h;
       return IgnorePointer(
         child: Stack(children: [
-          if (heroCutout != null) // früh laden
-            Positioned(
-              left: right - cw,
-              top: bottom - cw,
-              width: cw,
-              height: cw,
-              child: Opacity(
-                opacity: cut,
-                child: Image.network(heroCutout!, fit: BoxFit.contain, alignment: Alignment.bottomRight),
-              ),
-            ),
           if (heroPhoto != null) // früh laden, damit es bereitsteht
             Positioned.fill(
               child: Opacity(
@@ -107,7 +94,10 @@ class TourOutroOverlay extends StatelessWidget {
                 child: ClipRect(
                   child: Transform.scale(
                     // Ganz langsamer Zoom – das Foto lebt.
-                    scale: 1.0 + 0.05 * ((t - timeline.photoReveal) / math.max(1, timeline.end - timeline.photoReveal)).clamp(0.0, 1.0),
+                    scale: 1.0 +
+                        0.05 *
+                            ((t - timeline.photoReveal) / math.max(1, timeline.end - timeline.photoReveal))
+                                .clamp(0.0, 1.0),
                     child: Image.network(heroPhoto!, fit: BoxFit.cover, alignment: Alignment.center),
                   ),
                 ),
@@ -145,6 +135,17 @@ class TourOutroOverlay extends StatelessWidget {
               height: listBottom - listTop,
               child: _countries(listBottom - listTop, colW, unit, h),
             ),
+          if (heroCutout != null) // über der Länderliste (deren Zahlen nicht über dem Lkw)
+            Positioned(
+              left: right - cw,
+              top: bottom - cw,
+              width: cw,
+              height: cw,
+              child: Opacity(
+                opacity: cut,
+                child: Image.network(heroCutout!, fit: BoxFit.contain, alignment: Alignment.bottomRight),
+              ),
+            ),
           Positioned(
             left: side,
             top: statsTop,
@@ -179,7 +180,11 @@ class TourOutroOverlay extends StatelessWidget {
                   style: TextStyle(color: accent, fontSize: unit * 0.085, fontWeight: FontWeight.w900, height: 0.95)),
               Text('ABGESCHLOSSEN',
                   style: TextStyle(
-                      color: _ink, fontSize: unit * 0.085, fontWeight: FontWeight.w900, height: 0.95, letterSpacing: -0.5)),
+                      color: _ink,
+                      fontSize: unit * 0.085,
+                      fontWeight: FontWeight.w900,
+                      height: 0.95,
+                      letterSpacing: -0.5)),
             ]),
           ),
           SizedBox(height: unit * 0.02),
@@ -223,11 +228,11 @@ class TourOutroOverlay extends StatelessWidget {
           fit: BoxFit.scaleDown,
           alignment: Alignment.centerLeft,
           child: Text('${data.distinctCountries} ${data.distinctCountries == 1 ? 'LAND' : 'LÄNDER'} · IN REIHENFOLGE',
-            style: TextStyle(
-                color: _ink.withValues(alpha: 0.7),
-                fontSize: unit * 0.028,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 2.4)),
+              style: TextStyle(
+                  color: _ink.withValues(alpha: 0.7),
+                  fontSize: unit * 0.028,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2.4)),
         ),
       ),
       for (var i = 0; i < n; i++)
@@ -285,7 +290,8 @@ class TourOutroOverlay extends StatelessWidget {
       dy: 12,
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(key: const Key('outro-route'), children: [
-          Flexible(child: Text(data.from.toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: routeStyle)),
+          Flexible(
+              child: Text(data.from.toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: routeStyle)),
           Expanded(
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: unit * 0.03),
@@ -305,14 +311,14 @@ class TourOutroOverlay extends StatelessWidget {
           fit: BoxFit.scaleDown,
           alignment: Alignment.centerLeft,
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          for (final (i, m) in <Widget>[
-          metric('km', _num.format(data.km.round()), 'KILOMETER'),
-          if (data.days != null) metric('days', '${data.days}', data.days == 1 ? 'FAHRTAG' : 'FAHRTAGE'),
-          if (data.countries.isNotEmpty)
-            metric('countries', '${data.distinctCountries}', data.distinctCountries == 1 ? 'LAND' : 'LÄNDER'),
-          if (data.ferries > 0) metric('ferries', '${data.ferries}', data.ferries == 1 ? 'FÄHRE' : 'FÄHREN'),
-          ].indexed)
-            Padding(padding: EdgeInsets.only(left: i == 0 ? 0 : unit * 0.08), child: m),
+            for (final (i, m) in <Widget>[
+              metric('km', _num.format(data.km.round()), 'KILOMETER'),
+              if (data.days != null) metric('days', '${data.days}', data.days == 1 ? 'FAHRTAG' : 'FAHRTAGE'),
+              if (data.countries.isNotEmpty)
+                metric('countries', '${data.distinctCountries}', data.distinctCountries == 1 ? 'LAND' : 'LÄNDER'),
+              if (data.ferries > 0) metric('ferries', '${data.ferries}', data.ferries == 1 ? 'FÄHRE' : 'FÄHREN'),
+            ].indexed)
+              Padding(padding: EdgeInsets.only(left: i == 0 ? 0 : unit * 0.08), child: m),
           ]),
         ),
       ]),
@@ -331,7 +337,8 @@ class TourOutroOverlay extends StatelessWidget {
           height: s * 1.25,
           alignment: Alignment.center,
           decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(s * 0.3)),
-          child: Text('D', style: TextStyle(color: const Color(0xFF0A1A12), fontSize: s * 0.8, fontWeight: FontWeight.w900)),
+          child: Text('D',
+              style: TextStyle(color: const Color(0xFF0A1A12), fontSize: s * 0.8, fontWeight: FontWeight.w900)),
         ),
         SizedBox(width: s * 0.35),
         Text('DriveTime', style: TextStyle(color: _ink, fontSize: s, fontWeight: FontWeight.w800)),
