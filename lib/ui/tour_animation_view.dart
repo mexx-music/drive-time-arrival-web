@@ -145,15 +145,19 @@ class _TourAnimationViewState extends State<TourAnimationView>
 
   OutroData? _outroData;
 
+  /// Sichtbare Fahrzeuggröße; per CINEMATIC_TRUCK_SCALE nur zum Vergleich
+  /// veränderbar (Standard 100 %).
+  double get _truckScale => widget.truckScale * cinematicTruckScaleDefine / 100;
+
   /// Cinematic mit gekoppeltem Sattelzug: ruhiges Filmtempo (Trägheit,
   /// langsamer in Kurven) und die darauf umgesetzte Kameraregie. Sonst null –
   /// Fahrt wie bisher.
-  late final ({TourMotion motion, CinematicPlan plan})? _cinematic =
+  late final ({TourMotion motion, CinematicPlan plan, CinematicHeading? heading})? _cinematic =
       widget.cameraMode == CameraMode.cinematic &&
               widget.truckView == TruckView.articulated &&
               widget.storyMode == TourStoryMode.cinematic &&
               widget.path.totalMeters > 0
-          ? cinematicMotionFor(widget.path, demo: widget.cinematicDemo, truckScale: widget.truckScale)
+          ? cinematicMotionFor(widget.path, demo: widget.cinematicDemo, truckScale: _truckScale)
           : null;
   OutroTimeline? _outroTimeline;
 
@@ -376,7 +380,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 truckModel: widget.truckModel,
                 truckBias: widget.truckBias,
                 truckPitch: widget.truckPitch,
-                truckScale: widget.truckScale,
+                truckScale: _truckScale,
                 cameraMode: widget.cameraMode,
                 cinematicDemo: widget.cinematicDemo,
                 cameraDebug: widget.cameraDebug,
@@ -386,6 +390,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 outroTimeline: _outroTimeline,
                 outroTime: _outroTime,
                 cinematicPlan: _cinematic?.plan,
+                cinematicHeading: _cinematic?.heading,
               ),
             )
           else

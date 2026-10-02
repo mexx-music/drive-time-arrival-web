@@ -264,4 +264,22 @@ void main() {
       expect(r4.maxKnick, closeTo(r1.maxKnick, 1.0));
     });
   });
+
+  group('Filmische Führung (Standard)', () {
+    test('Heck des Aufliegers klebt auf der gefahrenen Route, Vorderachse vorne', () {
+      final p = _course([(3000, 0), ..._arc(60, 0, 90), (3000, 90), ..._arc(80, 90, -45), (3000, 45)]);
+      final c = cinematicMotionFor(p);
+      final h = c.heading!;
+      expect(h.rearOnRoute, isTrue);
+      for (var m = 600.0 * _unit; m < p.totalMeters; m += p.totalMeters / 200) {
+        final pose = h.pose(m, metersPerUnit: _unit);
+        expect(_d(pose.frontAxle, p.at(m).point), lessThan(0.01));
+        final rear = destination(pose.kingpin, CinematicHeading.trailerRearBehindKingpin * _unit,
+            (pose.trailerHeading + 180) % 360);
+        final onRoute = p.at(h.rearMetersAt(m, pose.kingpin, _unit)).point;
+        if (pose.knick.abs() < 70) expect(_d(rear, onRoute), lessThan(_unit * 0.5)); // < ½ Fahrzeugmeter
+        expect(pose.knick.abs(), lessThanOrEqualTo(70));
+      }
+    });
+  });
 }

@@ -15,6 +15,7 @@ import '../animation/ship_model.dart';
 import '../animation/tour_camera.dart';
 import '../logic/eta_calculator.dart';
 import '../animation/tour_path.dart';
+import '../animation/tour_motion.dart';
 import '../animation/tour_outro.dart';
 import '../animation/tour_story.dart';
 import 'map_label_style.dart';
@@ -60,7 +61,11 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.outroTimeline,
     this.outroTime,
     this.cinematicPlan,
+    this.cinematicHeading,
   });
+
+  /// Filmische Richtungsstabilisierung des Sattelzugs (null = Fahrspur ohne).
+  final CinematicHeading? cinematicHeading;
 
   /// Kameraregie passend zum Filmtempo (siehe [cinematicMotionFor]); null =
   /// Regie wie bisher aus der Fahrdauer.
@@ -435,6 +440,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   ArticulatedPose _poseAt(double meters) {
     final unit = _unitAt(widget.path.at(meters).point);
     if (widget.cinematicPlan == null) return articulate(widget.path, meters, metersPerUnit: unit);
+    final heading = widget.cinematicHeading;
+    if (heading != null) return heading.pose(meters, metersPerUnit: unit);
     final track = _track ??= ArticulatedTrack(widget.path, unitAt: _unitAt, inertia: cinematicTruckInertia);
     return track.pose(meters, metersPerUnit: unit);
   }
@@ -872,7 +879,27 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     // Gefahrene Spur: höchstens etwa 12-mal pro Sekunde neu.
     if (force || widget.finished || now.difference(_lastTrail).inMilliseconds > 80) {
       _lastTrail = now;
-      map.setGeoJsonSource('driven', _collection(_drivenFeatures(pos)));
+      // Cinematic: die Spur endet an der Achsgruppe des Aufliegers – der
+      // Sattelzug zieht die Linie hinter sich her.
+      final pose = _pose;
+      final heading = widget.cinematicHeading;
+      if (heading != null && heading.rearOnRoute && pose != null && _mix?.crossing == null) {
+        // Heck klebt auf der Route: die Spur endet genau am Heckende.
+        final u = _unitAt(pos.point);
+        map.setGeoJsonSource('driven', _collection(_drivenFeatures(widget.path.at(heading.rearMetersAt(pos.meters, pose.kingpin, u)))));
+      } else if (widget.cinematicHeading != null && cinematicTrailRearDefine && pose != null && _mix?.crossing == null) {
+        final u = _unitAt(pos.point);
+        final back = (pos.meters - 14.0 * u).clamp(0.0, widget.path.totalMeters);
+        final features = _drivenFeatures(widget.path.at(back));
+        if (features.isNotEmpty) {
+          final last = features.last;
+          final coords = (last['geometry'] as Map)['coordinates'] as List;
+          coords.add([pose.trailerAxle.longitude, pose.trailerAxle.latitude]);
+        }
+        map.setGeoJsonSource('driven', _collection(features));
+      } else {
+        map.setGeoJsonSource('driven', _collection(_drivenFeatures(pos)));
+      }
     }
 
     // Länder-Hervorhebung beim Grenzübertritt.

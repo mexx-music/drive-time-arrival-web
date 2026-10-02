@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'package:latlong2/latlong.dart';
+
 import 'articulation.dart';
 import 'cinematic_camera.dart';
 import 'tour_camera.dart';
@@ -228,15 +230,261 @@ CinematicPlan retimePlan(CinematicPlan plan, TourMotion motion, Duration oldDriv
   return CinematicPlan(out);
 }
 
+/// Filmische Richtungsstabilisierung des überzeichneten Sattelzugs.
+///
+/// Das Symbol ist auf der Karte Kilometer lang; schon kleine Drehungen
+/// schwenken Front und Heck sichtbar seitlich. Deshalb wird die Richtung
+/// über die FAHRZEIT (nicht nur über die Strecke) stabilisiert:
+/// - kleine, kurze Schlenker werden über ±[smoothSeconds] geglättet,
+/// - die Drehgeschwindigkeit ist auf [maxTurn] °/s begrenzt – vorausschauend
+///   (vorwärts und rückwärts begrenzt), damit der Zug vor der Kurve weich
+///   einlenkt statt hinterherzuhängen,
+/// - der Auflieger folgt noch träger: Knick gedämpft ([knickScale]), auf
+///   ±[maxKnick] begrenzt und mit [knickTurn] °/s.
+/// Vorberechnet mit 60 Werten je Sekunde – deterministisch, 1×/2×/4× gleich.
+class CinematicHeading {
+  CinematicHeading(this.motion, this.track,
+      {required this.maxTurn,
+      this.smoothSeconds = 0.8,
+      this.knickScale = 0.6,
+      this.maxKnick = 30,
+      double? knickTurn,
+      this.routeGuided = false,
+      this.rearAnchor = false,
+      this.unitAt})
+      : knickTurn = knickTurn ?? maxTurn * 0.6 {
+    final end = motion.duration.inMicroseconds / 1e6;
+    final n = math.max(2, (end * _hz).ceil());
+    final raw = <double>[];
+    final knick = <double>[];
+    final dims = track.dims;
+    for (var k = 0; k <= n; k++) {
+      final m = motion.metersAt(k / _hz);
+      if (rearAnchor) {
+        final u = unitAt!(motion.path.at(m).point);
+        final front = motion.path.at(m).point;
+        // Sattelpunkt 3,5 m hinter der Vorderachse, Heck 12,4 m hinter dem
+        // Sattelpunkt; das Heck sitzt auf der Route im Abstand der Gesamtlänge.
+        final a = dims.kingpinBehindFront * u, b = 12.4 * u;
+        final rear = _behind(m, a + b);
+        final king = _kingpinBetween(m, front, rear, a, b);
+        final tr = _brg(king, front), tl = _brg(rear, king);
+        raw.add(tr);
+        knick.add(angleDiff(tr, tl) * knickScale);
+      } else if (routeGuided) {
+        // Zugmaschine und Auflieger-Achsgruppe an der gefahrenen Route:
+        // Route vorne → Zugmaschine → Sattelpunkt → Achsgruppe → Route hinten.
+        final u = unitAt!(motion.path.at(m).point);
+        final front = motion.path.at(m).point;
+        final rear = _behind(m, dims.tractorWheelbase * u);
+        final king = _behind(m, dims.kingpinBehindFront * u);
+        final axle = _behind(m, (dims.kingpinBehindFront + dims.trailerWheelbase) * u);
+        final tr = _brg(rear, front), tl = _brg(axle, king);
+        raw.add(tr);
+        knick.add(angleDiff(tr, tl) * knickScale);
+      } else {
+        raw.add(track.tractorHeadingAt(m));
+        final pose = track.pose(m, metersPerUnit: 1);
+        knick.add(pose.knick * knickScale);
+      }
+    }
+    final h = _unwrap(raw);
+    final w = (smoothSeconds * _hz).round();
+    _tractor = _limit(_average(h, w), maxTurn / _hz);
+    _tractor = _average(_tractor, (0.25 * _hz).round());
+    final kk = [for (final v in _average(knick, w)) v.clamp(-maxKnick, maxKnick).toDouble()];
+    _knick = _average(_limit(kk, this.knickTurn / _hz), (0.25 * _hz).round());
+  }
+
+  static const _hz = 60;
+
+  /// Variante: Auflieger-Achsgruppe an der Route geführt statt geschleppt.
+  final bool routeGuided;
+
+  /// Variante: hinteres Aufliegerende an der gefahrenen Route verankert,
+  /// Vorderachse auf der Route vorne, Sattelpunkt dazwischen (Knick).
+  final bool rearAnchor;
+
+  /// Sattelpunkt K mit |F−K| = a und |K−R| = b; auf der Seite, auf der die
+  /// Route zwischen R und F verläuft (außen am Bogen).
+  LatLng _kingpinBetween(double m, LatLng f, LatLng r, double a, double b) {
+    const d = Distance(calculator: Haversine());
+    final c = d(f, r);
+    final base = _brg(f, r);
+    if (c < 1e-6) return destination(f, a, (motion.path.at(m).bearing + 180) % 360);
+    // Dreieck F–K–R: Winkel bei F.
+    final cosF = ((a * a + c * c - b * b) / (2 * a * c)).clamp(-1.0, 1.0);
+    final ang = math.acos(cosF) * 180 / math.pi;
+    final k1 = destination(f, a, (base + ang) % 360), k2 = destination(f, a, (base - ang + 360) % 360);
+    // Stetig: die Lösung, die am vorigen Bild anschließt (sonst die nahe
+    // der Route).
+    final ref = _lastKing ?? _behind(m, a);
+    final k = d(k1, ref) <= d(k2, ref) ? k1 : k2;
+    _lastKing = k;
+    return k;
+  }
+
+  LatLng? _lastKing;
+  final double Function(LatLng)? unitAt;
+
+  LatLng _behind(double m, double d) {
+    if (m - d >= 0) return motion.path.at(m - d).point;
+    final start = motion.path.start;
+    return destination(start, d - m, (motion.path.at(0).bearing + 180) % 360);
+  }
+
+  static double _brg(LatLng a, LatLng b) =>
+      a == b ? 0 : (const Distance(calculator: Haversine()).bearing(a, b) + 360) % 360;
+
+  final TourMotion motion;
+  final ArticulatedTrack track;
+  final double maxTurn;
+  final double smoothSeconds;
+  final double knickScale;
+  final double maxKnick;
+  final double knickTurn;
+  late List<double> _tractor;
+  late List<double> _knick;
+
+  static List<double> _unwrap(List<double> a) {
+    final out = <double>[a.first];
+    for (var i = 1; i < a.length; i++) {
+      out.add(out.last + angleDiff(a[i - 1], a[i]));
+    }
+    return out;
+  }
+
+  static List<double> _average(List<double> a, int half) {
+    if (half <= 0) return a;
+    final n = a.length;
+    final c = List<double>.filled(n + 1, 0);
+    for (var i = 0; i < n; i++) {
+      c[i + 1] = c[i] + a[i];
+    }
+    return [
+      for (var i = 0; i < n; i++)
+        (c[math.min(n - 1, i + half) + 1] - c[math.max(0, i - half)]) /
+            (math.min(n - 1, i + half) - math.max(0, i - half) + 1),
+    ];
+  }
+
+  /// Drehrate begrenzen, vorwärts und rückwärts (lenkt vorausschauend ein).
+  static List<double> _limit(List<double> a, double step) {
+    final f = [...a];
+    for (var i = 1; i < f.length; i++) {
+      f[i] = f[i - 1] + (a[i] - f[i - 1]).clamp(-step, step);
+    }
+    for (var i = f.length - 2; i >= 0; i--) {
+      f[i] = f[i + 1] + (f[i] - f[i + 1]).clamp(-step, step);
+    }
+    return f;
+  }
+
+  double _at(List<double> a, double meters) {
+    final x = motion.secondsAt(meters) * _hz;
+    final i = x.floor().clamp(0, a.length - 1);
+    final j = math.min(i + 1, a.length - 1);
+    return a[i] + (a[j] - a[i]) * (x - i);
+  }
+
+  /// Variante: Heckende des Aufliegers exakt auf der gefahrenen Route.
+  bool rearOnRoute = false;
+
+  /// Heckende des Aufliegers hinter dem Sattelpunkt (Fahrzeugmeter).
+  static const double trailerRearBehindKingpin = 12.4;
+
+  /// Streckenmeter des Routenpunkts, auf dem das Heck liegt: der Punkt
+  /// hinter dem Fahrzeug im Abstand der Aufliegerlänge vom Sattelpunkt.
+  double rearMetersAt(double meters, LatLng kingpin, double metersPerUnit) {
+    const d = Distance(calculator: Haversine());
+    final len = trailerRearBehindKingpin * metersPerUnit;
+    var lo = math.max(0.0, meters - 4 * (track.dims.kingpinBehindFront * metersPerUnit + len));
+    var hi = meters;
+    if (d(motion.path.at(lo).point, kingpin) < len) return lo;
+    for (var i = 0; i < 40; i++) {
+      final mid = (lo + hi) / 2;
+      if (d(motion.path.at(mid).point, kingpin) > len) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  /// Pose bei [meters]: Vorderachse exakt auf der Route, Richtungen stabilisiert.
+  ArticulatedPose pose(double meters, {required double metersPerUnit}) {
+    final m = meters.clamp(0.0, motion.path.totalMeters);
+    final front = motion.path.at(m).point;
+    final tractor = (_at(_tractor, m) % 360 + 360) % 360;
+    var trailer = (tractor + _at(_knick, m) + 360) % 360;
+    if (rearOnRoute) {
+      final kp = destination(front, track.dims.kingpinBehindFront * metersPerUnit, (tractor + 180) % 360);
+      final rear = motion.path.at(rearMetersAt(m, kp, metersPerUnit)).point;
+      if (rear != kp) {
+        trailer = _brg(rear, kp);
+        var k = (trailer - tractor) % 360;
+        if (k > 180) k -= 360;
+        if (k.abs() > track.dims.maxKnick) trailer = (tractor + k.sign * track.dims.maxKnick + 360) % 360;
+      }
+    }
+    final dims = track.dims;
+    // An der Route geführt: Sattelpunkt auf der gefahrenen Linie.
+    final kingpin = rearAnchor
+        ? destination(front, dims.kingpinBehindFront * metersPerUnit, (tractor + 180) % 360)
+        : routeGuided
+        ? _behind(m, dims.kingpinBehindFront * metersPerUnit)
+        : destination(front, dims.kingpinBehindFront * metersPerUnit, (tractor + 180) % 360);
+    return ArticulatedPose(
+      frontAxle: front,
+      kingpin: kingpin,
+      trailerAxle: destination(kingpin, dims.trailerWheelbase * metersPerUnit, (trailer + 180) % 360),
+      tractorHeading: tractor,
+      trailerHeading: trailer,
+    );
+  }
+}
+
+/// Vergleichsschalter (nur Entwicklung, per --dart-define): maximale
+/// Drehrate der Zugmaschine in °/s (0 = ohne Stabilisierung, bisheriger
+/// Stand) und sichtbare Fahrzeuggröße in Prozent.
+const int cinematicMaxTurnDefine = int.fromEnvironment('CINEMATIC_MAX_TURN');
+const int cinematicTruckScaleDefine = int.fromEnvironment('CINEMATIC_TRUCK_SCALE', defaultValue: 100);
+
+/// Vergleichsschalter: Auflieger geschleppt (0), Achsgruppe an der Route (1)
+/// oder Heck an der gefahrenen Route verankert (2).
+const int cinematicGuideDefine = int.fromEnvironment('CINEMATIC_GUIDE', defaultValue: 3);
+
+/// Gefahrene Spur endet an der Achsgruppe des Aufliegers (true) statt an
+/// der Kabine – der Auflieger „zeichnet“ die Route.
+const bool cinematicTrailRearDefine = bool.fromEnvironment('CINEMATIC_TRAIL_REAR', defaultValue: true);
+
 /// Ruhiges Filmtempo und dazu passende Kameraregie für eine Tour – rein aus
-/// der Linie berechnet; [truckScale] wie in der Szene.
-({TourMotion motion, CinematicPlan plan}) cinematicMotionFor(TourPath path,
-    {bool demo = false, double truckScale = 1}) {
+/// der Linie berechnet; [truckScale] wie in der Szene. [heading]: filmische
+/// Richtungsstabilisierung, wenn [maxTurn] > 0.
+({TourMotion motion, CinematicPlan plan, CinematicHeading? heading}) cinematicMotionFor(TourPath path,
+    {bool demo = false,
+    double truckScale = 1,
+    int maxTurn = cinematicMaxTurnDefine,
+    int guide = cinematicGuideDefine}) {
   final oldDrive = tourAnimationDuration(path.totalMeters);
   final zoom = (tourFollowZoom(path.totalMeters) + 0.6).clamp(tourMinZoom, tourMaxZoom);
-  final track = ArticulatedTrack(path,
-      unitAt: (p) => 5 * truckScale * 0.62 * metersPerScreenPoint(zoom, p.latitude),
-      inertia: cinematicTruckInertia);
+  double unitAt(LatLng p) => 5 * truckScale * 0.62 * metersPerScreenPoint(zoom, p.latitude);
+  final track = ArticulatedTrack(path, unitAt: unitAt, inertia: cinematicTruckInertia);
   final motion = TourMotion(path: path, oldDrive: oldDrive, track: track);
-  return (motion: motion, plan: retimePlan(cinematicPlanFor(path, demo: demo), motion, oldDrive));
+  return (
+    motion: motion,
+    plan: retimePlan(cinematicPlanFor(path, demo: demo), motion, oldDrive),
+    heading: guide > 0
+        ? (CinematicHeading(motion, track,
+            maxTurn: maxTurn > 0 ? maxTurn.toDouble() : 60,
+            smoothSeconds: 0.35,
+            knickScale: 1,
+            maxKnick: 45,
+            routeGuided: guide == 1 || guide == 3,
+            rearAnchor: guide == 2,
+            unitAt: unitAt)
+          ..rearOnRoute = guide == 3)
+        : (maxTurn > 0 ? CinematicHeading(motion, track, maxTurn: maxTurn.toDouble()) : null),
+  );
 }
