@@ -423,7 +423,8 @@ double nightStep(double night) => (night.clamp(0.0, 1.0) * 8).round() / 8;
 Color windshieldColor(double night) =>
     Color.lerp(const Color(0xFF90CAF9), const Color(0xFF1F2B3B), night.clamp(0.0, 1.0))!;
 
-void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, {double night = 0}) {
+void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px,
+    {double night = 0, double reflex = 0}) {
   _inFace(c, f, px, (c) {
     const glass = Rect.fromLTWH(0.1, 0.12, 0.8, 0.32);
     c.drawRect(glass, Paint()..color = windshieldColor(night));
@@ -433,6 +434,17 @@ void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, {do
     // Kaum merkliche, warme Innenraumwirkung nur nachts.
     c.drawRect(const Rect.fromLTWH(0.14, 0.3, 0.72, 0.12),
         Paint()..color = const Color(0xFFFFB74D).withValues(alpha: 0.10 * night));
+    // Outro: sehr dezenter Reflex quer über die Scheibe.
+    if (reflex > 0) {
+      c.drawRect(
+          glass,
+          Paint()
+            ..shader = ui.Gradient.linear(const Offset(0.15, 0.12), const Offset(0.75, 0.44), [
+              Colors.white.withValues(alpha: 0),
+              Colors.white.withValues(alpha: 0.22 * reflex),
+              Colors.white.withValues(alpha: 0),
+            ], [0.35, 0.5, 0.65]));
+    }
   });
 }
 
@@ -450,8 +462,15 @@ Future<Uint8List> truckArticulatedPng(
   double pitchDeg = 42,
   double pxPerMeter = 10,
   double night = 0,
+  double? tailLights,
+  double? headLights,
+  double? sweep,
 }) {
   final n = night.clamp(0.0, 1.0);
+  // Licht unabhängig von der Dunkelheit steuerbar (Outro-Reveal); sonst wie
+  // bisher an die Nacht gekoppelt.
+  final tail = (tailLights ?? n).clamp(0.0, 1.0);
+  final head = (headLights ?? n).clamp(0.0, 1.0);
   final faces = articulatedFaces(
     tractorYaw: tractorYaw,
     knick: knick,
@@ -527,16 +546,65 @@ Future<Uint8List> truckArticulatedPng(
         _cabLivery(c, f, px, b, n);
       }
       if (f.box.name == 'cab' && f.side == FaceSide.front) {
-        _windshield(c, f, px, night: n);
-        if (n > 0) _headlamps(c, f, px, n);
+        _windshield(c, f, px, night: n, reflex: headLights == null ? 0 : head);
+        if (head > 0) _headlamps(c, f, px, head);
       }
       if (f.box.name == 'trailer' && f.side == FaceSide.back && b.rearText != null) {
         _rearText(c, f, px, b);
       }
-      if (n > 0 && f.box.name == 'trailer' && f.side == FaceSide.back) {
-        _taillights(c, f, px, n);
+      if (tail > 0 && f.box.name == 'trailer' && f.side == FaceSide.back) {
+        _taillights(c, f, px, tail);
+      }
+      if (tailLights != null && tail > 0 && f.box.name == 'trailer' && (f.side == FaceSide.left || f.side == FaceSide.right)) {
+        _markerLights(c, f, px, tail);
+      }
+      if (sweep != null && (f.box.name == 'cab' || f.box.name == 'trailer') && (f.side == FaceSide.left || f.side == FaceSide.right)) {
+        _lightSweep(c, f, px, sweep);
       }
     }
+  });
+}
+
+/// Seitliche Begrenzungsleuchten (amber) unten am Auflieger.
+void _markerLights(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double v) {
+  _inFace(c, f, px, (c) {
+    final glow = Paint()
+      ..color = const Color(0xFFFFB300).withValues(alpha: 0.45 * v)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.012);
+    final lamp = Paint()..color = const Color(0xFFFFC107).withValues(alpha: v);
+    for (var i = 0; i < 6; i++) {
+      final x = 0.06 + i * 0.176;
+      c.drawRect(Rect.fromLTWH(x - 0.008, 0.9, 0.022, 0.07), glow);
+      c.drawRect(Rect.fromLTWH(x, 0.92, 0.008, 0.035), lamp);
+    }
+  });
+}
+
+/// Weicher Lichtlauf über die Seiten: ein heller, schräger Streifen bei
+/// Weltposition [s] (0 = Front der Kabine, 1 = Heck des Aufliegers), so dass
+/// er über Kabine und Auflieger durchgehend wandert.
+void _lightSweep(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double s) {
+  const front = 4.4, rear = -12.4; // Sattelpunkt-Koordinaten (Kabine bzw. Heck)
+  final fBand = front + (rear - front) * s;
+  // Kabine und Auflieger haben eigene Koordinaten; der Auflieger beginnt
+  // vorn bei +1,2 m – für den Lauf genügt dieselbe Längsachse.
+  final from = f.box.fromF, to = f.box.toF;
+  final len = to - from;
+  // u = 0 an der Front (linke Seite) bzw. am Heck (rechte Seite).
+  final u = f.side == FaceSide.left ? (to - fBand) / len : (fBand - from) / len;
+  final w = 1.6 / len;
+  final a = 0.32 * math.sin(math.pi * s);
+  if (a <= 0.01 || u < -w * 2 || u > 1 + w * 2) return;
+  _inFace(c, f, px, (c) {
+    c.clipRect(const Rect.fromLTWH(0, 0, 1, 1));
+    final band = Paint()
+      ..shader = ui.Gradient.linear(
+        Offset(u - w, 0),
+        Offset(u + w, 0),
+        [Colors.white.withValues(alpha: 0), Colors.white.withValues(alpha: a), Colors.white.withValues(alpha: 0)],
+        [0, 0.5, 1],
+      );
+    c.drawRect(const Rect.fromLTWH(0, 0, 1, 1), band);
   });
 }
 

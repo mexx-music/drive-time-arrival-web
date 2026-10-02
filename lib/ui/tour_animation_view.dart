@@ -8,9 +8,11 @@ import '../animation/cinematic_camera.dart';
 import '../animation/country_borders.dart';
 import '../animation/daylight.dart';
 import '../animation/tour_path.dart';
+import '../animation/tour_outro.dart';
 import '../animation/tour_playback.dart';
 import '../animation/tour_story.dart';
 import '../logic/eta_calculator.dart';
+import 'tour_outro_overlay.dart' show buildOutroData;
 import 'tour_story_overlay.dart';
 import 'tour_animation_scene_maplibre.dart';
 import 'truck_sprites.dart';
@@ -130,9 +132,38 @@ class _TourAnimationViewState extends State<TourAnimationView>
   /// 2.5D: Fahrt wartet, bis die MapLibre-Karte geladen ist.
   bool _waitForMap = false;
 
+  // ------------------------------------------------ Cinematic-Outro (2.5D)
+
+  /// Das Finale gibt es nur in der 2.5D-Cinematic-Ansicht; 2D behält die
+  /// bisherige Abschlusskarte.
+  bool get _outroEnabled =>
+      _maplibre &&
+      widget.cameraMode == CameraMode.cinematic &&
+      widget.truckView == TruckView.articulated &&
+      widget.storyMode == TourStoryMode.cinematic;
+
+  OutroData? _outroData;
+  OutroTimeline? _outroTimeline;
+
+  /// Wiedergabedauer: Fahrt plus – in 2.5D – das Outro ab Ankunft.
+  Duration get _playbackLength {
+    final tl = _outroTimeline;
+    if (!_outroEnabled || tl == null) return _timeline.total;
+    final withOutro = _timeline.arrivalAt + tl.duration;
+    return withOutro > _timeline.total ? withOutro : _timeline.total;
+  }
+
+  /// Outro-Zeit in Sekunden ab Ankunft; null vor der Ankunft oder ohne Outro.
+  double? get _outroTime {
+    if (!_outroEnabled || _outroTimeline == null) return null;
+    final d = _playback.elapsed - _timeline.arrivalAt;
+    return d.isNegative ? null : d.inMicroseconds / 1e6;
+  }
+
   void _setRenderer(bool maplibre) {
     setState(() {
       _maplibre = maplibre;
+      _playback = _playback.withDuration(_playbackLength);
       _manualZoom = null;
       if (maplibre && _playback.playing) {
         _waitForMap = true;
@@ -150,6 +181,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
     setState(() {
       _maplibre = false;
       _waitForMap = false;
+      _playback = _playback.withDuration(_playbackLength);
     });
     if (resume) _play();
   }
@@ -213,7 +245,17 @@ class _TourAnimationViewState extends State<TourAnimationView>
         : TourSummary.from(eta, _timeline.events,
             startIso: countries?.countryAt(path.start),
             endIso: countries?.countryAt(path.end));
-    _playback = TourPlayback(duration: _timeline.total);
+    final outro = _outroData = buildOutroData(
+      path: path,
+      events: _timeline.events,
+      countries: countries,
+      summary: _summary,
+      planKm: _planKm,
+      fromName: widget.fromName,
+      toName: widget.toName,
+    );
+    _outroTimeline = OutroTimeline(countryCount: outro.countries.length);
+    _playback = TourPlayback(duration: _playbackLength);
   }
 
   @override
@@ -327,6 +369,9 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 cameraDebug: widget.cameraDebug,
                 dayNight: widget.dayNight,
                 eta: widget.eta,
+                outro: _outroEnabled ? _outroData : null,
+                outroTimeline: _outroTimeline,
+                outroTime: _outroTime,
               ),
             )
           else
@@ -373,6 +418,8 @@ class _TourAnimationViewState extends State<TourAnimationView>
               ),
             ),
           // Rechts mittig: frei von Anzeige oben und Kartenhinweis unten.
+          // Im Outro ausgeblendet – das Finale gehört dem Truck.
+          if (_outroTime == null)
           Positioned(
             right: 12,
             top: 0,

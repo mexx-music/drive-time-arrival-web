@@ -15,10 +15,12 @@ import '../animation/ship_model.dart';
 import '../animation/tour_camera.dart';
 import '../logic/eta_calculator.dart';
 import '../animation/tour_path.dart';
+import '../animation/tour_outro.dart';
 import '../animation/tour_story.dart';
 import 'map_label_style.dart';
 import 'tour_animation_view.dart' show tourKmLabel;
 import 'ship_sprites.dart';
+import 'tour_outro_overlay.dart';
 import 'tour_story_overlay.dart';
 import 'truck_sprites.dart';
 import '../animation/truck_projection.dart';
@@ -54,7 +56,17 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.dayNight = DayNightMode.off,
     this.eta,
     this.onUnavailable,
+    this.outro,
+    this.outroTimeline,
+    this.outroTime,
   });
+
+  /// Cinematic-Outro: Daten der fertigen Tour; null = bisherige Abschlusskarte.
+  final OutroData? outro;
+  final OutroTimeline? outroTimeline;
+
+  /// Outro-Zeit in Sekunden ab Ankunft; null vor der Ankunft.
+  final double? outroTime;
 
   /// Vektorkarte (Stil) nicht erreichbar – die Ansicht fällt auf 2D zurück.
   final VoidCallback? onUnavailable;
@@ -167,6 +179,23 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   String? _shownShip;
   bool _shipVisible = false;
 
+  // ------------------------------------------------------------- Outro
+
+  /// Outro läuft (Ziel erreicht, Cinematic-Ansicht).
+  bool get _inOutro => widget.outro != null && widget.outroTimeline != null && widget.outroTime != null;
+
+  /// Bisheriges Ende (Übersicht von oben) nur ohne Outro.
+  bool get _endOverview => widget.finished && widget.outro == null;
+
+  OutroCamera? _outroCam;
+  OutroLights? _outroLights;
+  bool _outroPrewarmed = false;
+  double _shownCone = -1;
+  double _shownOutroVeil = -1;
+
+  /// Auflösung der Fahrzeugbilder im Outro (näher dran → schärfer).
+  static const _outroSpritePx = 36.0;
+
   ml.MapLibreMapController? _map;
   bool _ready = false;
   DateTime? _lastFrame;
@@ -213,6 +242,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     ]));
     await map.addFillLayer('veil', 'night-veil', _veilProps(0));
     await map.addImage('headlights', await headlightConePng());
+    // Outro: Umgebung ruhiger und dunkler (nie schwarz), Ziel bleibt erkennbar.
+    await map.addFillLayer('veil', 'outro-veil', _outroVeilProps(0));
 
     await map.addGeoJsonSource('country', _collection(const []));
     await map.addFillLayer('country', 'country-fill', _countryFillProps(0));
@@ -395,9 +426,52 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       _pointsPerMeter * metersPerScreenPoint(_cam?.followZoom ?? _rig.zoom, p.latitude);
 
   int _yawFrame = 0, _knickFrame = 0;
+  double _shownFramePx = _spritePx;
 
   String _articulatedName(int yaw, int knick, int pitch, double night) =>
       'art-${widget.truckModel.id}-p$pitch-y$yaw-k$knick-n${(night * 8).round()}';
+
+  /// Fahrzeugbild anfordern (einmal erzeugen und behalten); liefert den Namen.
+  String _requestArticulated(int yaw, int knick, int pitch, double night, OutroLights? lights) {
+    final name = _articulatedName(yaw, knick, pitch, night) + (lights == null ? '' : '-o${lights.key}');
+    if (!_framesReady.contains(name) && !_framesPending.contains(name)) {
+      _framesPending.add(name);
+      truckArticulatedPng(widget.truckModel,
+              tractorYaw: yaw * 4.0,
+              knick: knick * 3.0,
+              pitchDeg: pitch.toDouble(),
+              pxPerMeter: lights == null ? _spritePx : _outroSpritePx,
+              night: night,
+              tailLights: lights == null ? null : math.max(lights.tail, night),
+              headLights: lights == null ? null : math.max(lights.head, night),
+              sweep: lights?.sweep)
+          .then((png) async {
+        await _map?.addImage(name, png);
+        _framesPending.remove(name);
+        _framesReady.add(name);
+      });
+    }
+    return name;
+  }
+
+  /// Zu Beginn des Outros die Bilder des Licht-Reveals (Endperspektive)
+  /// vorbereiten, damit sie bereitliegen, wenn das Licht angeht.
+  void _prewarmOutro(OutroCamera oc, OutroTimeline tl, ArticulatedPose pose) {
+    final night = nightStep(_night);
+    final seen = <String>{};
+    for (var t = OutroTimeline.lightsOn - 0.2; t <= tl.end; t += 1 / 30) {
+      final st = oc.at(t);
+      final yaw = (angleDiff(st.bearing, pose.tractorHeading) / 4).round();
+      final pitch = ((st.pitch / 5).round() * 5).clamp(30, 60);
+      final lights = OutroLights.at(tl, t);
+      final key = '$yaw-$pitch-${lights.key}';
+      if (seen.add(key)) _prewarmQueue.add((yaw, (pose.knick / 3).round(), pitch, night, lights));
+    }
+  }
+
+  /// Vorbereitete Outro-Bilder: höchstens eines je Bild anstoßen – alle auf
+  /// einmal blockierten die Seite gemessen mehrere Sekunden.
+  final List<(int, int, int, double, OutroLights)> _prewarmQueue = [];
 
   Map<String, dynamic>? _articulatedProps(TourPosition pos) {
     final pose = _pose = articulate(widget.path, pos.meters, metersPerUnit: _unitAt(pos.point));
@@ -408,26 +482,19 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final pitch = ((_cameraPitch / 5).round() * 5).clamp(30, 60);
     // Nacht in Achtelstufen: Scheibe, Karosserie, Lichter gleitend.
     final night = nightStep(_night);
-    final name = _articulatedName(_yawFrame, _knickFrame, pitch, night);
-    if (!_framesReady.contains(name) && !_framesPending.contains(name)) {
-      _framesPending.add(name);
-      truckArticulatedPng(widget.truckModel,
-              tractorYaw: _yawFrame * 4.0,
-              knick: _knickFrame * 3.0,
-              pitchDeg: pitch.toDouble(),
-              pxPerMeter: _spritePx,
-              night: night)
-          .then((png) async {
-        await _map?.addImage(name, png);
-        _framesPending.remove(name);
-        _framesReady.add(name);
-      });
+    // Outro: während des Kameraschwenks normale Bilder (sie müssen schnell
+    // folgen), ab dem Licht-Reveal scharfe Bilder mit Lichtzustand.
+    final lights = _inOutro && widget.outroTime! >= OutroTimeline.lightsOn - 0.2 ? _outroLights : null;
+    final spritePx = lights == null ? _spritePx : _outroSpritePx;
+    final name = _requestArticulated(_yawFrame, _knickFrame, pitch, night, lights);
+    if (_framesReady.contains(name)) {
+      _shownFrame = name;
+      _shownFramePx = spritePx;
     }
-    if (_framesReady.contains(name)) _shownFrame = name;
     final shown = _shownFrame;
     if (shown == null) return null;
     // Größe skaliert mit dem Kamerazoom – der LKW gehört zur Karte.
-    final size = _pointsPerMeter / _spritePx * math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
+    final size = _pointsPerMeter / _shownFramePx * math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
     return {'icon': shown, 'rot': 0.0, 'flat': false, 'size': size};
   }
 
@@ -469,7 +536,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
 
   Map<String, dynamic> _truckProps(double heading) {
     final relative = angleDiff(_cameraBearing, heading); // zur Blickrichtung
-    if (widget.finished) {
+    if (_endOverview) {
       // Übersicht von oben am Ziel: flach.
       return {'icon': 'truck-top', 'rot': heading, 'flat': true, 'size': 0.3};
     }
@@ -530,6 +597,9 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
 
   double _shownGlow = -1;
 
+  static ml.FillLayerProperties _outroVeilProps(double opacity) =>
+      ml.FillLayerProperties(fillColor: '#06120C', fillOpacity: opacity);
+
   static ml.FillLayerProperties _veilProps(double opacity) =>
       ml.FillLayerProperties(fillColor: '#0B1730', fillOpacity: opacity);
 
@@ -567,6 +637,9 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       _cam?.reset();
       _daylight.reset();
       _overviewShown = false;
+      _outroCam = null;
+      _outroPrewarmed = false;
+      _prewarmQueue.clear();
     }
     _update();
   }
@@ -580,8 +653,59 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     _dt = dt;
     final pos = widget.position;
 
-    // Kamera: ruhig in Fahrtrichtung, am Ziel Übersicht von oben.
-    if (widget.finished) {
+    // Kamera: ruhig in Fahrtrichtung, am Ziel Übersicht von oben – oder
+    // das Cinematic-Outro.
+    if (!_inOutro) {
+      _outroCam = null;
+      _outroPrewarmed = false;
+    }
+    if (_inOutro) {
+      final tl = widget.outroTimeline!;
+      final t = widget.outroTime!;
+      _outroLights = OutroLights.at(tl, t);
+      final oc = _outroCam ??= () {
+        final cam = _cam ?? _cameraFor(const Size(1000, 700));
+        final end = widget.path.totalMeters;
+        final pose = articulate(widget.path, end, metersPerUnit: _unitAt(widget.path.end));
+        final size = (context.findRenderObject() as RenderBox?)?.size ?? MediaQuery.sizeOf(context);
+        return OutroCamera(
+          // Exakt der letzte Zustand der Fahrt – kein Sprung.
+          from: _camState ?? cam.step(end, Duration.zero),
+          truck: pose.kingpin,
+          heading: pose.tractorHeading,
+          followZoom: cam.followZoom,
+          truckPointsPerMeter: _pointsPerMeter,
+          width: size.width,
+          height: size.height,
+          timeline: tl,
+        );
+      }();
+      if (_prewarmQueue.isNotEmpty) {
+        final (y, k, p, n, l) = _prewarmQueue.removeAt(0);
+        _requestArticulated(y, k, p, n, l);
+      }
+      if (!_outroPrewarmed) {
+        _outroPrewarmed = true;
+        final end = widget.path.totalMeters;
+        _prewarmOutro(oc, tl, articulate(widget.path, end, metersPerUnit: _unitAt(widget.path.end)));
+      }
+      final st = _camState = oc.at(t);
+      _cameraBearing = st.bearing;
+      _cameraZoom = st.zoom;
+      _cameraPitch = st.pitch;
+      map.moveCamera(ml.CameraUpdate.newCameraPosition(ml.CameraPosition(
+        target: _ml(st.target),
+        zoom: st.zoom,
+        bearing: st.bearing,
+        tilt: st.pitch,
+      )));
+      // Nachts ist es schon dunkel – dann weniger zusätzlich abdunkeln.
+      final veil = 0.42 * tl.dim(t) * (1 - 0.6 * _night);
+      if ((veil - _shownOutroVeil).abs() > 0.004) {
+        _shownOutroVeil = veil;
+        map.setLayerProperties('outro-veil', _outroVeilProps(veil));
+      }
+    } else if (_endOverview) {
       if (!_overviewShown) {
         _overviewShown = true;
         final pts = widget.path.points;
@@ -629,15 +753,22 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         DayNightMode.off => null,
       };
       final target = when == null ? 0.0 : nightLevel(sunElevation(pos.point.latitude, pos.point.longitude, when));
-      _night = widget.finished ? 0 : _daylight.update(target, dt);
+      _night = _endOverview ? 0 : _daylight.update(target, dt);
       if ((_night - _shownVeil).abs() > 0.004) {
         _shownVeil = _night;
         map.setLayerProperties('night-veil', _veilProps(0.55 * _night));
-        map.setLayerProperties('headlight-cone', _coneProps(headlightOpacity(_night)));
       }
     }
+    // Lichtkegel: nachts nach Dunkelheit, im Outro zusätzlich mit dem
+    // Einschalten der Scheinwerfer.
+    final cone = math.max(widget.dayNight == DayNightMode.off ? 0.0 : headlightOpacity(_night),
+        _inOutro ? 0.85 * widget.outroTimeline!.headLights(widget.outroTime!) : 0.0);
+    if ((cone - _shownCone).abs() > 0.004) {
+      _shownCone = cone;
+      map.setLayerProperties('headlight-cone', _coneProps(cone));
+    }
 
-    if (widget.truckView == TruckView.articulated && !widget.finished) {
+    if (widget.truckView == TruckView.articulated && !_endOverview) {
       // Fähre: LKW hält am Hafen und blendet aus, die Fähre übernimmt – und
       // am Zielhafen umgekehrt. Ohne Fähre ist mix null und alles wie bisher.
       final mix = _mix = _crossings.isEmpty ? null : vehicleAt(widget.path, _crossings, pos.meters);
@@ -654,7 +785,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
                 })
               : _point(pose.kingpin, {...props, if (mix != null) 'op': truckOp}),
       ]));
-      if (widget.dayNight != DayNightMode.off && _night > 0.01) {
+      if (_shownCone > 0.01) {
         // Abblendlicht ab der Kabinenfront, headlightConeMeters Fahrzeugmeter
         // lang, gedreht mit der Zugmaschine; wächst wie der LKW mit dem
         // Kamerazoom.
@@ -760,13 +891,20 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       ),
       Positioned.fill(
         child: TourStoryOverlay(
-          frame: frame,
+          // Mit Outro ersetzt das Finale die bisherige Abschlusskarte.
+          frame: widget.outro != null && frame.event?.kind == TourStoryKind.arrival
+              ? TourFrame(meters: frame.meters)
+              : frame,
           summary: widget.summary,
           fromName: widget.fromName,
           toName: widget.toName,
           countrySequence: storyCountrySequence(widget.storyEvents, startIso),
         ),
       ),
+      if (_inOutro)
+        Positioned.fill(
+          child: TourOutroOverlay(data: widget.outro!, timeline: widget.outroTimeline!, t: widget.outroTime!),
+        ),
       if (widget.cameraDebug && _camState != null)
         Positioned(
           left: 12,

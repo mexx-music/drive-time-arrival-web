@@ -36,6 +36,17 @@ class TourPlayback {
 
   void pause() => _playing = false;
 
+  /// Dieselbe Wiedergabe mit anderer Gesamtdauer (z. B. mit Outro) – Stand,
+  /// Tempo und Abspielzustand bleiben.
+  TourPlayback withDuration(Duration duration) {
+    final p = TourPlayback(duration: duration)
+      .._speed = _speed
+      .._playing = _playing;
+    p._elapsed = _elapsed > duration ? duration : _elapsed;
+    if (p.finished) p._playing = false;
+    return p;
+  }
+
   void restart() {
     _elapsed = Duration.zero;
     _playing = true;

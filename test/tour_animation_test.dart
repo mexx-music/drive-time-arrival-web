@@ -14,6 +14,7 @@ import 'package:driverroute_eta/tour/tour_scope.dart';
 import 'package:driverroute_eta/ui/map_osm_view.dart';
 import 'package:driverroute_eta/ui/tour_animation_scene_maplibre.dart';
 import 'package:driverroute_eta/ui/tour_animation_view.dart';
+import 'package:driverroute_eta/ui/tour_outro_overlay.dart' show TourOutroOverlay;
 import 'package:driverroute_eta/ui/truck_sprites.dart' show TruckView;
 import 'package:driverroute_eta/utils/polyline.dart' show decodePolyline;
 import 'package:driverroute_eta/ui/tour_story_overlay.dart';
@@ -843,6 +844,12 @@ void main() {
       expect(find.byType(TourAnimationSceneMapLibre), findsNothing);
       await tester.pump(const Duration(seconds: 2));
       expect(progressOf(tester), greaterThan(0));
+      // Bis zum Ende: in 2D die bisherige Abschlusskarte, kein Cinematic-Outro.
+      for (var i = 0; i < 60 && find.byKey(const Key('story-arrival')).evaluate().isEmpty; i++) {
+        await tester.pump(const Duration(seconds: 1));
+      }
+      expect(find.byKey(const Key('story-arrival')), findsOneWidget);
+      expect(find.byType(TourOutroOverlay), findsNothing);
       expect(proxy.requests.length, afterCalc); // kein Provider-Aufruf
       await tester.tap(find.byTooltip('Schließen'));
       await tester.pumpAndSettle();

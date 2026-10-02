@@ -305,6 +305,15 @@ class TourTimeline {
   /// Gesamtdauer inklusive Haltezeiten.
   late final Duration total;
 
+  /// Story-Zeit, zu der das Fahrzeug das Ziel erreicht (Beginn des
+  /// Ankunfts-Ereignisses; ohne Ereignis: Ende der Fahrt).
+  Duration get arrivalAt {
+    for (final (e, start, _, _, _) in _beats) {
+      if (e.kind == TourStoryKind.arrival) return start;
+    }
+    return total;
+  }
+
   /// (Ereignis, Story-Beginn, Fahrzeit-Stand, Halten, Einblendung)
   final List<(TourStoryEvent, Duration, double, Duration, Duration)> _beats = [];
 
