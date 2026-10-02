@@ -9,13 +9,18 @@
 //   Fahrzeug: &truck=top|threequarter-left|threequarter-right|threequarter-auto|rear|side
 //             &brand=gartner|neutral  &trailer=box|curtain|reefer
 //             &bias=22 (Schrägstellung °)  &tpitch=42 (Fahrzeug-Neigung °)  &tscale=1
+//   Kamera:   &camera=follow|cinematic  &cameraDemo=1 (Fahrten gedrängt)  &cameraDebug=1
+//   Licht:    &daynight=off|plan|sim  (sim: ein ganzer Tag über die Fahrt)
+//   Sattelzug gekoppelt: &truck=articulated (Standard bei camera=cinematic)
 //   …/?mode=picker  – Zwischenpunkt auf der Vektorkarte wählen
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../animation/cinematic_camera.dart';
 import '../animation/country_borders.dart';
+import '../animation/daylight.dart';
 import '../animation/tour_path.dart';
 import '../logic/eta_calculator.dart';
 import '../ui/tour_animation_view.dart';
@@ -113,7 +118,16 @@ Future<void> main() async {
       eta: _plan(path.roadMeters / 1000),
       countries: CountryIndex.load(),
       startIn25D: mode != '2d',
-      truckView: switch (q['truck']) {
+      cameraMode: q['camera'] == 'cinematic' ? CameraMode.cinematic : CameraMode.follow,
+      cinematicDemo: q['cameraDemo'] == '1',
+      cameraDebug: q['cameraDebug'] == '1',
+      dayNight: switch (q['daynight']) {
+        'plan' => DayNightMode.plan,
+        'sim' => DayNightMode.simulated,
+        _ => DayNightMode.off,
+      },
+      truckView: switch (q['truck'] ?? (q['camera'] == 'cinematic' ? 'articulated' : 'top')) {
+        'articulated' => TruckView.articulated,
         'rear' => TruckView.rear,
         'side' => TruckView.side,
         'threequarter-left' => TruckView.threeQuarterLeft,

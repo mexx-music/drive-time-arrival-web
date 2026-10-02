@@ -4,7 +4,9 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../animation/cinematic_camera.dart';
 import '../animation/country_borders.dart';
+import '../animation/daylight.dart';
 import '../animation/tour_path.dart';
 import '../animation/tour_playback.dart';
 import '../animation/tour_story.dart';
@@ -44,7 +46,17 @@ class TourAnimationView extends StatefulWidget {
     this.truckBias = 22,
     this.truckPitch = 42,
     this.truckScale = 1,
+    this.cameraMode = CameraMode.follow,
+    this.cinematicDemo = false,
+    this.cameraDebug = false,
+    this.dayNight = DayNightMode.off,
   });
+
+  /// EXPERIMENT: Kamera-Regie und Tag/Nacht in 2.5D.
+  final CameraMode cameraMode;
+  final bool cinematicDemo;
+  final bool cameraDebug;
+  final DayNightMode dayNight;
 
   /// EXPERIMENT: Fahrzeug (Typ + Branding) und 3/4-Darstellung.
   final TruckModel truckModel;
@@ -297,6 +309,11 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 truckBias: widget.truckBias,
                 truckPitch: widget.truckPitch,
                 truckScale: widget.truckScale,
+                cameraMode: widget.cameraMode,
+                cinematicDemo: widget.cinematicDemo,
+                cameraDebug: widget.cameraDebug,
+                dayNight: widget.dayNight,
+                eta: widget.eta,
               ),
             )
           else

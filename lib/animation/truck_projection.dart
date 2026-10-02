@@ -69,12 +69,15 @@ class ProjectedFace {
 /// Betrachter weg, positiv = nach rechts gedreht – dann zeigt es dem
 /// Betrachter seine RECHTE Seite, negativ die linke).
 class TruckProjection {
-  TruckProjection({required this.pitchDeg, required this.yawDeg})
+  TruckProjection({required this.pitchDeg, required this.yawDeg, this.origin = const Vec3(0, 0, 0)})
       : _p = pitchDeg * math.pi / 180,
         _y = yawDeg * math.pi / 180;
 
   final double pitchDeg;
   final double yawDeg;
+
+  /// Lage des Körper-Ursprungs in der Welt (z. B. Sattelpunkt).
+  final Vec3 origin;
   final double _p;
   final double _y;
 
@@ -86,7 +89,7 @@ class TruckProjection {
   /// Blickrichtung der Kamera (in die Szene hinein, nach vorn und unten).
   Vec3 get view => Vec3(0, math.sin(_p), -math.cos(_p));
 
-  Vec3 world(double f, double r, double z) => forward * f + right * r + up * z;
+  Vec3 world(double f, double r, double z) => origin + forward * f + right * r + up * z;
 
   /// Orthografisch: Bild-x = Welt-x; Bild-y (nach unten) aus Tiefe und Höhe.
   ScreenPoint project(Vec3 w) => ScreenPoint(
@@ -148,6 +151,37 @@ class TruckProjection {
     final bx = c[3].x - c[0].x, by = c[3].y - c[0].y; // nach unten
     return ax * by - ay * bx; // > 0: Bildkoordinaten (y nach unten) rechtshändig
   }
+}
+
+// ------------------------------------------------ gekoppelter Sattelzug
+
+/// Zugmaschine relativ zum Sattelpunkt (Ursprung), Fahrtrichtung +f.
+const List<TruckBox> tractorBoxes = [
+  TruckBox(name: 'chassis', fromF: -0.9, toF: 4.4, halfWidth: 1.1, fromZ: 0.0, toZ: 1.0),
+  TruckBox(name: 'cab', fromF: 2.0, toF: 4.4, halfWidth: 1.25, fromZ: 0.8, toZ: 3.7),
+];
+
+/// Auflieger relativ zum Sattelpunkt (Königszapfen 1,2 m hinter der Stirn).
+const List<TruckBox> trailerBoxes = [
+  TruckBox(name: 'trailer-gear', fromF: -12.0, toF: -8.6, halfWidth: 1.1, fromZ: 0.0, toZ: 1.1),
+  TruckBox(name: 'trailer', fromF: -12.4, toF: 1.2, halfWidth: 1.27, fromZ: 1.1, toZ: 4.0),
+];
+
+/// Sichtbare Flächen beider Körper, gemeinsam nach Tiefe sortiert. Beide
+/// drehen um den Sattelpunkt: Zugmaschine mit [tractorYaw], Auflieger mit
+/// [tractorYaw] + [knick].
+List<ProjectedFace> articulatedFaces({
+  required double tractorYaw,
+  required double knick,
+  required double pitchDeg,
+  List<TruckBox> extraTrailerBoxes = const [],
+}) {
+  final tractor = TruckProjection(pitchDeg: pitchDeg, yawDeg: tractorYaw);
+  final trailer = TruckProjection(pitchDeg: pitchDeg, yawDeg: tractorYaw + knick);
+  return [
+    ...tractor.visibleFaces(tractorBoxes),
+    ...trailer.visibleFaces([...trailerBoxes, ...extraTrailerBoxes]),
+  ]..sort((a, b) => b.depth.compareTo(a.depth));
 }
 
 /// Maße eines Standard-Sattelzugs (Meter), Ursprung Bodenmitte des Zugs.

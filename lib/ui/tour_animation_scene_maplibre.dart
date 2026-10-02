@@ -6,8 +6,12 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 
+import '../animation/articulation.dart';
+import '../animation/cinematic_camera.dart';
 import '../animation/country_borders.dart';
+import '../animation/daylight.dart';
 import '../animation/tour_camera.dart';
+import '../logic/eta_calculator.dart';
 import '../animation/tour_path.dart';
 import '../animation/tour_story.dart';
 import 'map_label_style.dart';
@@ -41,7 +45,27 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.truckBias = 22,
     this.truckPitch = 42,
     this.truckScale = 1,
+    this.cameraMode = CameraMode.follow,
+    this.cinematicDemo = false,
+    this.cameraDebug = false,
+    this.dayNight = DayNightMode.off,
+    this.eta,
   });
+
+  /// Kamera: ruhige Folgekamera oder mit wenigen Drohnenfahrten.
+  final CameraMode cameraMode;
+
+  /// Demo: Kamerafahrten gedrängt, um sie schnell nacheinander zu sehen.
+  final bool cinematicDemo;
+
+  /// Entwicklung: Kamerawerte einblenden.
+  final bool cameraDebug;
+
+  /// Tag/Nacht: aus, aus der Planung oder simuliert (Demo).
+  final DayNightMode dayNight;
+
+  /// Planung für Tag/Nacht (Uhrzeit entlang der Strecke).
+  final EtaResult? eta;
 
   /// Fahrzeugtyp und Branding (getrennt wählbar).
   final TruckModel truckModel;
@@ -100,6 +124,31 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
 class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre> {
   late final Future<String> _style = TourAnimationSceneMapLibre.loadStyle();
   late final TourCameraRig _rig = TourCameraRig(widget.path);
+
+  /// Kamera (Regie) – erst im ersten build angelegt, wenn das Bildformat
+  /// bekannt ist.
+  CinematicCamera? _cam;
+  CameraState? _camState;
+  double _cameraZoom = 0;
+  double _cameraPitch = 42;
+
+  /// Tag/Nacht.
+  late final TourClock? _clock =
+      widget.eta == null ? null : TourClock.fromEta(widget.eta!, widget.path);
+  final DaylightEaser _daylight = DaylightEaser();
+  double _night = 0;
+  double _shownVeil = -1;
+  ArticulatedPose? _pose;
+
+  CinematicCamera _cameraFor(Size size) => _cam ??= CinematicCamera(
+        widget.path,
+        plan: widget.cameraMode == CameraMode.follow
+            ? CinematicPlan.followOnly
+            : (widget.cinematicDemo
+                ? CinematicPlan.demo()
+                : CinematicPlan.standard(tourAnimationDuration(widget.path.totalMeters))),
+        aspect: size.height <= 0 ? 1.6 : size.width / size.height,
+      );
   ml.MapLibreMapController? _map;
   bool _ready = false;
   DateTime? _lastFrame;
@@ -130,6 +179,23 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     await map.addImage('truck-rear', await truckRearPng());
     await map.addImage('truck', await truckSidePng(mirrored: false));
     await map.addImage('truck-mirrored', await truckSidePng(mirrored: true));
+
+    // Nacht: dunkler Schleier über der Grundkarte, unter Route und LKW.
+    await map.addGeoJsonSource('veil', _collection([
+      {
+        'type': 'Feature',
+        'properties': const <String, dynamic>{},
+        'geometry': {
+          'type': 'Polygon',
+          'coordinates': [
+            [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]]
+          ],
+        },
+      },
+    ]));
+    await map.addFillLayer('veil', 'night-veil',
+        const ml.FillLayerProperties(fillColor: '#0B1730', fillOpacity: 0.0));
+    await map.addImage('headlights', await headlightConePng());
 
     await map.addGeoJsonSource('country', _collection(const []));
     await map.addFillLayer('country', 'country-fill',
@@ -184,6 +250,20 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         iconIgnorePlacement: true,
       ), filter: ['==', ['get', 'flat'], flat]);
     }
+    // Lichtkegel: flach auf der Straße, gedreht mit der ZUGMASCHINE (nicht mit
+    // der Kamera) – unter dem Fahrzeug.
+    await map.addGeoJsonSource('lights', _collection(const []));
+    await map.addSymbolLayer('lights', 'headlight-cone', const ml.SymbolLayerProperties(
+      iconImage: 'headlights',
+      iconSize: ['get', 'size'],
+      iconRotate: ['get', 'rot'],
+      iconRotationAlignment: 'map',
+      iconPitchAlignment: 'map',
+      iconAnchor: 'bottom',
+      iconOpacity: 0.0,
+      iconAllowOverlap: true,
+      iconIgnorePlacement: true,
+    ), belowLayerId: 'truck-flat');
     _ready = true;
     _update(force: true);
     widget.onReady?.call();
@@ -279,6 +359,54 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
 
   static const _frameStep = 4.0;
 
+  // --------------------------------------------- gekoppelter Sattelzug
+
+  /// Sprite: Bildpunkte je Fahrzeugmeter; Anzeige: Punkte je Meter bei
+  /// Folge-Zoom (mit [truckScale]).
+  static const _spritePx = 12.0;
+  double get _pointsPerMeter => 5 * widget.truckScale;
+
+  /// Kartenmeter je Fahrzeugmeter – aus dem FOLGE-Zoom, nicht aus dem Zoom
+  /// der aktuellen Kamerafahrt: die Kamera verändert die Fahrzeuggeometrie nie.
+  double _unitAt(LatLng p) =>
+      _pointsPerMeter * metersPerScreenPoint(_cam?.followZoom ?? _rig.zoom, p.latitude);
+
+  int _yawFrame = 0, _knickFrame = 0;
+
+  String _articulatedName(int yaw, int knick, int pitch, bool night) =>
+      'art-${widget.truckModel.id}-p$pitch-y$yaw-k$knick-${night ? 'n' : 'd'}';
+
+  Map<String, dynamic>? _articulatedProps(TourPosition pos) {
+    final pose = _pose = articulate(widget.path, pos.meters, metersPerUnit: _unitAt(pos.point));
+    // Bild nach Winkel der Zugmaschine zur Blickrichtung und Knick (mit
+    // Hysterese gegen Flackern), Neigung wie die Kamera.
+    _yawFrame = frameFor(angleDiff(_cameraBearing, pose.tractorHeading), _yawFrame, step: 4);
+    _knickFrame = frameFor(pose.knick, _knickFrame, step: 3);
+    final pitch = ((_cameraPitch / 5).round() * 5).clamp(30, 60);
+    final night = _night > 0.5;
+    final name = _articulatedName(_yawFrame, _knickFrame, pitch, night);
+    if (!_framesReady.contains(name) && !_framesPending.contains(name)) {
+      _framesPending.add(name);
+      truckArticulatedPng(widget.truckModel,
+              tractorYaw: _yawFrame * 4.0,
+              knick: _knickFrame * 3.0,
+              pitchDeg: pitch.toDouble(),
+              pxPerMeter: _spritePx,
+              night: night)
+          .then((png) async {
+        await _map?.addImage(name, png);
+        _framesPending.remove(name);
+        _framesReady.add(name);
+      });
+    }
+    if (_framesReady.contains(name)) _shownFrame = name;
+    final shown = _shownFrame;
+    if (shown == null) return null;
+    // Größe skaliert mit dem Kamerazoom – der LKW gehört zur Karte.
+    final size = _pointsPerMeter / _spritePx * math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
+    return {'icon': shown, 'rot': 0.0, 'flat': false, 'size': size};
+  }
+
   Map<String, dynamic> _truckProps(double heading) {
     final relative = angleDiff(_cameraBearing, heading); // zur Blickrichtung
     if (widget.finished) {
@@ -286,6 +414,9 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       return {'icon': 'truck-top', 'rot': heading, 'flat': true, 'size': 0.3};
     }
     switch (widget.truckView) {
+      case TruckView.articulated:
+        // Wird über [_articulatedProps] gesetzt (eigener Ankerpunkt).
+        return {'icon': 'truck-top', 'rot': heading, 'flat': true, 'size': 0.3};
       case TruckView.top:
         return {'icon': 'truck-top', 'rot': heading, 'flat': true, 'size': 0.3}; // Kartenrichtung
       case TruckView.threeQuarterLeft:
@@ -341,6 +472,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     super.didUpdateWidget(old);
     if (widget.position.meters < old.position.meters - 1) {
       _rig.reset(); // Neustart
+      _cam?.reset();
+      _daylight.reset();
       _overviewShown = false;
     }
     _update();
@@ -379,17 +512,57 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         );
       }
     } else {
-      _cameraBearing = _rig.step(pos.meters, dt);
-
+      // Regie: Folgekamera plus festgelegte Fahrten um den LKW – alles relativ
+      // zur aktuellen Fahrzeugposition; manueller Zoom schaltet sie ab.
+      final cam = _cam ?? _cameraFor(const Size(1000, 700));
+      final st = _camState = cam.step(pos.meters, dt, manualZoom: widget.manualZoom);
+      _cameraBearing = st.bearing;
+      _cameraZoom = st.zoom;
+      _cameraPitch = st.pitch;
       map.moveCamera(ml.CameraUpdate.newCameraPosition(ml.CameraPosition(
-        target: _ml(_rig.targetAt(pos.meters)),
-        zoom: widget.manualZoom ?? _rig.zoom,
-        bearing: _cameraBearing,
-        tilt: _rig.pitch,
+        target: _ml(st.target),
+        zoom: st.zoom,
+        bearing: st.bearing,
+        tilt: st.pitch,
       )));
     }
 
-    map.setGeoJsonSource('truck', _collection([_point(pos.point, _truckProps(_localHeading(pos.meters)))]));
+    // Tag/Nacht: Sonnenstand an der Fahrzeugposition zur Planzeit (lokal).
+    if (widget.dayNight != DayNightMode.off) {
+      final p = widget.path.totalMeters <= 0 ? 0.0 : pos.meters / widget.path.totalMeters;
+      final DateTime? when = switch (widget.dayNight) {
+        DayNightMode.plan => _clock?.at(pos.meters).toUtc(),
+        DayNightMode.simulated =>
+          DateTime.utc(2026, 10, 5, 13).add(Duration(minutes: (24 * 60 * p).round())),
+        DayNightMode.off => null,
+      };
+      final target = when == null ? 0.0 : nightLevel(sunElevation(pos.point.latitude, pos.point.longitude, when));
+      _night = widget.finished ? 0 : _daylight.update(target, dt);
+      if ((_night - _shownVeil).abs() > 0.004) {
+        _shownVeil = _night;
+        map.setLayerProperties('night-veil', ml.FillLayerProperties(fillOpacity: 0.55 * _night));
+        map.setLayerProperties('headlight-cone', ml.SymbolLayerProperties(iconOpacity: _night));
+      }
+    }
+
+    if (widget.truckView == TruckView.articulated && !widget.finished) {
+      final props = _articulatedProps(pos);
+      final pose = _pose!;
+      map.setGeoJsonSource('truck', _collection([
+        props == null
+            ? _point(pos.point, {'icon': 'truck-top', 'rot': pose.tractorHeading, 'flat': true, 'size': 0.3})
+            : _point(pose.kingpin, props),
+      ]));
+      if (widget.dayNight != DayNightMode.off) {
+        // Kegel an der Fahrzeugfront, so lang wie ≈ 2 Zugmaschinen.
+        final coneSize = _pointsPerMeter * 9 / 320 * math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
+        map.setGeoJsonSource('lights', _collection([
+          _point(pose.frontAxle, {'rot': pose.tractorHeading, 'size': coneSize}),
+        ]));
+      }
+    } else {
+      map.setGeoJsonSource('truck', _collection([_point(pos.point, _truckProps(_localHeading(pos.meters)))]));
+    }
 
     // Gefahrene Spur: höchstens etwa 12-mal pro Sekunde neu.
     if (force || widget.finished || now.difference(_lastTrail).inMilliseconds > 80) {
@@ -428,6 +601,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
 
   @override
   Widget build(BuildContext context) {
+    _cameraFor(MediaQuery.sizeOf(context));
     final path = widget.path;
     final pos = widget.position;
     final frame = widget.frame;
@@ -480,6 +654,25 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
           countrySequence: storyCountrySequence(widget.storyEvents, startIso),
         ),
       ),
+      if (widget.cameraDebug && _camState != null)
+        Positioned(
+          left: 12,
+          bottom: 40,
+          child: IgnorePointer(
+            child: Container(
+              key: const Key('camera-debug'),
+              padding: const EdgeInsets.all(8),
+              color: const Color(0xCC000000),
+              child: Text(
+                'Shot ${_camState!.shot}\n'
+                'Bahn ${_camState!.orbit.toStringAsFixed(0)}°  Richtung ${_camState!.bearing.toStringAsFixed(0)}°\n'
+                'Neigung ${_camState!.pitch.toStringAsFixed(0)}°  Zoom ${_camState!.zoom.toStringAsFixed(2)}\n'
+                'Knick ${(_pose?.knick ?? 0).toStringAsFixed(1)}°  Nacht ${(_night * 100).round()} %',
+                style: const TextStyle(color: Colors.white, fontSize: 12, fontFamily: 'monospace'),
+              ),
+            ),
+          ),
+        ),
       Positioned(
         left: 12,
         right: 12,

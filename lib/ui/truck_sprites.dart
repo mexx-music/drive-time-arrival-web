@@ -26,6 +26,9 @@ enum TruckView {
 
   /// 3/4 von oben, Seite automatisch nach Kurvenrichtung (mit Hysterese).
   threeQuarterAuto,
+
+  /// Gekoppelt: Zugmaschine exakt auf der Route, Auflieger knickt nach.
+  articulated,
 }
 
 /// Farben – neutral, ohne Marke. Später austauschbar (Fahrzeugtyp, Firma).
@@ -336,3 +339,139 @@ void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px) {
     c.drawRect(const Rect.fromLTWH(0.1, 0.12, 0.8, 0.32), Paint()..color = const Color(0xFF90CAF9));
   });
 }
+
+// -------------------------------------------------- gekoppelter Sattelzug
+
+/// Gekoppelter Sattelzug: Zugmaschine mit [tractorYaw], Auflieger mit
+/// [tractorYaw] + [knick] (Grad, relativ zur Blickrichtung). Sattelpunkt
+/// am Boden = Bildmitte (Anker auf der Karte). [night]: Rücklichter und
+/// Scheinwerfer an.
+Future<Uint8List> truckArticulatedPng(
+  TruckModel model, {
+  required double tractorYaw,
+  required double knick,
+  double pitchDeg = 42,
+  double pxPerMeter = 10,
+  bool night = false,
+}) {
+  final faces = articulatedFaces(
+    tractorYaw: tractorYaw,
+    knick: knick,
+    pitchDeg: pitchDeg,
+    extraTrailerBoxes: [
+      if (model.trailer == TrailerKind.reefer)
+        const TruckBox(name: 'reefer-unit', fromF: 1.2, toF: 1.6, halfWidth: 0.85, fromZ: 2.4, toZ: 3.6),
+    ],
+  );
+  var ext = 0.0;
+  for (final f in faces) {
+    for (final c in f.corners) {
+      ext = math.max(ext, math.max(c.x.abs(), c.y.abs()));
+    }
+  }
+  final half = (ext * pxPerMeter).ceilToDouble() + 10;
+  Offset px(ScreenPoint p) => Offset(half + p.x * pxPerMeter, half + p.y * pxPerMeter);
+
+  final tractor = TruckProjection(pitchDeg: pitchDeg, yawDeg: tractorYaw);
+  final trailer = TruckProjection(pitchDeg: pitchDeg, yawDeg: tractorYaw + knick);
+
+  return _png(Size(half * 2, half * 2), (c) {
+    // Schatten beider Körper auf der Straße.
+    final shadow = Path();
+    void footprint(TruckProjection pr, List<TruckBox> boxes) {
+      for (final b in boxes) {
+        shadow.addPolygon([
+          for (final w in [
+            pr.world(b.toF, -b.halfWidth, 0),
+            pr.world(b.toF, b.halfWidth, 0),
+            pr.world(b.fromF, b.halfWidth, 0),
+            pr.world(b.fromF, -b.halfWidth, 0),
+          ])
+            px(pr.project(w)),
+        ], true);
+      }
+    }
+
+    footprint(tractor, tractorBoxes);
+    footprint(trailer, trailerBoxes);
+    c.drawPath(
+        shadow.shift(const Offset(1.5, 2)),
+        Paint()
+          ..color = Color(night ? 0x33000000 : 0x55000000)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+
+    for (final f in faces) {
+      final base = switch (f.box.name) {
+        'cab' => model.branding.cab,
+        'trailer' => model.branding.trailer,
+        'reefer-unit' => const Color(0xFFB0BEC5),
+        _ => const Color(0xFF263238),
+      };
+      final shade = night ? f.shade * 0.72 : f.shade; // nachts gedämpft
+      final poly = Path()..addPolygon([for (final p in f.corners) px(p)], true);
+      c.drawPath(poly, Paint()..color = Color.lerp(Colors.black, base, shade)!);
+      c.drawPath(
+          poly,
+          Paint()
+            ..color = const Color(0x33000000)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1);
+      if (f.box.name == 'trailer' && (f.side == FaceSide.left || f.side == FaceSide.right)) {
+        _decorateSide(c, f, px, model);
+      }
+      if (f.box.name == 'cab' && f.side == FaceSide.front) {
+        _windshield(c, f, px);
+        if (night) _headlamps(c, f, px);
+      }
+      if (night && f.box.name == 'trailer' && f.side == FaceSide.back) {
+        _taillights(c, f, px);
+      }
+    }
+  });
+}
+
+/// Rücklichter: zwei dezente rote Leuchten unten am Heck.
+void _taillights(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px) {
+  _inFace(c, f, px, (c) {
+    final glow = Paint()
+      ..color = const Color(0x99FF1744)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.04);
+    final lamp = Paint()..color = const Color(0xFFFF5252);
+    for (final x in [0.04, 0.82]) {
+      c.drawRect(Rect.fromLTWH(x - 0.03, 0.78, 0.2, 0.14), glow);
+      c.drawRect(Rect.fromLTWH(x, 0.8, 0.14, 0.1), lamp);
+    }
+  });
+}
+
+/// Scheinwerfer an der Front der Zugmaschine.
+void _headlamps(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px) {
+  _inFace(c, f, px, (c) {
+    final lamp = Paint()..color = const Color(0xFFFFF8E1);
+    for (final x in [0.06, 0.78]) {
+      c.drawRect(Rect.fromLTWH(x, 0.72, 0.16, 0.1), lamp);
+    }
+  });
+}
+
+/// Lichtkegel vor der Zugmaschine, flach auf der Straße (Spitze unten =
+/// Fahrzeugfront, Kegel nach oben = Fahrtrichtung). 160 × 320 Pixel.
+Future<Uint8List> headlightConePng() => _png(const Size(160, 320), (c) {
+      for (final dx in [-14.0, 14.0]) {
+        final path = Path()
+          ..moveTo(80 + dx, 318)
+          ..lineTo(80 + dx * 0.4 - 46, 20)
+          ..quadraticBezierTo(80 + dx * 0.4, -6, 80 + dx * 0.4 + 46, 20)
+          ..close();
+        c.drawPath(
+          path,
+          Paint()
+            ..shader = ui.Gradient.linear(
+              const Offset(0, 318),
+              const Offset(0, 10),
+              [const Color(0xB0FFF3D0), const Color(0x00FFF3D0)],
+            )
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+        );
+      }
+    });
