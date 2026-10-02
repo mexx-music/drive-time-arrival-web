@@ -333,7 +333,8 @@ class _TourAnimationViewState extends State<TourAnimationView>
       fromName: widget.fromName,
       toName: widget.toName,
     );
-    _outroTimeline = OutroTimeline(countryCount: outro.countries.length);
+    // Cinematic: erst die ganze Reise im Überblick, dann der Hero-Truck.
+    _outroTimeline = OutroTimeline(countryCount: outro.countries.length, overview: _cinematic != null ? 4.4 : 0);
     _playback = TourPlayback(duration: _playbackLength);
   }
 

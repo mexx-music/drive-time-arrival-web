@@ -227,8 +227,8 @@ void main() {
         head = l.head;
         if (l.head > 0) expect(l.tail, greaterThan(0)); // Rücklichter zuerst
       }
-      expect(OutroLights.at(tl, OutroTimeline.lightsOn - 0.1).tail, 0); // vorher aus
-      expect(tl.sweep(OutroTimeline.lightsOn + 1.5), isNotNull);
+      expect(OutroLights.at(tl, tl.lightsOn - 0.1).tail, 0); // vorher aus
+      expect(tl.sweep(tl.lightsOn + 1.5), isNotNull);
       expect(tl.sweep(tl.end), isNull); // Schlussbild ohne Lichtlauf
       // Wenige Zustände: das Reveal braucht nur wenige große Bilder.
       final keys = {for (var t = 0.0; t <= tl.end; t += 1 / 60) OutroLights.at(tl, t).key};
@@ -315,9 +315,9 @@ void main() {
       double op(int i) => tester
           .widget<Opacity>(find.ancestor(of: find.byKey(Key('outro-country-$i')), matching: find.byType(Opacity)).first)
           .opacity;
-      await pump(tester, const Size(390, 700), data, OutroTimeline.countriesStart - 0.1);
+      await pump(tester, const Size(390, 700), data, tl.countriesStart - 0.1);
       expect(op(0), 0);
-      await pump(tester, const Size(390, 700), data, OutroTimeline.countriesStart + 1.1 * tl.countryStep);
+      await pump(tester, const Size(390, 700), data, tl.countriesStart + 1.1 * tl.countryStep);
       expect(op(0), greaterThan(op(2)));
       await pump(tester, const Size(390, 700), data, tl.countriesComplete);
       for (var i = 0; i < 8; i++) {
@@ -360,6 +360,56 @@ void main() {
         await pump(tester, const Size(390, 700), data, t);
         expect(opacities(), a);
       }
+    });
+  });
+
+  group('Reise-Übersicht vor dem Hero', () {
+    OutroCamera cam({double overview = 4.4}) => OutroCamera(
+          from: _start(),
+          truck: const LatLng(55.38, 10.38),
+          heading: 20,
+          followZoom: 7.6,
+          truckPointsPerMeter: 3.1,
+          width: 390,
+          height: 700,
+          timeline: OutroTimeline(countryCount: 8, overview: overview),
+          routeSouthWest: const LatLng(40.9, 9.9),
+          routeNorthEast: const LatLng(55.4, 26.4),
+        );
+
+    test('steigt auf, ganze Route im Bild, dann weiter zum Hero – ohne Sprung', () {
+      final c = cam();
+      final tl = c.timeline;
+      final ov = c.at(2.6);
+      expect(ov.shot, 'OVERVIEW');
+      expect(ov.zoom, lessThan(_start().zoom - 2)); // deutlich weiter weg
+      expect(ov.target.latitude, closeTo((40.9 + 55.4) / 2, 0.5));
+      // Ganze Route passt: Breite in Metern ≤ 80 % der Bildbreite.
+      final mpp = metersPerScreenPoint(ov.zoom, ov.target.latitude);
+      const d = Distance(calculator: Haversine());
+      expect(d(const LatLng(48.15, 9.9), const LatLng(48.15, 26.4)) / mpp, lessThanOrEqualTo(390 * 0.8 + 1));
+      // Stetig über die ganze Zeit.
+      var last = c.at(0);
+      for (var i = 1; i <= tl.end * 100; i++) {
+        final s = c.at(i / 100);
+        expect((s.zoom - last.zoom).abs(), lessThan(0.08), reason: 't=${i / 100}');
+        expect(angleDiff(last.bearing, s.bearing).abs(), lessThan(1.5));
+        last = s;
+      }
+      // Am Ende der Hero wie bisher.
+      expect(angleDiff(c.at(tl.end).bearing, c.heroBearing).abs(), lessThan(8));
+    });
+
+    test('Strecke leuchtet einmal auf, Hero und Länder verschieben sich nach hinten', () {
+      final tl = OutroTimeline(countryCount: 8, overview: 4.4), plain = OutroTimeline(countryCount: 8);
+      expect(tl.routeGlow(0), 0);
+      expect(tl.routeGlow(3.0), greaterThan(0.5));
+      expect(tl.routeGlow(tl.heroReveal), 0);
+      expect(plain.routeGlow(3.0), 0);
+      expect(tl.heroReveal, plain.heroReveal + 4.4);
+      expect(tl.countriesStart, plain.countriesStart + 4.4);
+      expect(tl.end - plain.end, closeTo(4.4, 1e-9));
+      expect(tl.markers.keys, containsAllInOrder(['arrival', 'routeOverview', 'routeGlow', 'heroReveal', 'end']));
     });
   });
 }

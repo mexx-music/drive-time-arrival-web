@@ -69,21 +69,34 @@ double _ramp(double t, double a, double b) => b <= a ? (t >= a ? 1 : 0) : _smoot
 /// Zeitplan des Outros (Sekunden ab Ankunft) mit Markern für die spätere
 /// Musik-Synchronisierung.
 class OutroTimeline {
-  OutroTimeline({required this.countryCount}) {
+  OutroTimeline({required this.countryCount, this.overview = 0}) {
     // Länder: 0,18–0,42 s Abstand, zusammen höchstens ≈ 3,6 s.
     countryStep = countryCount <= 0 ? 0 : (3.6 / countryCount).clamp(0.18, 0.42);
     countriesComplete = countriesStart + countryCount * countryStep + entryFade;
-    statsReveal = math.max(5.6, countriesComplete - 0.4);
+    statsReveal = math.max(overview + 5.6, countriesComplete - 0.4);
     finalLogo = statsReveal + 1.8;
     end = finalLogo + 2.0;
   }
 
   final int countryCount;
 
+  /// Dauer der Reise-Übersicht nach der Ankunft (Sekunden; 0 = ohne): die
+  /// Kamera steigt auf, die ganze Route passt ins Bild, die gefahrene
+  /// Strecke leuchtet einmal auf – dann erst der Hero-Truck.
+  final double overview;
+
   static const double arrival = 0;
-  static const double heroReveal = 1.2;
-  static const double lightsOn = 3.0;
-  static const double countriesStart = 3.6;
+  double get heroReveal => overview + 1.2;
+  double get lightsOn => overview + 3.0;
+  double get countriesStart => overview + 3.6;
+
+  /// Aufleuchten der gefahrenen Strecke in der Übersicht 0..1..0.
+  double routeGlow(double t) {
+    if (overview <= 0) return 0;
+    final a = 1.6, b = overview - 0.6;
+    if (t <= a || t >= b) return 0;
+    return math.sin(math.pi * (t - a) / (b - a));
+  }
 
   /// Dauer, in der ein Eintrag hereinkommt.
   static const double entryFade = 0.5;
@@ -101,6 +114,8 @@ class OutroTimeline {
   /// Musikmarker in Reihenfolge.
   Map<String, double> get markers => {
         'arrival': arrival,
+        if (overview > 0) 'routeOverview': 0.4,
+        if (overview > 0) 'routeGlow': 1.6,
         'heroReveal': heroReveal,
         'lightsOn': lightsOn,
         'countriesStart': countriesStart,
@@ -113,7 +128,7 @@ class OutroTimeline {
   // --------------------------------------------------------- Einblendungen
 
   /// Abdunklung der Umgebung 0..1 (Ziel bleibt erkennbar).
-  double dim(double t) => _ramp(t, 0.8, 3.2);
+  double dim(double t) => _ramp(t, overview + 0.8, overview + 3.2);
 
   /// Titel „Tour abgeschlossen“ / Ankunftsort.
   double title(double t) => _ramp(t, heroReveal + 0.3, heroReveal + 1.2);
@@ -138,7 +153,7 @@ class OutroTimeline {
   /// Lichtlauf über Kabine und Auflieger: Position 0 (Front) … 1 (Heck),
   /// null außerhalb des Laufs.
   double? sweep(double t) {
-    const a = lightsOn + 1.0, b = lightsOn + 2.0;
+    final a = lightsOn + 1.0, b = lightsOn + 2.0;
     if (t < a || t > b) return null;
     return _smoother((t - a) / (b - a));
   }
@@ -186,9 +201,41 @@ class OutroCamera {
     required this.width,
     required this.height,
     required this.timeline,
+    this.routeSouthWest,
+    this.routeNorthEast,
   });
 
   final CameraState from;
+
+  /// Ausdehnung der ganzen Route (für die Übersicht); null = ohne.
+  final LatLng? routeSouthWest;
+  final LatLng? routeNorthEast;
+
+  bool get _hasOverview => timeline.overview > 0 && routeSouthWest != null && routeNorthEast != null;
+
+  /// Kamera der Übersicht: ganze Route im Bild, genordet, flach geneigt.
+  CameraState get overviewState {
+    final sw = routeSouthWest!, ne = routeNorthEast!;
+    final c = LatLng((sw.latitude + ne.latitude) / 2, (sw.longitude + ne.longitude) / 2);
+    const d = Distance(calculator: Haversine());
+    final wm = d(LatLng(c.latitude, sw.longitude), LatLng(c.latitude, ne.longitude));
+    final hm = d(LatLng(sw.latitude, c.longitude), LatLng(ne.latitude, c.longitude));
+    final mpp = math.max(wm / (0.8 * width), hm / ((portrait ? 0.62 : 0.72) * height));
+    final zoom = math.log(78271.517 * math.cos(c.latitude * math.pi / 180) / math.max(1e-6, mpp)) / math.ln2;
+    return CameraState(target: c, bearing: 0, pitch: 18, zoom: zoom, shot: 'OVERVIEW', orbit: 0);
+  }
+
+  static double _lerpAngle(double a, double b, double t) => (a + angleDiff(a, b) * t + 360) % 360;
+
+  static CameraState _blend(CameraState a, CameraState b, double t, String shot) => CameraState(
+        target: LatLng(a.target.latitude + (b.target.latitude - a.target.latitude) * t,
+            a.target.longitude + (b.target.longitude - a.target.longitude) * t),
+        bearing: _lerpAngle(a.bearing, b.bearing, t),
+        pitch: a.pitch + (b.pitch - a.pitch) * t,
+        zoom: a.zoom + (b.zoom - a.zoom) * t,
+        shot: shot,
+        orbit: a.orbit + (b.orbit - a.orbit) * t,
+      );
 
   /// Fahrzeug am Ziel (Sattelpunkt) und Richtung der Zugmaschine.
   final LatLng truck;
@@ -228,14 +275,25 @@ class OutroCamera {
   }
 
   CameraState at(double t) {
+    if (!_hasOverview) return _heroAt(t, from, 0);
+    // Übersicht: in ≈ 2,2 s hinauf, bis die ganze Route im Bild ist, halten
+    // (Strecke leuchtet auf), dann hinunter in den Hero-Shot.
+    final ov = overviewState;
+    final heroStart = timeline.overview - 1.2;
+    if (t < heroStart) return _blend(from, ov, _smoother(t / 2.2), 'OVERVIEW');
+    return _heroAt(t - heroStart, ov, heroStart);
+  }
+
+  /// Hero-Fahrt ab [base] ([t] relativ zum Beginn, [offset] = Beginn absolut).
+  CameraState _heroAt(double t, CameraState from, double offset) {
     // Phase 1 (0–1,2 s): ruhig weiter, minimal näher und steiler.
     // Phase 2 (0,4–3,4 s): Drohne schwenkt in die 3/4-Ansicht.
     // Danach: sehr langsamer Nachlauf, der vor dem Schluss stillsteht.
     final move = _smoother((t - 0.4) / 3.0);
-    final settle = _smoother((t - 3.4) / math.max(0.1, timeline.end - 2.0 - 3.4));
+    final settle = _smoother((t - 3.4) / math.max(0.1, timeline.end - offset - 2.0 - 3.4));
     final bearingTarget = (heroBearing + 6 * settle) % 360;
     final bearing = (from.bearing + angleDiff(from.bearing, bearingTarget) * move + 360) % 360;
-    final arrive = _smooth(t / 1.2);
+    final arrive = offset > 0 ? 0.0 : _smooth(t / 1.2);
     final zoom = from.zoom + 0.25 * arrive * (1 - move) + (heroZoom - 0.12 + 0.12 * settle - from.zoom) * move;
     final pitch = from.pitch + 3 * arrive * (1 - move) + (heroPitch - from.pitch) * move;
     final hero = heroTarget(bearing, zoom, pitch);
@@ -246,7 +304,7 @@ class OutroCamera {
       bearing: bearing,
       pitch: pitch,
       zoom: zoom,
-      shot: t < OutroTimeline.heroReveal ? 'ARRIVAL' : 'HERO',
+      shot: t + offset < timeline.heroReveal ? 'ARRIVAL' : 'HERO',
       orbit: heroOrbit * move,
     );
   }

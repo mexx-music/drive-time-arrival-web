@@ -275,14 +275,17 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     await map.addGeoJsonSource('route', _collection([
       for (final leg in path.legs) _line(leg.points, {'ferry': leg.kind != TourLegKind.road}),
     ]));
-    await map.addLineLayer('route', 'route-line', const ml.LineLayerProperties(
-      lineColor: ['case', ['get', 'ferry'], '#26A69A', '#3F51B5'],
-      lineOpacity: 0.45,
+    // Cinematic: keine Vorschau der Strecke – nur die Spur, die der Lkw
+    // hinter sich herzieht (wie ein Roadmovie, die Reise entsteht).
+    await map.addLineLayer('route', 'route-line', ml.LineLayerProperties(
+      lineColor: const ['case', ['get', 'ferry'], '#26A69A', '#3F51B5'],
+      lineOpacity: widget.cinematicHeading != null ? 0.0 : 0.45,
       lineWidth: 5,
       lineCap: 'round',
       lineJoin: 'round',
     ));
     await map.addGeoJsonSource('driven', _collection(const []));
+    await map.addLineLayer('driven', 'driven-glow', _drivenGlowProps(0));
     await map.addLineLayer('driven', 'driven-line', const ml.LineLayerProperties(
       lineColor: ['case', ['get', 'ferry'], '#00897B', '#1B5E20'],
       lineWidth: 7,
@@ -520,10 +523,10 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final seen = <String>{};
     // Zuerst die Endperspektive (Ende des Schwenks und erstes Licht), dann
     // alles in zeitlicher Reihenfolge.
-    for (final t in [OutroTimeline.lightsOn - 0.25, OutroTimeline.lightsOn, ...[for (var t = 0.0; t <= tl.end; t += 1 / 30) t]]) {
+    for (final t in [tl.lightsOn - 0.25, tl.lightsOn, ...[for (var t = 0.0; t <= tl.end; t += 1 / 30) t]]) {
       final st = oc.at(t);
       final (yaw, pitch) = _outroFrame(angleDiff(st.bearing, pose.tractorHeading), st.pitch, t);
-      final lights = t >= OutroTimeline.lightsOn - 0.2 ? OutroLights.at(tl, t) : null;
+      final lights = t >= tl.lightsOn - 0.2 ? OutroLights.at(tl, t) : null;
       final key = '$yaw-$pitch-${lights?.key}';
       if (seen.add(key)) _prewarmQueue.add((yaw, (pose.knick / 3).round(), pitch, night, lights));
     }
@@ -550,8 +553,35 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       width: size.width,
       height: size.height,
       timeline: tl,
+      routeSouthWest: _routeBounds.$1,
+      routeNorthEast: _routeBounds.$2,
     );
   }
+
+  /// Ausdehnung der ganzen Route (für die Übersicht am Ziel).
+  late final (LatLng, LatLng) _routeBounds = () {
+    final pts = widget.path.points;
+    var s = pts.first.latitude, n = s, w = pts.first.longitude, e = w;
+    for (final p in pts) {
+      s = math.min(s, p.latitude);
+      n = math.max(n, p.latitude);
+      w = math.min(w, p.longitude);
+      e = math.max(e, p.longitude);
+    }
+    return (LatLng(s, w), LatLng(n, e));
+  }();
+
+  double _shownGlowRoute = -1;
+
+  /// Dezentes Aufleuchten der gefahrenen Strecke (Übersicht am Ziel).
+  static ml.LineLayerProperties _drivenGlowProps(double opacity) => ml.LineLayerProperties(
+        lineColor: '#DCEB4B',
+        lineWidth: 14,
+        lineBlur: 8,
+        lineOpacity: opacity,
+        lineCap: 'round',
+        lineJoin: 'round',
+      );
 
   /// Vorbereitete Outro-Bilder: höchstens eines je Bild anstoßen – alle auf
   /// einmal blockierten die Seite gemessen mehrere Sekunden.
@@ -568,7 +598,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final night = nightStep(_night);
     // Outro: während des Kameraschwenks normale Bilder (sie müssen schnell
     // folgen), ab dem Licht-Reveal scharfe Bilder mit Lichtzustand.
-    final lights = _inOutro && widget.outroTime! >= OutroTimeline.lightsOn - 0.2 ? _outroLights : null;
+    final lights = _inOutro && widget.outroTime! >= widget.outroTimeline!.lightsOn - 0.2 ? _outroLights : null;
     final spritePx = lights == null ? _spritePx : _outroSpritePx;
     var yaw = _yawFrame, pitchFrame = pitch;
     if (_inOutro) {
@@ -773,6 +803,11 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       final t = widget.outroTime!;
       _outroLights = OutroLights.at(tl, t);
       final oc = _outroCam ??= _makeOutroCamera(tl);
+      final glow = 0.7 * tl.routeGlow(t);
+      if ((glow - _shownGlowRoute).abs() > 0.01 || (glow == 0 && _shownGlowRoute != 0)) {
+        _shownGlowRoute = glow;
+        map.setLayerProperties('driven-glow', _drivenGlowProps(glow));
+      }
       final st = _camState = oc.at(t);
       _cameraBearing = st.bearing;
       _cameraZoom = st.zoom;
@@ -895,9 +930,15 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       final pose = _pose;
       final heading = widget.cinematicHeading;
       if (heading != null && heading.rearOnRoute && pose != null && _mix?.crossing == null) {
-        // Heck klebt auf der Route: die Spur endet genau am Heckende.
+        // Heck klebt auf der Route: die Spur läuft bis zum Heckpunkt auf der
+        // Route und endet exakt am gezeichneten Heck des Aufliegers.
         final u = _unitAt(pos.point);
-        map.setGeoJsonSource('driven', _collection(_drivenFeatures(widget.path.at(heading.rearMetersAt(pos.meters, pose.kingpin, u)))));
+        final features = _drivenFeatures(widget.path.at(heading.rearMetersAt(pos.meters, pose.kingpin, u)));
+        final rear = destination(pose.kingpin, CinematicHeading.trailerRearBehindKingpin * u, (pose.trailerHeading + 180) % 360);
+        if (features.isNotEmpty) {
+          ((features.last['geometry'] as Map)['coordinates'] as List).add([rear.longitude, rear.latitude]);
+        }
+        map.setGeoJsonSource('driven', _collection(features));
       } else if (widget.cinematicHeading != null && cinematicTrailRearDefine && pose != null && _mix?.crossing == null) {
         final u = _unitAt(pos.point);
         final back = (pos.meters - 14.0 * u).clamp(0.0, widget.path.totalMeters);
