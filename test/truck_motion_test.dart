@@ -272,15 +272,22 @@ void main() {
       final c = cinematicMotionFor(p);
       final h = c.heading!;
       expect(h.rearOnRoute, isTrue);
-      for (var m = 600.0 * _unit; m < p.totalMeters; m += p.totalMeters / 200) {
-        final pose = h.pose(m, metersPerUnit: _unit);
+      final offs = <double>[];
+      for (var m = p.totalMeters * 0.05; m < p.totalMeters; m += p.totalMeters / 300) {
+        final u = h.unitAt!(p.at(m).point);
+        final pose = h.pose(m, metersPerUnit: u);
         expect(_d(pose.frontAxle, p.at(m).point), lessThan(0.01));
-        final rear = destination(pose.kingpin, CinematicHeading.trailerRearBehindKingpin * _unit,
+        final rear = destination(pose.kingpin, CinematicHeading.trailerRearBehindKingpin * u,
             (pose.trailerHeading + 180) % 360);
-        final onRoute = p.at(h.rearMetersAt(m, pose.kingpin, _unit)).point;
-        if (pose.knick.abs() < 69) expect(_d(rear, onRoute), lessThan(_unit * 0.5), reason: 'm=$m knick=${pose.knick} kp→Route ${_d(pose.kingpin, onRoute)}');
+        final onRoute = p.at(h.rearMetersAt(m, pose.kingpin, u)).point;
+        offs.add(_d(rear, onRoute) / u);
         expect(pose.knick.abs(), lessThanOrEqualTo(70));
       }
+      offs.sort();
+      // Fast immer genau auf der Route; nur wo der Schwenk begrenzt ist,
+      // liegt das Heck kurz knapp daneben (in Fahrzeugmetern).
+      expect(offs[(offs.length * 0.9).floor()], lessThan(0.3));
+      expect(offs.last, lessThan(3));
     });
   });
 
@@ -308,9 +315,16 @@ void main() {
       expect(c.motion.duration, cinematicMotionFor(p).motion.duration);
     });
 
-    test('nachts näher heran statt weit', () {
-      final day = cinematicMotionFor(p, nightAt: (_) => 0).plan.keys.map((k) => k.shot);
-      final night = cinematicMotionFor(p, nightAt: (_) => 1).plan.keys.map((k) => k.shot);
+    test('nachts näher heran statt weit – von vorn', () {
+      final long = _course([(80000, 0), ..._arc(60, 0, 90), (80000, 90)]);
+      final day = cinematicMotionFor(long, nightAt: (_) => 0).plan.keys.map((k) => k.shot);
+      final nightPlan = cinematicMotionFor(long, nightAt: (_) => 1).plan;
+      final night = nightPlan.keys.map((k) => k.shot);
+      // NIGHT-Stützpunkte liegen schräg vor dem Lkw (Bahnwinkel ≈ −150°).
+      final orbits = nightPlan.keys.where((k) => k.shot == 'NIGHT').map((k) => ((k.orbit % 360) + 360) % 360);
+      for (final o in orbits) {
+        expect(o, closeTo(210, 1));
+      }
       expect(day, contains('WIDE'));
       expect(night, contains('NIGHT'));
       expect(night, isNot(contains('WIDE')));

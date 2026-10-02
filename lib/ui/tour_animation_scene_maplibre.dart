@@ -464,7 +464,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     // Im Outro höchstens zwei Bilder gleichzeitig erzeugen – viele parallel
     // blockierten die Seite (gemessen mehrere Sekunden); bis dahin zeigt die
     // Szene das nächstliegende fertige Bild.
-    final busy = widget.outro != null && _framesPending.length >= 2 && (lights != null || _inOutro || _outroPrewarmed);
+    // Normale Fahrbilder nie bremsen – sonst springt der Lkw beim Zielanflug.
+    final busy = widget.outro != null && _framesPending.length >= 2 && (lights != null || _inOutro);
     if (!_framesReady.contains(name) && !_framesPending.contains(name) && !busy) {
       _framesPending.add(name);
       truckArticulatedPng(widget.truckModel,
@@ -522,9 +523,6 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   /// Bildstufen im Outro: während des Schwenks gröber (8° Gier, 10°
   /// Neigung) – die Bewegung verdeckt es, und es braucht halb so viele Bilder.
   (int, int) _outroFrame(double yawDeg, double pitchDeg, double t) {
-    if (t < OutroTimeline.lightsOn - 0.2) {
-      return ((yawDeg / 8).round() * 2, ((pitchDeg / 10).round() * 10).clamp(30, 60));
-    }
     return ((yawDeg / 4).round(), ((pitchDeg / 5).round() * 5).clamp(30, 60));
   }
 

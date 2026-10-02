@@ -30,10 +30,16 @@ CinematicPlan dramatizePlan(
   double pAt(double s) => (motion.metersAt(s.clamp(0.0, T)) / total).clamp(0.0, 1.0);
   double sAt(double p) => motion.secondsAt(p * total);
 
-  ShotKey key(double s, String name, double zoom, {double pitch = 42, double? ahead}) {
+  /// [front]: Kamera schräg vor dem Lkw (wie FRONT 3/4) – nahe Einstellungen
+  /// wirken von vorn deutlich besser als von hinten.
+  ShotKey key(double s, String name, double zoom, {double pitch = 42, double? ahead, bool front = false}) {
     final p = pAt(s);
     final base = plan.at(p);
-    return ShotKey(p, name, orbit: base.orbit, pitch: pitch, zoom: zoom, ahead: ahead ?? base.ahead);
+    return ShotKey(p, name,
+        orbit: base.orbit + (front ? frontOrbit : 0),
+        pitch: pitch,
+        zoom: zoom,
+        ahead: front ? -0.2 : (ahead ?? base.ahead));
   }
 
   // Ruhige Strecken = alles außerhalb der Kamerafahrten.
@@ -58,23 +64,36 @@ CinematicPlan dramatizePlan(
 
     var from = sa, to = sb;
     if (first) {
-      // Start: nah am Lkw, kurz halten, dann langsam öffnen.
-      replace[0] = key(0, 'START', 2.0, pitch: 52, ahead: 0.15);
-      extra.add(key(2.5, 'START', 2.0, pitch: 52, ahead: 0.15));
-      from = 2.5 + 4.5; // Öffnen über ≈ 4,5 s
+      // Intro: der Lkw steht, groß von vorn (wie das Hero-Bild). Dann steigt
+      // die Drohne auf, blickt von oben, der Lkw fährt los, die Kamera
+      // öffnet sich – los geht's.
+      replace[0] = key(0, 'START', 2.6, pitch: 55, front: true);
+      extra
+        ..add(key(2.5, 'START', 2.6, pitch: 55, front: true))
+        ..add(key(6.5, 'RISE', 1.2, pitch: 12))
+        ..add(key(8.5, 'RISE', 0.8, pitch: 16));
+      from = 13; // weit öffnen bis ≈ 13 s
     } else {
       from = sa + 4;
     }
     if (last) {
       // Zielanflug: heran, das Outro übernimmt aus dieser Nähe.
       to = sb - 9;
-      extra.add(key(sb - 3, 'APPROACH', 1.4, pitch: 48));
-      replace[1] = key(sb, 'APPROACH', 1.4, pitch: 48);
+      extra.add(key(sb - 3, 'APPROACH', 1.4, pitch: 48, front: true));
+      replace[1] = key(sb, 'APPROACH', 1.4, pitch: 48, front: true);
     } else {
       to = sb - 4;
     }
     if (to - from < 3) continue; // zu kurz für eine eigene Einstellung
     final (name, zoom, pitch) = travel;
+    if (night) {
+      // Nachts von vorn auf die Scheinwerfer (Ein- und Ausdrehen je ≈ 3 s).
+      if (to - from < 8) continue;
+      extra
+        ..add(key(from + 3, name, zoom, pitch: pitch, front: true))
+        ..add(key(to - 3, name, zoom, pitch: pitch, front: true));
+      continue;
+    }
     if (to - from >= 26 && !night) {
       // Sehr lang: weit – mittel – weit.
       final mid = (from + to) / 2;
@@ -108,7 +127,11 @@ CinematicPlan dramatizePlan(
   return CinematicPlan(out);
 }
 
-const _dramaShots = {'START', 'WIDE', 'MEDIUM', 'NIGHT', 'APPROACH'};
+/// Bahnwinkel der nahen Einstellungen: schräg von vorn links – derselbe
+/// Blick wie das Outro (Hero-Kamera −152°).
+const double frontOrbit = -150;
+
+const _dramaShots = {'START', 'RISE', 'WIDE', 'MEDIUM', 'NIGHT', 'APPROACH'};
 
 bool _isDrama(String shot) => _dramaShots.contains(shot);
 

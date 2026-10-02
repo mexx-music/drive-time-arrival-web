@@ -35,6 +35,8 @@ class TourMotion {
     this.slow = 1.6,
     this.maxTurn = 100,
     this.curveRef = 120,
+    this.standHold = 0,
+    this.startCreep = 0,
     int samples = 4000,
   }) {
     final total = path.totalMeters;
@@ -85,13 +87,18 @@ class TourMotion {
       final a = math.max(0, i - k), b = math.min(n, i + k);
       smooth[i] = (prefix[b + 1] - prefix[a]) / (b - a + 1);
     }
-    // Sanftes Anfahren und Ankommen über je ≈ 2,5 s der Normalfahrt.
+    // Sanftes Ankommen über ≈ 2,5 s der Normalfahrt; Anfahren nach
+    // [startCreep]: am Start fast stehend, dann schwer und weich los.
     final ease = 2.5 * v0 / slow;
+    final startEase = (startCreep > 0 ? 1.2 : 2.5) * v0 / slow;
+    final minStart = startCreep > 0 ? startCreep : 0.25;
     for (var i = 0; i <= n; i++) {
       final m = i * dm;
-      final e = math.min(1.0, math.min(m, total - m) / math.max(1, ease));
-      final ramp = 0.25 + 0.75 * e * e * (3 - 2 * e);
-      smooth[i] /= ramp;
+      final eEnd = math.min(1.0, (total - m) / math.max(1, ease));
+      final eStart = math.min(1.0, m / math.max(1, startEase));
+      final rEnd = 0.25 + 0.75 * eEnd * eEnd * (3 - 2 * eEnd);
+      final rStart = minStart + (1 - minStart) * eStart * eStart * (3 - 2 * eStart);
+      smooth[i] /= math.min(rEnd, rStart);
     }
     // Kumulierte Zeit.
     _t.add(0);
@@ -112,16 +119,24 @@ class TourMotion {
   /// Weiche Kurvenbremse: bei dieser Drehrate (°/s, im Reisetempo) halbes Tempo.
   final double curveRef;
 
+  /// So viele Sekunden steht der Lkw am Start, bevor er anfährt.
+  final double standHold;
+
+  /// Intro: Starttempo als Anteil des Reisetempos (0 = wie bisher 25 %).
+  final double startCreep;
+
   final List<double> _t = [];
   double _dm = 1;
 
   static double _unitGuess(ArticulatedTrack track) =>
       track.path.totalMeters <= 0 ? 1 : 3.1 * metersPerScreenPoint(tourFollowZoom(track.path.totalMeters) + 0.6, track.path.start.latitude);
 
-  Duration get duration => Duration(microseconds: (_t.last * 1e6).round());
+  Duration get duration => Duration(microseconds: ((_t.last + standHold) * 1e6).round());
 
   /// Fahrzeit (s), zu der das Fahrzeug [meters] erreicht.
-  double secondsAt(double meters) {
+  double secondsAt(double meters) => standHold + _secondsAt(meters);
+
+  double _secondsAt(double meters) {
     final x = meters.clamp(0.0, path.totalMeters) / _dm;
     final i = x.floor().clamp(0, _t.length - 1);
     final j = math.min(i + 1, _t.length - 1);
@@ -129,7 +144,9 @@ class TourMotion {
   }
 
   /// Streckenmeter nach [seconds] Fahrzeit.
-  double metersAt(double seconds) {
+  double metersAt(double seconds) => _metersAt(seconds - standHold);
+
+  double _metersAt(double seconds) {
     if (seconds <= 0) return 0;
     if (seconds >= _t.last) return path.totalMeters;
     var lo = 0, hi = _t.length - 1;
@@ -398,23 +415,81 @@ class CinematicHeading {
   /// Heckende des Aufliegers hinter dem Sattelpunkt (Fahrzeugmeter).
   static const double trailerRearBehindKingpin = 12.4;
 
-  /// Streckenmeter des Routenpunkts, auf dem das Heck liegt: der Punkt
-  /// hinter dem Fahrzeug im Abstand der Aufliegerlänge vom Sattelpunkt.
-  double rearMetersAt(double meters, LatLng kingpin, double metersPerUnit) {
+  /// Höchste Schwenkgeschwindigkeit des Aufliegers (°/s Fahrzeit).
+  static const double trailerMaxTurn = 80;
+
+  /// Heckpunkt auf der Route je Bild (Streckenmeter) und Aufliegerrichtung,
+  /// einmal für die ganze Fahrt verfolgt (60 Werte je Sekunde):
+  /// - das Heck wandert auf der Route nur vorwärts (kein Springen zwischen
+  ///   zwei Routenstellen, wo die Straße eng kurvt oder zurückläuft),
+  /// - gesucht wird vom Sattelpunkt aus rückwärts entlang der Route,
+  /// - der Auflieger schwenkt höchstens [trailerMaxTurn] °/s.
+  /// Vor dem Start: Route gerade nach hinten verlängert.
+  late final (List<double>, List<double>) _rearTrack = () {
+    final unit = unitAt!;
+    final dims = track.dims;
+    final n = _tractor.length;
+    final rearS = <double>[];
+    final trailer = <double>[];
+    var prevS = double.negativeInfinity;
+    double? prevH;
     const d = Distance(calculator: Haversine());
-    final len = trailerRearBehindKingpin * metersPerUnit;
-    var lo = math.max(0.0, meters - 4 * (track.dims.kingpinBehindFront * metersPerUnit + len));
-    var hi = meters;
-    if (d(motion.path.at(lo).point, kingpin) < len) return lo;
-    for (var i = 0; i < 40; i++) {
-      final mid = (lo + hi) / 2;
-      if (d(motion.path.at(mid).point, kingpin) > len) {
-        lo = mid;
-      } else {
-        hi = mid;
+    for (var k = 0; k < n; k++) {
+      final m = motion.metersAt(k / _hz);
+      final front = motion.path.at(m).point;
+      final u = unit(front);
+      final tractor = (_tractor[k] % 360 + 360) % 360;
+      final kp = destination(front, dims.kingpinBehindFront * u, (tractor + 180) % 360);
+      final len = trailerRearBehindKingpin * u;
+      // Rückwärts in kleinen Schritten bis zum ersten Punkt im Abstand len.
+      final step = len / 12;
+      var sOut = m - dims.kingpinBehindFront * u - len; // Fallback: gerade
+      for (var s = m - dims.kingpinBehindFront * u; s >= m - 4 * len; s -= step) {
+        final q = s >= 0 ? motion.path.at(s).point : destination(motion.path.start, -s, (motion.path.at(0).bearing + 180) % 360);
+        if (d(q, kp) >= len) {
+          // fein zwischen s und s + step
+          var lo = s, hi = s + step;
+          for (var r = 0; r < 20; r++) {
+            final mid = (lo + hi) / 2;
+            final qm = mid >= 0 ? motion.path.at(mid).point : destination(motion.path.start, -mid, (motion.path.at(0).bearing + 180) % 360);
+            if (d(qm, kp) >= len) {
+              lo = mid;
+            } else {
+              hi = mid;
+            }
+          }
+          sOut = lo;
+          break;
+        }
       }
+      sOut = math.max(sOut, prevS); // nur vorwärts
+      prevS = sOut;
+      final rear = sOut >= 0 ? motion.path.at(sOut).point : destination(motion.path.start, -sOut, (motion.path.at(0).bearing + 180) % 360);
+      var h = rear == kp ? tractor : _brg(rear, kp);
+      var knick = angleDiff(tractor, h);
+      if (knick.abs() > dims.maxKnick) h = (tractor + knick.sign * dims.maxKnick + 360) % 360;
+      if (prevH != null) {
+        const lim = trailerMaxTurn / _hz;
+        h = (prevH + angleDiff(prevH, h).clamp(-lim, lim) + 360) % 360;
+        knick = angleDiff(tractor, h);
+        if (knick.abs() > dims.maxKnick) h = (tractor + knick.sign * dims.maxKnick + 360) % 360;
+      }
+      prevH = h;
+      rearS.add(sOut);
+      trailer.add(h);
     }
-    return lo;
+    return (rearS, trailer);
+  }();
+
+  /// Streckenmeter des Routenpunkts, auf dem das Heck liegt (für die Spur).
+  double rearMetersAt(double meters, LatLng kingpin, double metersPerUnit) =>
+      math.max(0.0, _at(_rearTrack.$1, meters.clamp(0.0, motion.path.totalMeters)));
+
+  double _atAngle(List<double> a, double meters) {
+    final x = motion.secondsAt(meters) * _hz;
+    final i = x.floor().clamp(0, a.length - 1);
+    final j = math.min(i + 1, a.length - 1);
+    return (a[i] + angleDiff(a[i], a[j]) * (x - i) + 360) % 360;
   }
 
   /// Pose bei [meters]: Vorderachse exakt auf der Route, Richtungen stabilisiert.
@@ -423,16 +498,7 @@ class CinematicHeading {
     final front = motion.path.at(m).point;
     final tractor = (_at(_tractor, m) % 360 + 360) % 360;
     var trailer = (tractor + _at(_knick, m) + 360) % 360;
-    if (rearOnRoute) {
-      final kp = destination(front, track.dims.kingpinBehindFront * metersPerUnit, (tractor + 180) % 360);
-      final rear = motion.path.at(rearMetersAt(m, kp, metersPerUnit)).point;
-      if (rear != kp) {
-        trailer = _brg(rear, kp);
-        var k = (trailer - tractor) % 360;
-        if (k > 180) k -= 360;
-        if (k.abs() > track.dims.maxKnick) trailer = (tractor + k.sign * track.dims.maxKnick + 360) % 360;
-      }
-    }
+    if (rearOnRoute) trailer = _atAngle(_rearTrack.$2, m);
     final dims = track.dims;
     // An der Route geführt: Sattelpunkt auf der gefahrenen Linie.
     final kingpin = rearAnchor || rearOnRoute
@@ -495,7 +561,7 @@ const bool cinematicTrailRearDefine = bool.fromEnvironment('CINEMATIC_TRAIL_REAR
       ? track
       : ArticulatedTrack(path,
           unitAt: (p) => 5 * ms * 0.62 * metersPerScreenPoint(zoom, p.latitude), inertia: cinematicTruckInertia);
-  final motion = TourMotion(path: path, oldDrive: oldDrive, track: motionTrack);
+  final motion = TourMotion(path: path, oldDrive: oldDrive, track: motionTrack, startCreep: dramaturgy ? 0.03 : 0);
   final plan = retimePlan(cinematicPlanFor(path, demo: demo), motion, oldDrive);
   return (
     motion: motion,
