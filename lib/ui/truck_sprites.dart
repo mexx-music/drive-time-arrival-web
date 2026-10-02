@@ -179,6 +179,13 @@ class TruckBranding {
     this.cab = const Color(0xFF0D47A1),
     this.trailer = const Color(0xFFF5F7FA),
     this.text = const Color(0xFF1B2733),
+    this.roof,
+    this.accent,
+    this.skirt,
+    this.subText,
+    this.secondaryText,
+    this.secondaryColor = const Color(0xFFC62828),
+    this.rearText,
   });
 
   final String id;
@@ -189,10 +196,46 @@ class TruckBranding {
   final Color trailer;
   final Color text;
 
+  /// Lackierung der Zugmaschine: Dach/oberer Kabinenrand und Zierstreifen
+  /// (null = einfarbig wie bisher).
+  final Color? roof;
+  final Color? accent;
+
+  /// Seitenschürze unter dem Auflieger (null = dunkles Fahrwerk).
+  final Color? skirt;
+
+  /// Zeile unter dem Schriftzug, z. B. ein Claim.
+  final String? subText;
+
+  /// Zweiter, kleinerer Schriftzug in der vorderen Aufliegerhälfte.
+  final String? secondaryText;
+  final Color secondaryColor;
+
+  /// Kleiner Schriftzug oben an der Hecktür.
+  final String? rearText;
+
+  /// Mit Lackierung (Livery): Schriftzug in der hinteren Aufliegerhälfte statt
+  /// über die ganze Seite.
+  bool get livery => roof != null || subText != null;
+
   static const neutral = TruckBranding(id: 'neutral');
 
-  /// Testschriftzug zur Lesbarkeitsprüfung – KEIN echtes Firmen-Branding.
-  static const gartnerTest = TruckBranding(id: 'gartner-test', sideText: 'GARTNER');
+  /// GARTNER-Testlackierung nach den Referenzfotos (grün-gelbe Zugmaschine,
+  /// weißer Kühlauflieger, Schriftzug hinten, rote Schürze) – Arbeitsstand
+  /// zur Wirkung, KEIN freigegebenes Firmen-Branding.
+  static const gartnerTest = TruckBranding(
+    id: 'gartner-test',
+    sideText: 'GARTNER',
+    cab: Color(0xFF0E8A5A),
+    trailer: Color(0xFFF7F8F8),
+    text: Color(0xFF1A1A1A),
+    roof: Color(0xFFF2C21B),
+    accent: Color(0xFFF2C21B),
+    skirt: Color(0xFFC62828),
+    subText: 'THE WORLD OF TRANSPORT',
+    secondaryText: 'THERMO-EXPRESS',
+    rearText: 'GARTNER',
+  );
 }
 
 /// Fahrzeug = Typ + Branding.
@@ -312,6 +355,10 @@ void _decorateSide(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, T
     if (text == null) return;
     // Schrift in einem 1000 × 1000 Feld setzen und auf die Fläche skalieren.
     c.scale(1 / 1000, 1 / 1000);
+    if (model.branding.livery) {
+      _liverySide(c, f, model.branding);
+      return;
+    }
     final tp = TextPainter(
       text: TextSpan(
         text: text,
@@ -332,6 +379,39 @@ void _decorateSide(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, T
     c.scale(sx, sy);
     tp.paint(c, Offset.zero);
   });
+}
+
+/// Aufliegerseite mit Lackierung (1000 × 1000 Feld, u nach rechts in
+/// Leserichtung von außen): Schriftzug in der hinteren Hälfte, darunter der
+/// Claim, vorn der zweite Schriftzug – wie auf den Referenzfotos. Die linke
+/// Seite liest von vorn nach hinten (hinten = rechts), die rechte umgekehrt.
+void _liverySide(Canvas c, ProjectedFace f, TruckBranding b) {
+  final rearRight = f.side == FaceSide.left;
+  TextPainter text(String s, Color color, FontWeight weight) => TextPainter(
+        text: TextSpan(text: s, style: TextStyle(fontSize: 400, fontWeight: weight, color: color, height: 1)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+  void place(TextPainter tp, double left, double width, double top, double maxHeight) {
+    // Seite ist ~4,7× so lang wie hoch: Höhe unabhängig von der Breite.
+    final sx = width / tp.width;
+    final sy = maxHeight / tp.height;
+    c.save();
+    c.translate(left, top);
+    c.scale(sx, sy);
+    tp.paint(c, Offset.zero);
+    c.restore();
+  }
+
+  // Hauptschriftzug: ~40 % der Länge, oberes Mitteldrittel, hintere Hälfte.
+  final mainLeft = rearRight ? 520.0 : 80.0;
+  place(text(b.sideText!, b.text, FontWeight.w900), mainLeft, 400, 300, 230);
+  if (b.subText != null) {
+    place(text(b.subText!, b.text, FontWeight.w600), mainLeft + 10, 380, 560, 80);
+  }
+  if (b.secondaryText != null) {
+    final secLeft = rearRight ? 80.0 : 600.0;
+    place(text(b.secondaryText!, b.secondaryColor, FontWeight.w800), secLeft, 320, 420, 110);
+  }
 }
 
 /// Nachtfaktor in Achtelstufen – so wenige Fahrzeugbilder wie nötig, und
@@ -379,6 +459,9 @@ Future<Uint8List> truckArticulatedPng(
     extraTrailerBoxes: [
       if (model.trailer == TrailerKind.reefer)
         const TruckBox(name: 'reefer-unit', fromF: 1.2, toF: 1.6, halfWidth: 0.85, fromZ: 2.4, toZ: 3.6),
+      // Seitenschürze zwischen Stützen und Achsen (Referenz: rot).
+      if (model.branding.skirt != null)
+        const TruckBox(name: 'skirt', fromF: -8.5, toF: -1.5, halfWidth: 1.22, fromZ: 0.45, toZ: 1.1),
     ],
   );
   var ext = 0.0;
@@ -418,10 +501,13 @@ Future<Uint8List> truckArticulatedPng(
           ..color = Color.lerp(const Color(0x55000000), const Color(0x33000000), n)!
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
 
+    final b = model.branding;
     for (final f in faces) {
       final base = switch (f.box.name) {
-        'cab' => model.branding.cab,
-        'trailer' => model.branding.trailer,
+        'cab' when f.side == FaceSide.top && b.roof != null => b.roof!,
+        'cab' => b.cab,
+        'trailer' => b.trailer,
+        'skirt' => b.skirt!,
         'reefer-unit' => const Color(0xFFB0BEC5),
         _ => const Color(0xFF263238),
       };
@@ -437,14 +523,78 @@ Future<Uint8List> truckArticulatedPng(
       if (f.box.name == 'trailer' && (f.side == FaceSide.left || f.side == FaceSide.right)) {
         _decorateSide(c, f, px, model);
       }
+      if (f.box.name == 'cab' && f.side != FaceSide.top && f.side != FaceSide.bottom && b.roof != null) {
+        _cabLivery(c, f, px, b, n);
+      }
       if (f.box.name == 'cab' && f.side == FaceSide.front) {
         _windshield(c, f, px, night: n);
         if (n > 0) _headlamps(c, f, px, n);
+      }
+      if (f.box.name == 'trailer' && f.side == FaceSide.back && b.rearText != null) {
+        _rearText(c, f, px, b);
       }
       if (n > 0 && f.box.name == 'trailer' && f.side == FaceSide.back) {
         _taillights(c, f, px, n);
       }
     }
+  });
+}
+
+/// Kabine: gelber oberer Rand (Dachbereich) ringsum, Zierstreifen schräg
+/// über die Seiten, gelbe Blende über der Frontscheibe.
+void _cabLivery(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, TruckBranding b, double n) {
+  final roof = Color.lerp(Colors.black, b.roof!, f.shade * (1 - 0.28 * n))!;
+  final accent = Color.lerp(Colors.black, b.accent ?? b.roof!, f.shade * (1 - 0.28 * n))!;
+  _inFace(c, f, px, (c) {
+    if (f.side == FaceSide.front) {
+      // Gelbe Blende über der Scheibe mit Schriftzug (Referenz: Sonnenblende).
+      c.drawRect(const Rect.fromLTWH(0, 0, 1, 0.11), Paint()..color = roof);
+      if (b.sideText != null) {
+        c.save();
+        c.scale(1 / 1000, 1 / 1000);
+        final tp = TextPainter(
+          text: TextSpan(text: b.sideText, style: TextStyle(fontSize: 400, fontWeight: FontWeight.w900, color: b.text, height: 1)),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        c.translate(220, 15);
+        c.scale(560 / tp.width, 80 / tp.height);
+        tp.paint(c, Offset.zero);
+        c.restore();
+      }
+      return;
+    }
+    if (f.side == FaceSide.back) {
+      c.drawRect(const Rect.fromLTWH(0, 0, 1, 0.16), Paint()..color = roof);
+      return;
+    }
+    // Seiten: u läuft von außen gesehen; vorn ist links (linke Seite) bzw.
+    // rechts (rechte Seite).
+    final frontLeft = f.side == FaceSide.left;
+    double u(double fromFront) => frontLeft ? fromFront : 1 - fromFront;
+    c.drawRect(const Rect.fromLTWH(0, 0, 1, 0.16), Paint()..color = roof);
+    final stripe = Paint()
+      ..color = accent
+      ..strokeWidth = 0.035
+      ..style = PaintingStyle.stroke;
+    for (final d in [0.0, 0.07]) {
+      c.drawLine(Offset(u(0.08 + d), 0.92), Offset(u(0.95), 0.42 + d), stripe);
+    }
+  });
+}
+
+/// Kleiner Schriftzug oben an der Hecktür.
+void _rearText(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, TruckBranding b) {
+  _inFace(c, f, px, (c) {
+    c.scale(1 / 1000, 1 / 1000);
+    final tp = TextPainter(
+      text: TextSpan(text: b.rearText, style: TextStyle(fontSize: 400, fontWeight: FontWeight.w900, color: b.text, height: 1)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final sx = 640 / tp.width;
+    final sy = math.min(120 / tp.height, sx * 2);
+    c.translate(180, 60);
+    c.scale(sx, sy);
+    tp.paint(c, Offset.zero);
   });
 }
 

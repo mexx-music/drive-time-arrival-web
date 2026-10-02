@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:driverroute_eta/animation/cinematic_camera.dart' show CameraMode;
 import 'package:driverroute_eta/animation/country_borders.dart';
+import 'package:driverroute_eta/animation/daylight.dart' show DayNightMode;
 import 'package:driverroute_eta/animation/tour_path.dart';
 import 'package:driverroute_eta/animation/tour_story.dart';
 import 'package:driverroute_eta/logic/eta_calculator.dart';
@@ -10,7 +12,9 @@ import 'package:driverroute_eta/main.dart';
 import 'package:driverroute_eta/services/maps_proxy.dart';
 import 'package:driverroute_eta/tour/tour_scope.dart';
 import 'package:driverroute_eta/ui/map_osm_view.dart';
+import 'package:driverroute_eta/ui/tour_animation_scene_maplibre.dart';
 import 'package:driverroute_eta/ui/tour_animation_view.dart';
+import 'package:driverroute_eta/ui/truck_sprites.dart' show TruckView;
 import 'package:driverroute_eta/utils/polyline.dart' show decodePolyline;
 import 'package:driverroute_eta/ui/tour_story_overlay.dart';
 import 'package:flutter/gestures.dart';
@@ -34,6 +38,9 @@ class _Proxy {
   /// nur als Gerade Start → Ziel – die Animation darf sie nicht benutzen.
   List<List<double>>? geometry;
   bool straightOverview = false;
+
+  /// Etappen ohne Polyline – dann bleibt nur Googles Übersichtslinie.
+  bool noStepPolylines = false;
 
   int get providerCalls => requests
       .where((r) => const {'/api/directions', '/api/geocode', '/api/autocomplete'}.contains(r.url.path))
@@ -68,6 +75,13 @@ class _Proxy {
     route0['overview_polyline'] = {
       'points': encodePolyline(straightOverview ? [pts.first, pts.last] : pts)
     };
+    if (noStepPolylines) {
+      for (final leg in (route0['legs'] as List).cast<Map<String, dynamic>>()) {
+        for (final st in (leg['steps'] as List).cast<Map<String, dynamic>>()) {
+          st.remove('polyline');
+        }
+      }
+    }
     resp['routes'] = [route0];
     return _j(200, resp);
   }
@@ -784,6 +798,53 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<MapOsmView>(find.byType(MapOsmView)).route.length, steps.length);
       Navigator.of(tester.element(find.byType(MapOsmView))).pop();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('Übersichtslinie nur als Rückfall, wenn Etappen keine Geometrie haben', (tester) async {
+      final geometry = <List<double>>[[48.09, 13.87], [48.70, 13.20], [49.40, 11.20], [53.55, 9.99]];
+      await pumpApp(tester);
+      proxy
+        ..geometry = geometry
+        ..noStepPolylines = true;
+      await calculate(tester);
+      await tester.ensureVisible(animateButton);
+      await tester.tap(animateButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      final path = tester.widget<TourAnimationView>(find.byType(TourAnimationView)).path;
+      // Übersicht (hier = Rohpunkte) statt nichts – und nie eine Luftlinie.
+      expect(path.points.length, decodePolyline(encodePolyline(geometry)).length);
+      const d = Distance(calculator: Haversine());
+      expect(path.totalMeters, greaterThan(d(path.start, path.end) * 1.01));
+    });
+
+    testWidgets('„Tour animieren“: 2.5D-Cinematic aus der Planung, 2D als Rückfall', (tester) async {
+      await pumpApp(tester);
+      await calculate(tester);
+      final afterCalc = proxy.requests.length;
+      await tester.ensureVisible(animateButton);
+      await tester.tap(animateButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      final view = tester.widget<TourAnimationView>(find.byType(TourAnimationView));
+      expect(view.startIn25D, isTrue);
+      expect(view.cameraMode, CameraMode.cinematic);
+      expect(view.truckView, TruckView.articulated);
+      expect(view.dayNight, DayNightMode.plan); // Planzeit, keine Demo-Zeit
+      expect(view.cinematicDemo, isFalse);
+      expect(view.truckModel.branding.id, 'gartner-test');
+      // Im Test lädt die Vektorkarte nicht (kein Netz): die Ansicht fällt
+      // von selbst auf die bisherige 2D-Karte zurück und fährt dort.
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.byType(TourAnimationScene), findsOneWidget);
+      expect(find.byType(TourAnimationSceneMapLibre), findsNothing);
+      await tester.pump(const Duration(seconds: 2));
+      expect(progressOf(tester), greaterThan(0));
+      expect(proxy.requests.length, afterCalc); // kein Provider-Aufruf
+      await tester.tap(find.byTooltip('Schließen'));
       await tester.pumpAndSettle();
     });
 

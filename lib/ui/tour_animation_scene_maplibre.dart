@@ -53,7 +53,11 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.cameraDebug = false,
     this.dayNight = DayNightMode.off,
     this.eta,
+    this.onUnavailable,
   });
+
+  /// Vektorkarte (Stil) nicht erreichbar – die Ansicht fällt auf 2D zurück.
+  final VoidCallback? onUnavailable;
 
   /// Kamera: ruhige Folgekamera oder mit wenigen Drohnenfahrten.
   final CameraMode cameraMode;
@@ -728,6 +732,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
           future: _style,
           builder: (context, snap) {
             if (snap.hasError) {
+              final fallback = widget.onUnavailable;
+              if (fallback != null) WidgetsBinding.instance.addPostFrameCallback((_) => fallback());
               return const Center(child: Text('Kartenstil nicht erreichbar (OpenFreeMap).'));
             }
             if (!snap.hasData) return const Center(child: CircularProgressIndicator());

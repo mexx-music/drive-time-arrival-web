@@ -142,6 +142,18 @@ class _TourAnimationViewState extends State<TourAnimationView>
     });
   }
 
+  /// 2.5D nicht verfügbar (Vektorkarte lädt nicht): zurück auf 2D und die
+  /// Fahrt dort starten bzw. fortsetzen.
+  void _onMapUnavailable() {
+    if (!mounted || !_maplibre) return;
+    final resume = _waitForMap;
+    setState(() {
+      _maplibre = false;
+      _waitForMap = false;
+    });
+    if (resume) _play();
+  }
+
   void _onMapReady() {
     if (!_waitForMap || !mounted) return;
     _waitForMap = false;
@@ -304,6 +316,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 toName: widget.toName,
                 storyEvents: _timeline.events,
                 onReady: _onMapReady,
+                onUnavailable: _onMapUnavailable,
                 truckView: widget.truckView,
                 truckModel: widget.truckModel,
                 truckBias: widget.truckBias,

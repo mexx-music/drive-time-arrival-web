@@ -2,6 +2,7 @@
 import 'package:latlong2/latlong.dart';
 
 import '../logic/ferry_leg_plan.dart';
+import '../logic/ferry_sea_routes.dart';
 import '../ui/map_osm_view.dart';
 import '../utils/polyline.dart' as poly;
 
@@ -77,7 +78,12 @@ RouteMapPlan planRouteMap({
       segments: [
         MapSegment(points: legs.legA.points, label: 'Anfahrt → ${legs.ferry.from}'),
         if (from != null && to != null)
-          MapSegment(points: [from, to], label: legs.ferry.name, isFerry: true),
+          // Seestrecke über Wasser: lokal hinterlegter Seeweg der bekannten
+          // Verbindung (kein Dienst), sonst wie bisher die Gerade.
+          MapSegment(
+              points: ferryLinePoints(legs.ferry.from, legs.ferry.to, from, to),
+              label: legs.ferry.name,
+              isFerry: true),
         MapSegment(points: legs.legB.points, label: '${legs.ferry.to} → Ziel'),
       ],
       stops: stops,

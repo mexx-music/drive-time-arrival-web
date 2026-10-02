@@ -37,7 +37,10 @@ import 'widgets/place_input.dart';
 import 'widgets/duration_input.dart';
 import 'widgets/tour_result_view.dart';
 import 'ui/map_osm_view.dart';
+import 'animation/cinematic_camera.dart' show CameraMode;
+import 'animation/daylight.dart' show DayNightMode;
 import 'ui/tour_animation_view.dart';
+import 'ui/truck_sprites.dart' show TruckBranding, TruckModel, TruckView;
 import 'ui/map_point_picker.dart';
 import 'models/map_waypoint.dart';
 import 'animation/country_borders.dart';
@@ -2024,6 +2027,15 @@ class _HomeScreenState extends State<HomeScreen> {
         countries: CountryIndex.load(),
         fromName: from.isEmpty ? null : from,
         toName: to.isEmpty ? null : to,
+        // 2.5D-Cinematic (MapLibre): gekoppelter Sattelzug, Kamera-Regie,
+        // Tag/Nacht aus der Planzeit, Fähre. Reine Darstellung der fertigen
+        // Berechnung. 2D bleibt per Umschalter – und automatisch, wenn die
+        // Vektorkarte nicht lädt – als Rückfall.
+        startIn25D: true,
+        cameraMode: CameraMode.cinematic,
+        truckView: TruckView.articulated,
+        truckModel: const TruckModel(branding: TruckBranding.gartnerTest),
+        dayNight: DayNightMode.plan,
       ),
     ));
   }
