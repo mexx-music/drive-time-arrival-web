@@ -620,7 +620,13 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     if (shown == null) return null;
     // Größe skaliert mit dem Kamerazoom – der LKW gehört zur Karte.
     final size = _pointsPerMeter / _shownFramePx * math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
-    return {'icon': shown, 'rot': 0.0, 'flat': false, 'size': size};
+    // Zwischen zwei Bildstufen (4°) dreht die Karte weich weiter, das Bild
+    // nicht – bei großem Lkw wirkte das wie Zittern. Den Rest zur echten
+    // Richtung als Bilddrehung ausgleichen.
+    final m = RegExp(r'-y(-?\d+)-').firstMatch(shown);
+    final shownYaw = m == null ? 0.0 : int.parse(m.group(1)!) * 4.0;
+    final residual = angleDiff(shownYaw, angleDiff(_cameraBearing, pose.tractorHeading)).clamp(-6.0, 6.0);
+    return {'icon': shown, 'rot': residual, 'flat': false, 'size': size};
   }
 
   /// Fähre an ihrer Stelle: Bild nach Kurs zur Blickrichtung, Neigung und
