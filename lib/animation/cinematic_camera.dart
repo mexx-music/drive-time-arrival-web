@@ -55,20 +55,24 @@ class CinematicPlan {
 
   static const _f = 'FOLLOW';
 
-  /// Zwei Manöver für lange Touren: links vorbei → schräg von vorn →
+  /// Zoom-Zuschläge: In der Normalfahrt ist der LKW klein (viel Umgebung);
+/// für Seite und Front kommt die KAMERA näher (+0,85 … +1,25 Stufen), statt
+/// das Fahrzeug zu vergrößern.
+///
+/// Zwei Manöver für lange Touren: links vorbei → schräg von vorn →
   /// über die Front auf die rechte Seite zurück; später rechts vorbei.
   /// Kein Manöver in den letzten ≈ 9 % (ruhiger Zielanflug).
   static const _two = [
     ShotKey(0.00, _f),
     ShotKey(0.17, _f),
-    ShotKey(0.29, 'PASS', orbit: -95, pitch: 52, zoom: 0.55, ahead: 0),
-    ShotKey(0.35, 'FRONT 3/4', orbit: -155, pitch: 50, zoom: 0.45, ahead: -0.25),
-    ShotKey(0.39, 'FRONT 3/4', orbit: -165, pitch: 50, zoom: 0.45, ahead: -0.25),
-    ShotKey(0.49, 'RETURN', orbit: -255, pitch: 58, zoom: 0.2, ahead: 0.2),
+    ShotKey(0.29, 'PASS', orbit: -95, pitch: 52, zoom: 1.25, ahead: 0),
+    ShotKey(0.35, 'FRONT 3/4', orbit: -155, pitch: 50, zoom: 1.15, ahead: -0.25),
+    ShotKey(0.39, 'FRONT 3/4', orbit: -165, pitch: 50, zoom: 1.15, ahead: -0.25),
+    ShotKey(0.49, 'RETURN', orbit: -255, pitch: 58, zoom: 0.85, ahead: 0.2),
     ShotKey(0.58, _f, orbit: -360),
     ShotKey(0.70, _f, orbit: -360),
-    ShotKey(0.79, 'PASS', orbit: -265, pitch: 52, zoom: 0.55, ahead: 0),
-    ShotKey(0.84, 'SIDE 3/4', orbit: -250, pitch: 50, zoom: 0.45, ahead: -0.1),
+    ShotKey(0.79, 'PASS', orbit: -265, pitch: 52, zoom: 1.25, ahead: 0),
+    ShotKey(0.84, 'SIDE 3/4', orbit: -250, pitch: 50, zoom: 1.15, ahead: -0.1),
     ShotKey(0.91, _f, orbit: -360),
     ShotKey(1.00, _f, orbit: -360),
   ];
@@ -77,10 +81,10 @@ class CinematicPlan {
   static const _one = [
     ShotKey(0.00, _f),
     ShotKey(0.25, _f),
-    ShotKey(0.38, 'PASS', orbit: -95, pitch: 52, zoom: 0.55, ahead: 0),
-    ShotKey(0.45, 'FRONT 3/4', orbit: -155, pitch: 50, zoom: 0.45, ahead: -0.25),
-    ShotKey(0.49, 'FRONT 3/4', orbit: -165, pitch: 50, zoom: 0.45, ahead: -0.25),
-    ShotKey(0.60, 'RETURN', orbit: -255, pitch: 58, zoom: 0.2, ahead: 0.2),
+    ShotKey(0.38, 'PASS', orbit: -95, pitch: 52, zoom: 1.25, ahead: 0),
+    ShotKey(0.45, 'FRONT 3/4', orbit: -155, pitch: 50, zoom: 1.15, ahead: -0.25),
+    ShotKey(0.49, 'FRONT 3/4', orbit: -165, pitch: 50, zoom: 1.15, ahead: -0.25),
+    ShotKey(0.60, 'RETURN', orbit: -255, pitch: 58, zoom: 0.85, ahead: 0.2),
     ShotKey(0.70, _f, orbit: -360),
     ShotKey(1.00, _f, orbit: -360),
   ];

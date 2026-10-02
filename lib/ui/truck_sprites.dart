@@ -334,9 +334,25 @@ void _decorateSide(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, T
   });
 }
 
-void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px) {
+/// Nachtfaktor in Achtelstufen – so wenige Fahrzeugbilder wie nötig, und
+/// jeder Schritt ist klein genug, um nicht als Umschalten aufzufallen.
+double nightStep(double night) => (night.clamp(0.0, 1.0) * 8).round() / 8;
+
+/// Frontscheibe: tagsüber hellblau, nachts dunkles Blau-Anthrazit – nie
+/// schwarz, mit leichtem Reflex.
+Color windshieldColor(double night) =>
+    Color.lerp(const Color(0xFF90CAF9), const Color(0xFF1F2B3B), night.clamp(0.0, 1.0))!;
+
+void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, {double night = 0}) {
   _inFace(c, f, px, (c) {
-    c.drawRect(const Rect.fromLTWH(0.1, 0.12, 0.8, 0.32), Paint()..color = const Color(0xFF90CAF9));
+    const glass = Rect.fromLTWH(0.1, 0.12, 0.8, 0.32);
+    c.drawRect(glass, Paint()..color = windshieldColor(night));
+    // Leichter Reflex oben (Himmel), nachts schwächer.
+    c.drawRect(const Rect.fromLTWH(0.1, 0.12, 0.8, 0.08),
+        Paint()..color = Colors.white.withValues(alpha: 0.18 - 0.1 * night));
+    // Kaum merkliche, warme Innenraumwirkung nur nachts.
+    c.drawRect(const Rect.fromLTWH(0.14, 0.3, 0.72, 0.12),
+        Paint()..color = const Color(0xFFFFB74D).withValues(alpha: 0.10 * night));
   });
 }
 
@@ -344,16 +360,18 @@ void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px) {
 
 /// Gekoppelter Sattelzug: Zugmaschine mit [tractorYaw], Auflieger mit
 /// [tractorYaw] + [knick] (Grad, relativ zur Blickrichtung). Sattelpunkt
-/// am Boden = Bildmitte (Anker auf der Karte). [night]: Rücklichter und
-/// Scheinwerfer an.
+/// am Boden = Bildmitte (Anker auf der Karte). [night] 0 (Tag) … 1 (Nacht):
+/// Karosserie gedämpft, Scheibe dunkel, Rücklichter und Scheinwerfer an –
+/// alles gleitend.
 Future<Uint8List> truckArticulatedPng(
   TruckModel model, {
   required double tractorYaw,
   required double knick,
   double pitchDeg = 42,
   double pxPerMeter = 10,
-  bool night = false,
+  double night = 0,
 }) {
+  final n = night.clamp(0.0, 1.0);
   final faces = articulatedFaces(
     tractorYaw: tractorYaw,
     knick: knick,
@@ -397,7 +415,7 @@ Future<Uint8List> truckArticulatedPng(
     c.drawPath(
         shadow.shift(const Offset(1.5, 2)),
         Paint()
-          ..color = Color(night ? 0x33000000 : 0x55000000)
+          ..color = Color.lerp(const Color(0x55000000), const Color(0x33000000), n)!
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
 
     for (final f in faces) {
@@ -407,7 +425,7 @@ Future<Uint8List> truckArticulatedPng(
         'reefer-unit' => const Color(0xFFB0BEC5),
         _ => const Color(0xFF263238),
       };
-      final shade = night ? f.shade * 0.72 : f.shade; // nachts gedämpft
+      final shade = f.shade * (1 - 0.28 * n); // nachts gedämpft
       final poly = Path()..addPolygon([for (final p in f.corners) px(p)], true);
       c.drawPath(poly, Paint()..color = Color.lerp(Colors.black, base, shade)!);
       c.drawPath(
@@ -420,23 +438,23 @@ Future<Uint8List> truckArticulatedPng(
         _decorateSide(c, f, px, model);
       }
       if (f.box.name == 'cab' && f.side == FaceSide.front) {
-        _windshield(c, f, px);
-        if (night) _headlamps(c, f, px);
+        _windshield(c, f, px, night: n);
+        if (n > 0) _headlamps(c, f, px, n);
       }
-      if (night && f.box.name == 'trailer' && f.side == FaceSide.back) {
-        _taillights(c, f, px);
+      if (n > 0 && f.box.name == 'trailer' && f.side == FaceSide.back) {
+        _taillights(c, f, px, n);
       }
     }
   });
 }
 
 /// Rücklichter: zwei dezente rote Leuchten unten am Heck.
-void _taillights(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px) {
+void _taillights(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double n) {
   _inFace(c, f, px, (c) {
     final glow = Paint()
-      ..color = const Color(0x99FF1744)
+      ..color = const Color(0xFFFF1744).withValues(alpha: 0.6 * n)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.04);
-    final lamp = Paint()..color = const Color(0xFFFF5252);
+    final lamp = Paint()..color = const Color(0xFFFF5252).withValues(alpha: n);
     for (final x in [0.04, 0.82]) {
       c.drawRect(Rect.fromLTWH(x - 0.03, 0.78, 0.2, 0.14), glow);
       c.drawRect(Rect.fromLTWH(x, 0.8, 0.14, 0.1), lamp);
@@ -445,33 +463,54 @@ void _taillights(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px) {
 }
 
 /// Scheinwerfer an der Front der Zugmaschine.
-void _headlamps(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px) {
+void _headlamps(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double n) {
   _inFace(c, f, px, (c) {
-    final lamp = Paint()..color = const Color(0xFFFFF8E1);
+    final lamp = Paint()..color = const Color(0xFFFFF8E1).withValues(alpha: n);
     for (final x in [0.06, 0.78]) {
       c.drawRect(Rect.fromLTWH(x, 0.72, 0.16, 0.1), lamp);
     }
   });
 }
 
-/// Lichtkegel vor der Zugmaschine, flach auf der Straße (Spitze unten =
-/// Fahrzeugfront, Kegel nach oben = Fahrtrichtung). 160 × 320 Pixel.
-Future<Uint8List> headlightConePng() => _png(const Size(160, 320), (c) {
-      for (final dx in [-14.0, 14.0]) {
-        final path = Path()
-          ..moveTo(80 + dx, 318)
-          ..lineTo(80 + dx * 0.4 - 46, 20)
-          ..quadraticBezierTo(80 + dx * 0.4, -6, 80 + dx * 0.4 + 46, 20)
+/// Lichtkegel vor der Zugmaschine, flach auf der Straße. Ansatz unten in
+/// der Mitte (= Front der Zugmaschine), Fahrtrichtung nach oben. 256 × 448.
+///
+/// Zwei überlappende, weiche Lichtfelder: am Ansatz am hellsten und breit
+/// genug, nach vorn und zu den Rändern sanft auslaufend – keine harte
+/// Dreiecksform. Neutral- bis warmweiß.
+const Size headlightConeSize = Size(256, 448);
+
+Future<Uint8List> headlightConePng() => _png(headlightConeSize, (c) {
+      const w = 256.0, h = 448.0;
+      const warm = Color(0xFFFFF4D6);
+      for (final dx in [-22.0, 22.0]) {
+        // Lichtfeld eines Scheinwerfers: schlanker Fächer.
+        final beam = Path()
+          ..moveTo(w / 2 + dx - 10, h - 6)
+          ..lineTo(w / 2 + dx * 1.6 - 74, h * 0.18)
+          ..quadraticBezierTo(w / 2 + dx * 1.6, h * 0.02, w / 2 + dx * 1.6 + 74, h * 0.18)
+          ..lineTo(w / 2 + dx + 10, h - 6)
           ..close();
         c.drawPath(
-          path,
+          beam,
           Paint()
             ..shader = ui.Gradient.linear(
-              const Offset(0, 318),
-              const Offset(0, 10),
-              [const Color(0xB0FFF3D0), const Color(0x00FFF3D0)],
+              const Offset(0, h - 6),
+              const Offset(0, h * 0.06),
+              [warm.withValues(alpha: 0.9), warm.withValues(alpha: 0.55), warm.withValues(alpha: 0.0)],
+              [0.0, 0.35, 1.0],
             )
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14),
         );
       }
+      // Helle Zone direkt vor dem Fahrzeug.
+      c.drawOval(
+        const Rect.fromLTWH(w / 2 - 70, h - 150, 140, 150),
+        Paint()
+          ..shader = ui.Gradient.radial(
+            const Offset(w / 2, h - 30),
+            110,
+            [warm.withValues(alpha: 0.55), warm.withValues(alpha: 0.0)],
+          ),
+      );
     });

@@ -193,15 +193,12 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         },
       },
     ]));
-    await map.addFillLayer('veil', 'night-veil',
-        const ml.FillLayerProperties(fillColor: '#0B1730', fillOpacity: 0.0));
+    await map.addFillLayer('veil', 'night-veil', _veilProps(0));
     await map.addImage('headlights', await headlightConePng());
 
     await map.addGeoJsonSource('country', _collection(const []));
-    await map.addFillLayer('country', 'country-fill',
-        const ml.FillLayerProperties(fillColor: '#1565C0', fillOpacity: 0.0));
-    await map.addLineLayer('country', 'country-line',
-        const ml.LineLayerProperties(lineColor: '#1565C0', lineWidth: 2, lineOpacity: 0.0));
+    await map.addFillLayer('country', 'country-fill', _countryFillProps(0));
+    await map.addLineLayer('country', 'country-line', _countryLineProps(0));
 
     // Die ganze Route mit ALLEN Punkten der Berechnung (Etappen-Geometrie),
     // nicht ausgedünnt – MapLibre vereinfacht je Zoomstufe selbst passend.
@@ -253,17 +250,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     // Lichtkegel: flach auf der Straße, gedreht mit der ZUGMASCHINE (nicht mit
     // der Kamera) – unter dem Fahrzeug.
     await map.addGeoJsonSource('lights', _collection(const []));
-    await map.addSymbolLayer('lights', 'headlight-cone', const ml.SymbolLayerProperties(
-      iconImage: 'headlights',
-      iconSize: ['get', 'size'],
-      iconRotate: ['get', 'rot'],
-      iconRotationAlignment: 'map',
-      iconPitchAlignment: 'map',
-      iconAnchor: 'bottom',
-      iconOpacity: 0.0,
-      iconAllowOverlap: true,
-      iconIgnorePlacement: true,
-    ), belowLayerId: 'truck-flat');
+    await map.addSymbolLayer('lights', 'headlight-cone', _coneProps(0), belowLayerId: 'truck-flat');
     _ready = true;
     _update(force: true);
     widget.onReady?.call();
@@ -364,7 +351,12 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   /// Sprite: Bildpunkte je Fahrzeugmeter; Anzeige: Punkte je Meter bei
   /// Folge-Zoom (mit [truckScale]).
   static const _spritePx = 12.0;
-  double get _pointsPerMeter => 5 * widget.truckScale;
+
+  /// In der Normalfahrt kleiner (62 % des bisherigen Symbols): der LKW fügt
+  /// sich in die Karte, Route und Landschaft bekommen Raum. Nah wird er nur,
+  /// wenn die Kamera in einem Shot heranfährt (Zoom), nie durch Vergrößern.
+  static const followSize = 0.62;
+  double get _pointsPerMeter => 5 * widget.truckScale * followSize;
 
   /// Kartenmeter je Fahrzeugmeter – aus dem FOLGE-Zoom, nicht aus dem Zoom
   /// der aktuellen Kamerafahrt: die Kamera verändert die Fahrzeuggeometrie nie.
@@ -373,8 +365,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
 
   int _yawFrame = 0, _knickFrame = 0;
 
-  String _articulatedName(int yaw, int knick, int pitch, bool night) =>
-      'art-${widget.truckModel.id}-p$pitch-y$yaw-k$knick-${night ? 'n' : 'd'}';
+  String _articulatedName(int yaw, int knick, int pitch, double night) =>
+      'art-${widget.truckModel.id}-p$pitch-y$yaw-k$knick-n${(night * 8).round()}';
 
   Map<String, dynamic>? _articulatedProps(TourPosition pos) {
     final pose = _pose = articulate(widget.path, pos.meters, metersPerUnit: _unitAt(pos.point));
@@ -383,7 +375,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     _yawFrame = frameFor(angleDiff(_cameraBearing, pose.tractorHeading), _yawFrame, step: 4);
     _knickFrame = frameFor(pose.knick, _knickFrame, step: 3);
     final pitch = ((_cameraPitch / 5).round() * 5).clamp(30, 60);
-    final night = _night > 0.5;
+    // Nacht in Achtelstufen: Scheibe, Karosserie, Lichter gleitend.
+    final night = nightStep(_night);
     final name = _articulatedName(_yawFrame, _knickFrame, pitch, night);
     if (!_framesReady.contains(name) && !_framesPending.contains(name)) {
       _framesPending.add(name);
@@ -460,6 +453,37 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         };
     }
   }
+
+  // ------------------------------------------------------ Ebenen-Eigenschaften
+  //
+  // Immer VOLLSTÄNDIG übergeben: maplibre_gl schickt bei setLayerProperties
+  // alle nicht gesetzten Eigenschaften als null mit und setzt sie damit auf
+  // den Standard zurück (Bild, Größe, Farbe …). Nur die Deckkraft zu setzen,
+  // hatte Lichtkegel, Länderfarbe und Nachtblau gelöscht.
+
+  double _shownGlow = -1;
+
+  static ml.FillLayerProperties _veilProps(double opacity) =>
+      ml.FillLayerProperties(fillColor: '#0B1730', fillOpacity: opacity);
+
+  static ml.FillLayerProperties _countryFillProps(double opacity) =>
+      ml.FillLayerProperties(fillColor: '#1565C0', fillOpacity: opacity);
+
+  static ml.LineLayerProperties _countryLineProps(double opacity) =>
+      ml.LineLayerProperties(lineColor: '#1565C0', lineWidth: 2, lineOpacity: opacity);
+
+  /// Lichtkegel: flach auf der Straße, gedreht mit der Zugmaschine.
+  static ml.SymbolLayerProperties _coneProps(double opacity) => ml.SymbolLayerProperties(
+        iconImage: 'headlights',
+        iconSize: ['get', 'size'],
+        iconRotate: ['get', 'rot'],
+        iconRotationAlignment: 'map',
+        iconPitchAlignment: 'map',
+        iconAnchor: 'bottom',
+        iconOpacity: opacity,
+        iconAllowOverlap: true,
+        iconIgnorePlacement: true,
+      );
 
   Map<String, dynamic> _point(LatLng p, Map<String, dynamic> props) => {
         'type': 'Feature',
@@ -540,8 +564,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       _night = widget.finished ? 0 : _daylight.update(target, dt);
       if ((_night - _shownVeil).abs() > 0.004) {
         _shownVeil = _night;
-        map.setLayerProperties('night-veil', ml.FillLayerProperties(fillOpacity: 0.55 * _night));
-        map.setLayerProperties('headlight-cone', ml.SymbolLayerProperties(iconOpacity: _night));
+        map.setLayerProperties('night-veil', _veilProps(0.55 * _night));
+        map.setLayerProperties('headlight-cone', _coneProps(0.95 * _night));
       }
     }
 
@@ -553,11 +577,15 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
             ? _point(pos.point, {'icon': 'truck-top', 'rot': pose.tractorHeading, 'flat': true, 'size': 0.3})
             : _point(pose.kingpin, props),
       ]));
-      if (widget.dayNight != DayNightMode.off) {
-        // Kegel an der Fahrzeugfront, so lang wie ≈ 2 Zugmaschinen.
-        final coneSize = _pointsPerMeter * 9 / 320 * math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
+      if (widget.dayNight != DayNightMode.off && _night > 0.01) {
+        // Kegel ab der Kabinenfront, ≈ 16 Fahrzeugmeter lang, gedreht mit
+        // der Zugmaschine; wächst wie der LKW mit dem Kamerazoom.
+        final unit = _unitAt(pos.point);
+        final light = headlightPlacement(pose, metersPerUnit: unit);
+        final scale = math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
+        final coneSize = 16 * _pointsPerMeter * scale / headlightConeSize.height;
         map.setGeoJsonSource('lights', _collection([
-          _point(pose.frontAxle, {'rot': pose.tractorHeading, 'size': coneSize}),
+          _point(light.apex, {'rot': light.heading, 'size': coneSize}),
         ]));
       }
     } else {
@@ -595,8 +623,11 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       ]));
     }
     final glow = iso == null ? 0.0 : storyFade(widget.frame.eventProgress);
-    map.setLayerProperties('country-fill', ml.FillLayerProperties(fillOpacity: 0.16 * glow));
-    map.setLayerProperties('country-line', ml.LineLayerProperties(lineOpacity: 0.75 * glow));
+    if ((glow - _shownGlow).abs() > 0.004 || (glow == 0 && _shownGlow != 0)) {
+      _shownGlow = glow;
+      map.setLayerProperties('country-fill', _countryFillProps(0.16 * glow));
+      map.setLayerProperties('country-line', _countryLineProps(0.75 * glow));
+    }
   }
 
   @override

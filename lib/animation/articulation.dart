@@ -126,3 +126,10 @@ ArticulatedPose articulate(
 /// 512er-Kacheln).
 double metersPerScreenPoint(double zoom, double lat) =>
     78271.517 * math.cos(lat * math.pi / 180) / math.pow(2, zoom);
+
+/// Lichtkegel der Zugmaschine: Ansatz [ahead] Fahrzeugmeter vor der
+/// Vorderachse (Front der Kabine), Richtung AUSSCHLIESSLICH die der
+/// Zugmaschine – nicht Kamera, nicht Auflieger.
+({LatLng apex, double heading}) headlightPlacement(ArticulatedPose pose,
+        {required double metersPerUnit, double ahead = 0.9}) =>
+    (apex: destination(pose.frontAxle, ahead * metersPerUnit, pose.tractorHeading), heading: pose.tractorHeading);
