@@ -430,7 +430,7 @@ class CinematicHeading {
     }
     final dims = track.dims;
     // An der Route geführt: Sattelpunkt auf der gefahrenen Linie.
-    final kingpin = rearAnchor
+    final kingpin = rearAnchor || rearOnRoute
         ? destination(front, dims.kingpinBehindFront * metersPerUnit, (tractor + 180) % 360)
         : routeGuided
         ? _behind(m, dims.kingpinBehindFront * metersPerUnit)

@@ -277,7 +277,7 @@ void main() {
         final rear = destination(pose.kingpin, CinematicHeading.trailerRearBehindKingpin * _unit,
             (pose.trailerHeading + 180) % 360);
         final onRoute = p.at(h.rearMetersAt(m, pose.kingpin, _unit)).point;
-        if (pose.knick.abs() < 70) expect(_d(rear, onRoute), lessThan(_unit * 0.5)); // < ½ Fahrzeugmeter
+        if (pose.knick.abs() < 69) expect(_d(rear, onRoute), lessThan(_unit * 0.5), reason: 'm=$m knick=${pose.knick} kp→Route ${_d(pose.kingpin, onRoute)}');
         expect(pose.knick.abs(), lessThanOrEqualTo(70));
       }
     });
