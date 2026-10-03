@@ -1,5 +1,13 @@
+import 'dart:typed_data';
+
 /// Ohne Web: nichts zu tun.
 void trackMapImages() {}
 
 /// Ohne Web: nichts zu tun.
 void removeMapImage(String name) {}
+
+/// Ohne Web: nicht möglich – der Aufrufer nimmt den PNG-Weg des Plugins.
+bool addRawMapImage(String name, int width, int height, Uint8List rgba, {required String sameMapAs}) => false;
+
+/// Ohne Web: nichts zu tun.
+void capMapPixelRatio(double max, {required String sameMapAs}) {}

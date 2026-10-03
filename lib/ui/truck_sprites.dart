@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -38,13 +39,49 @@ const _trailer = Color(0xFFF5F7FA);
 const _trailerEdge = Color(0xFF90A4AE);
 const _shadow = Color(0x55000000);
 
-Future<Uint8List> _png(Size size, void Function(Canvas c) paint) async {
+Future<Uint8List> _png(Size size, void Function(Canvas c) paint) => renderSpriteBytes(size, paint);
+
+/// Zeichnet ein Sprite und liefert es als PNG – oder, innerhalb von
+/// [asSpriteBitmap], als rohe RGBA-Pixel (gleiche Pixel, ohne PNG-Umweg).
+Future<Uint8List> renderSpriteBytes(Size size, void Function(Canvas c) paint) async {
+  final raw = Zone.current[_rawSpriteKey] as _RawSprite?;
   final recorder = ui.PictureRecorder();
   paint(Canvas(recorder));
   final image =
       await recorder.endRecording().toImage(size.width.toInt(), size.height.toInt());
-  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+  final bytes = await image.toByteData(
+      format: raw == null ? ui.ImageByteFormat.png : ui.ImageByteFormat.rawStraightRgba);
+  if (raw != null) {
+    raw.width = image.width;
+    raw.height = image.height;
+  }
+  image.dispose();
   return bytes!.buffer.asUint8List();
+}
+
+/// Rohes Sprite für die Karte: RGBA, nicht vormultipliziert.
+class SpriteBitmap {
+  const SpriteBitmap(this.width, this.height, this.rgba);
+  final int width;
+  final int height;
+  final Uint8List rgba;
+}
+
+class _RawSprite {
+  int width = 0;
+  int height = 0;
+}
+
+const _rawSpriteKey = #drivetimeRawSprite;
+
+/// Führt eine der Sprite-Funktionen (z. B. [truckArticulatedPng]) aus und
+/// liefert dieselben Pixel roh statt als PNG. Spart das PNG-Kodieren hier
+/// und das Dekodieren im Kartenplugin – gemessen über die Hälfte der
+/// Rechenzeit während der Tour.
+Future<SpriteBitmap> asSpriteBitmap(Future<Uint8List> Function() draw) async {
+  final raw = _RawSprite();
+  final bytes = await runZoned(draw, zoneValues: {_rawSpriteKey: raw});
+  return SpriteBitmap(raw.width, raw.height, bytes);
 }
 
 /// Sattelzug von oben, Fahrtrichtung nach oben (Norden des Bildes).

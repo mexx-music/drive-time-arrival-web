@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
@@ -8,6 +10,7 @@ import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 
 import '../animation/articulation.dart';
 import '../animation/cinematic_camera.dart';
+import '../animation/cinematic_quality.dart';
 import '../animation/country_borders.dart';
 import '../animation/daylight.dart';
 import '../animation/ferry_cinematic.dart';
@@ -67,7 +70,11 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.onPendingProbe,
     this.heroPhoto,
     this.heroCutout,
+    this.quality = CinematicQuality.previewHigh,
   });
+
+  /// Renderqualität (Vorschau/Film) – nur Darstellung, nie Regie.
+  final CinematicQuality quality;
 
   /// Test/Export: freigestellter Hero-Lkw im Outro.
   final String? heroCutout;
@@ -224,7 +231,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   double _shownOutroVeil = -1;
 
   /// Auflösung der Fahrzeugbilder im Outro (näher dran → schärfer).
-  static const _outroSpritePx = 24.0;
+  double get _outroSpritePx => widget.quality.outroSpritePx;
 
   ml.MapLibreMapController? _map;
   bool _ready = false;
@@ -254,6 +261,9 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final path = widget.path;
     trackMapImages();
     await map.addImage('truck-top', await truckTopPng());
+    // Profil: Kartenfläche mit begrenzter Pixeldichte (HUD bleibt scharf).
+    final maxRatio = widget.quality.maxMapPixelRatio;
+    if (maxRatio != null) capMapPixelRatio(maxRatio, sameMapAs: 'truck-top');
     await map.addImage('truck-rear', await truckRearPng());
     await map.addImage('truck', await truckSidePng(mirrored: false));
     await map.addImage('truck-mirrored', await truckSidePng(mirrored: true));
@@ -454,18 +464,17 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   /// zählen nicht mit (wenige, und sie müssen bereitliegen).
   final Set<String> _spriteUse = <String>{}; // LinkedHashSet: Reihenfolge = Nutzung
 
-  /// Höchstzahl in der Fahrt; ab dem Zielanflug mehr, weil die Bilder des
-  /// Outro-Schwenks vorab entstehen und nicht vor ihrem Einsatz verschwinden
-  /// dürfen.
-  static const maxDriveSprites = 48;
-  static const maxDriveSpritesOutro = 160;
+  /// Höchstzahl je Profil (CinematicQuality): in der Fahrt; ab dem
+  /// Zielanflug mehr, weil die Bilder des Outro-Schwenks vorab entstehen und
+  /// nicht vor ihrem Einsatz verschwinden dürfen.
 
   /// [name] als gerade benutzt vermerken und den Speicher begrenzen.
   void _keepSprite(String name) {
     _spriteUse
       ..remove(name)
       ..add(name);
-    final cap = _outroPrewarmed ? maxDriveSpritesOutro : maxDriveSprites;
+    final q = widget.quality;
+    final cap = _outroPrewarmed ? q.maxDriveSpritesOutro : q.maxDriveSprites;
     if (_spriteUse.length <= cap) return;
     for (final old in _spriteUse.toList()) {
       if (_spriteUse.length <= cap) break;
@@ -479,6 +488,18 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     }
   }
 
+  /// Fahrzeugbild der Karte geben. Im Browser als rohe Pixel direkt an
+  /// MapLibre: das Plugin dekodiert PNGs in reinem Dart Pixel für Pixel –
+  /// gemessen über die Hälfte der Rechenzeit während der Tour. Gleiche
+  /// Pixel, nur ohne den Umweg; sonst wie bisher als PNG.
+  Future<void> _addSprite(String name, Future<Uint8List> Function() draw) async {
+    if (kIsWeb) {
+      final bmp = await asSpriteBitmap(draw);
+      if (addRawMapImage(name, bmp.width, bmp.height, bmp.rgba, sameMapAs: 'truck-top')) return;
+    }
+    await _map?.addImage(name, await draw());
+  }
+
   /// Gezeigtes Bild als benutzt vermerken (ohne erneut zu begrenzen).
   void _touchSprite(String? name) {
     if (name == null || !_spriteUse.remove(name)) return;
@@ -489,7 +510,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
 
   /// Sprite: Bildpunkte je Fahrzeugmeter; Anzeige: Punkte je Meter bei
   /// Folge-Zoom (mit [truckScale]).
-  static const _spritePx = 12.0;
+  double get _spritePx => widget.quality.spritePx;
 
   /// In der Normalfahrt kleiner (62 % des bisherigen Symbols): der LKW fügt
   /// sich in die Karte, Route und Landschaft bekommen Raum. Nah wird er nur,
@@ -517,7 +538,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       _pointsPerMeter * metersPerScreenPoint(_cam?.followZoom ?? _rig.zoom, p.latitude);
 
   int _yawFrame = 0, _knickFrame = 0;
-  double _shownFramePx = _spritePx;
+  late double _shownFramePx = _spritePx;
 
   String _articulatedName(int yaw, int knick, int pitch, double night) =>
       'art-${widget.truckModel.id}-p$pitch-y$yaw-k$knick-n${(night * 8).round()}';
@@ -532,17 +553,18 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final busy = widget.outro != null && _framesPending.length >= 2 && (lights != null || _inOutro);
     if (!_framesReady.contains(name) && !_framesPending.contains(name) && !busy) {
       _framesPending.add(name);
-      truckArticulatedPng(widget.truckModel,
-              tractorYaw: yaw * 4.0,
-              knick: knick * 3.0,
-              pitchDeg: pitch.toDouble(),
-              pxPerMeter: lights == null ? _spritePx : _outroSpritePx,
-              night: night,
-              tailLights: lights == null ? null : math.max(lights.tail, night),
-              headLights: lights == null ? null : math.max(lights.head, night),
-              sweep: lights?.sweep)
-          .then((png) async {
-        await _map?.addImage(name, png);
+      _addSprite(
+              name,
+              () => truckArticulatedPng(widget.truckModel,
+                  tractorYaw: yaw * 4.0,
+                  knick: knick * 3.0,
+                  pitchDeg: pitch.toDouble(),
+                  pxPerMeter: lights == null ? _spritePx : _outroSpritePx,
+                  night: night,
+                  tailLights: lights == null ? null : math.max(lights.tail, night),
+                  headLights: lights == null ? null : math.max(lights.head, night),
+                  sweep: lights?.sweep))
+          .then((_) {
         _framesPending.remove(name);
         _framesReady.add(name);
         (_readyYaws[_poseKey(knick, pitch, night, lights)] ??= {})[yaw] = name;
@@ -701,8 +723,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final name = 'ship-p$pitch-y$_shipYawFrame-n${(night * 8).round()}';
     if (!_framesReady.contains(name) && !_framesPending.contains(name)) {
       _framesPending.add(name);
-      ferryShipPng(yawDeg: _shipYawFrame * 4.0, pitchDeg: pitch.toDouble(), night: night).then((png) async {
-        await _map?.addImage(name, png);
+      final yaw = _shipYawFrame * 4.0;
+      _addSprite(name, () => ferryShipPng(yawDeg: yaw, pitchDeg: pitch.toDouble(), night: night)).then((_) {
         _framesPending.remove(name);
         _framesReady.add(name);
         _keepSprite(name);

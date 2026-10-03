@@ -1,5 +1,6 @@
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
+import 'dart:typed_data';
 
 /// Merkt sich jede MapLibre-Karte, sobald sie ein Bild bekommt (über
 /// `maplibregl.Map.prototype.addImage`). Einmal je Seite; vor dem ersten
@@ -48,4 +49,49 @@ void removeMapImage(String name) {
       // Karte schon entsorgt – ignorieren.
     }
   }
+}
+
+/// Die Karte, die schon das Bild [probe] hat (die eigene Tourkarte).
+JSObject? _mapWith(String probe) {
+  final id = probe.toJS;
+  for (final m in _maps.toList().reversed) {
+    try {
+      final c = m.callMethod<JSObject>('getContainer'.toJS);
+      if (!(c['isConnected'] as JSBoolean).toDart) continue;
+      if ((m.callMethod<JSBoolean>('hasImage'.toJS, id)).toDart) return m;
+    } catch (_) {}
+  }
+  return null;
+}
+
+/// Rohe RGBA-Pixel direkt an MapLibre geben – ohne das PNG-Dekodieren des
+/// Plugins (reines Dart, Pixel für Pixel). Liefert false, wenn die Karte
+/// nicht gefunden wird; dann nimmt der Aufrufer den bisherigen Weg.
+bool addRawMapImage(String name, int width, int height, Uint8List rgba, {required String sameMapAs}) {
+  final m = _mapWith(sameMapAs);
+  if (m == null) return false;
+  try {
+    if ((m.callMethod<JSBoolean>('hasImage'.toJS, name.toJS)).toDart) return true;
+    final image = JSObject()
+      ..['width'] = width.toJS
+      ..['height'] = height.toJS
+      ..['data'] = rgba.toJS;
+    final options = JSObject()..['pixelRatio'] = 1.toJS;
+    m.callMethod<JSAny?>('addImage'.toJS, name.toJS, image, options);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Pixeldichte der Kartenfläche höchstens [max] (z. B. 1,5 statt 2 auf dem
+/// iPad: 44 % weniger Bildpunkte zu zeichnen). Die Flutter-Ebenen (HUD,
+/// Texte) bleiben in voller Schärfe.
+void capMapPixelRatio(double max, {required String sameMapAs}) {
+  final m = _mapWith(sameMapAs);
+  if (m == null) return;
+  try {
+    final current = (m.callMethod<JSNumber>('getPixelRatio'.toJS)).toDartDouble;
+    if (current > max) m.callMethod<JSAny?>('setPixelRatio'.toJS, max.toJS);
+  } catch (_) {}
 }

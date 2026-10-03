@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../animation/ship_model.dart';
 import '../animation/truck_projection.dart';
+import 'truck_sprites.dart' show renderSpriteBytes;
 
 /// EXPERIMENT – Bild der neutralen Fähre v1, deterministisch erzeugt wie der
 /// Sattelzug: ein Bild je Gierwinkel zur Blickrichtung, Neigung und
@@ -23,13 +24,7 @@ const _litWindow = Color(0xFFFFE08A);
 /// Nachts: Farben gedämpft und leicht bläulich (nie schwarz).
 Color _night(Color c, double n) => Color.lerp(c, Color.lerp(c, const Color(0xFF3A4A66), 0.35)!, n)!;
 
-Future<Uint8List> _png(Size size, void Function(Canvas c) paint) async {
-  final recorder = ui.PictureRecorder();
-  paint(Canvas(recorder));
-  final image = await recorder.endRecording().toImage(size.width.toInt(), size.height.toInt());
-  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-  return bytes!.buffer.asUint8List();
-}
+Future<Uint8List> _png(Size size, void Function(Canvas c) paint) => renderSpriteBytes(size, paint);
 
 /// Bildpunkte je Schiffsmeter im Sprite.
 const double shipSpritePx = 2.4;

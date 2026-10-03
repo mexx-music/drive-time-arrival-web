@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../animation/cinematic_camera.dart';
+import '../animation/cinematic_quality.dart';
 import '../animation/country_borders.dart';
 import '../animation/daylight.dart';
 import '../animation/tour_path.dart';
@@ -14,6 +15,7 @@ import '../animation/tour_playback.dart';
 import '../animation/tour_story.dart';
 import '../logic/eta_calculator.dart';
 import '../export/export_hook.dart';
+import 'device_hint.dart';
 import 'tour_outro_overlay.dart' show buildOutroData;
 import 'tour_story_overlay.dart';
 import 'tour_animation_scene_maplibre.dart';
@@ -57,7 +59,13 @@ class TourAnimationView extends StatefulWidget {
     this.videoExport = false,
     this.heroPhoto,
     this.heroCutout,
+    this.quality,
   });
+
+  /// Vorschauqualität der 2.5D-Tour; null: automatisch (Touch-Gerät →
+  /// Performance, sonst hoch). Der Videoexport nutzt immer
+  /// [CinematicQuality.exportFullHD] – unabhängig von diesem Wert.
+  final CinematicQuality? quality;
 
   /// Test/Export: freigestellter Hero-Lkw (URL), sonst null.
   final String? heroCutout;
@@ -124,6 +132,11 @@ class TourAnimationView extends StatefulWidget {
 
 class _TourAnimationViewState extends State<TourAnimationView>
     with SingleTickerProviderStateMixin {
+  /// Renderprofil: Film immer volle Qualität, Vorschau nach Gerät oder Wahl.
+  late final CinematicQuality _quality = widget.videoExport
+      ? CinematicQuality.exportFullHD
+      : widget.quality ?? CinematicQuality.choose(videoExport: false, touchDevice: isTouchDevice());
+
   late TourTimeline _timeline;
   late TourPlayback _playback;
   CountryIndex? _countries;
@@ -464,6 +477,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 onPendingProbe: (f) => _exportPending = f,
                 heroPhoto: widget.videoExport ? widget.heroPhoto : null,
                 heroCutout: widget.videoExport ? widget.heroCutout : null,
+                quality: _quality,
                 dayNight: widget.dayNight,
                 eta: widget.eta,
                 outro: _outroEnabled ? _outroData : null,
