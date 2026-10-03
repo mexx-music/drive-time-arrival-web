@@ -304,6 +304,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
       _playback.pause();
       registerExportHook(
         step: () {
+          _exportFrameNo++;
           _playback.play();
           _playback.tick(_exportDt);
           _playback.pause();
@@ -311,7 +312,9 @@ class _TourAnimationViewState extends State<TourAnimationView>
           return _playback.elapsed.inMicroseconds / 1e6;
         },
         total: () => _playback.duration.inMicroseconds / 1e6,
-        pending: () => _exportPending?.call() ?? 0,
+        // Erst fertig, wenn die Szene genau dieses Bild übernommen hat und
+        // ihr Fahrzeugbild gezeichnet ist.
+        pending: () => (_exportApplied == _exportFrameNo ? 0 : 1) + (_exportPending?.call() ?? 0),
         state: () => _exportState?.call() ?? '{}',
       );
       return;
@@ -364,6 +367,8 @@ class _TourAnimationViewState extends State<TourAnimationView>
 
   /// Vom Szenenbild gemeldet: noch entstehende Fahrzeugbilder.
   int Function()? _exportPending;
+  int _exportFrameNo = 0;
+  int _exportApplied = -1;
   String Function()? _exportState;
 
   @override
@@ -483,6 +488,8 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 heroPhoto: widget.videoExport ? widget.heroPhoto : null,
                 heroCutout: widget.videoExport ? widget.heroCutout : null,
                 quality: _quality,
+                exportFrame: widget.videoExport ? _exportFrameNo : null,
+                onExportFrameApplied: (n) => _exportApplied = n,
                 dayNight: widget.dayNight,
                 eta: widget.eta,
                 outro: _outroEnabled ? _outroData : null,

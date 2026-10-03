@@ -14,3 +14,6 @@ void capMapPixelRatio(double max, {required String sameMapAs}) {}
 
 /// Ohne Web: nichts gezeichnet.
 String? renderedIcon(String layer, {required String sameMapAs}) => null;
+
+/// Ohne Web: als sichtbar annehmen.
+bool isOnScreen(double lat, double lng, {required String sameMapAs}) => true;

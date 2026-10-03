@@ -112,3 +112,19 @@ String? renderedIcon(String layer, {required String sameMapAs}) {
     return null;
   }
 }
+
+/// Liegt der Kartenpunkt im sichtbaren Bereich der Karte? (Videoexport:
+/// ein Fahrzeug außerhalb des Bildes kann nicht gezeichnet sein.)
+bool isOnScreen(double lat, double lng, {required String sameMapAs}) {
+  final m = _mapWith(sameMapAs);
+  if (m == null) return true;
+  try {
+    final p = m.callMethod<JSObject>('project'.toJS, [lng.toJS, lat.toJS].toJS);
+    final x = (p['x'] as JSNumber).toDartDouble, y = (p['y'] as JSNumber).toDartDouble;
+    final c = m.callMethod<JSObject>('getContainer'.toJS);
+    final w = (c['clientWidth'] as JSNumber).toDartDouble, h = (c['clientHeight'] as JSNumber).toDartDouble;
+    return x >= 0 && y >= 0 && x <= w && y <= h;
+  } catch (_) {
+    return true;
+  }
+}

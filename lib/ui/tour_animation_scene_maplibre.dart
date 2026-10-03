@@ -71,7 +71,16 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
     this.heroPhoto,
     this.heroCutout,
     this.quality = CinematicQuality.previewHigh,
+    this.exportFrame,
+    this.onExportFrameApplied,
   });
+
+  /// Videoexport: Nummer des Bildes, das diese Szene zeigen soll, und
+  /// Rückmeldung, sobald sie es übernommen hat. step() löst das Bild nur
+  /// aus; Flutter baut es erst im nächsten Frame – bis zur Rückmeldung ist
+  /// das Bild nicht fertig.
+  final int? exportFrame;
+  final void Function(int frame)? onExportFrameApplied;
 
   /// Renderqualität (Vorschau/Film) – nur Darstellung, nie Regie.
   final CinematicQuality quality;
@@ -372,6 +381,9 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         'wanted': _wantedFrame, 'shown': _shownFrame, 'wantedShip': _wantedShip, 'shownShip': _shownShip,
         'refreshes': _exportRefreshes,
         'drawn': _drawTruck == null ? null : renderedIcon('truck-upright', sameMapAs: 'truck-top'),
+        'onScreen': _drawTruckAt == null
+            ? null
+            : isOnScreen(_drawTruckAt!.latitude, _drawTruckAt!.longitude, sameMapAs: 'truck-top'),
       }),
     );
     _update(force: true);
@@ -771,6 +783,17 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   /// sichtbar, z. B. ausgeblendet).
   String? _drawTruck;
   String? _drawShip;
+  LatLng? _drawTruckAt;
+  LatLng? _drawShipAt;
+
+  /// Ist [icon] auf [layer] gezeichnet – oder liegt das Fahrzeug außerhalb
+  /// des Bildes (Übersicht: die Kamera schwenkt vom Lkw weg), sodass es
+  /// nichts zu zeichnen gibt?
+  bool _drawnOrOffScreen(String layer, String icon, LatLng? at) {
+    final drawn = renderedIcon(layer, sameMapAs: 'truck-top');
+    if (drawn == icon) return true;
+    return drawn == null && at != null && !isOnScreen(at.latitude, at.longitude, sameMapAs: 'truck-top');
+  }
 
   /// Zeigt dieses Bild genau die berechneten Fahrzeugbilder – gesetzt UND
   /// von MapLibre gezeichnet? Das Setzen der Kartendaten läuft über das
@@ -780,8 +803,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   bool get _exportFrameExact =>
       (_wantedFrame == null || _shownFrame == _wantedFrame) &&
       (_wantedShip == null || _shownShip == _wantedShip) &&
-      (!kIsWeb || _drawTruck == null || renderedIcon('truck-upright', sameMapAs: 'truck-top') == _drawTruck) &&
-      (!kIsWeb || _drawShip == null || renderedIcon('ship-upright', sameMapAs: 'truck-top') == _drawShip);
+      (!kIsWeb || _drawTruck == null || _drawnOrOffScreen('truck-upright', _drawTruck!, _drawTruckAt)) &&
+      (!kIsWeb || _drawShip == null || _drawnOrOffScreen('ship-upright', _drawShip!, _drawShipAt));
 
   /// Videoexport: Ist ein Fahrzeugbild fertig und zeigt das aktuelle Bild
   /// noch einen Ersatz, das Fahrzeug für DASSELBE Bild neu setzen – Kamera
@@ -823,7 +846,10 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
                 })
               : _point(pose.kingpin, {...props, if (mix != null || cutFade > 0) 'op': truckOp}),
       ]));
-      if (truckOp > 0.001 && props != null) _drawTruck = props['icon'] as String;
+      if (truckOp > 0.001 && props != null) {
+        _drawTruck = props['icon'] as String;
+        _drawTruckAt = pose.kingpin;
+      }
       if (_shownCone > 0.01) {
         // Abblendlicht ab der Kabinenfront, headlightConeMeters Fahrzeugmeter
         // lang, gedreht mit der Zugmaschine; wächst wie der LKW mit dem
@@ -879,6 +905,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
     _shipVisible = true;
     _drawShip = shown;
+    _drawShipAt = widget.path.at(mix.shipMeters).point;
     map.setGeoJsonSource('ship', _collection([
       _point(widget.path.at(mix.shipMeters).point, {'icon': shown, 'size': size, 'op': mix.ship}),
     ]));
@@ -1175,6 +1202,9 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       map.setLayerProperties('country-fill', _countryFillProps(0.16 * glow));
       map.setLayerProperties('country-line', _countryLineProps(0.75 * glow));
     }
+    // Videoexport: dieses Bild ist übernommen (Kamera, Fahrzeug, Spur).
+    final frameNo = widget.exportFrame;
+    if (frameNo != null) widget.onExportFrameApplied?.call(frameNo);
   }
 
   @override
