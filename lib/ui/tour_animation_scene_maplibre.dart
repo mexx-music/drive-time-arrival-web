@@ -85,8 +85,10 @@ class TourAnimationSceneMapLibre extends StatefulWidget {
   /// Videoexport: fester Bildtakt statt Uhrzeit (deterministisch).
   final Duration? frameDt;
 
-  /// Videoexport: meldet eine Abfrage „wie viele Bilder entstehen noch“.
-  final void Function(int Function() pending)? onPendingProbe;
+  /// Videoexport: meldet eine Abfrage „wie viele Bilder entstehen noch“ –
+  /// 0 erst, wenn dieses Bild exakt das berechnete Fahrzeugbild zeigt – und
+  /// den Bildzustand (gewünschtes und gezeigtes Fahrzeugbild) als JSON.
+  final void Function(int Function() pending, String Function() state)? onPendingProbe;
 
   /// Filmische Richtungsstabilisierung des Sattelzugs (null = Fahrspur ohne).
   final CinematicHeading? cinematicHeading;
@@ -358,7 +360,13 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     await map.addGeoJsonSource('lights', _collection(const []));
     await map.addSymbolLayer('lights', 'headlight-cone', _coneProps(0), belowLayerId: 'truck-flat');
     _ready = true;
-    widget.onPendingProbe?.call(() => _framesPending.length);
+    widget.onPendingProbe?.call(
+      () => _framesPending.length + (_exportFrameExact ? 0 : 1),
+      () => jsonEncode({
+        'wanted': _wantedFrame, 'shown': _shownFrame, 'wantedShip': _wantedShip, 'shownShip': _shownShip,
+        'refreshes': _exportRefreshes,
+      }),
+    );
     _update(force: true);
     widget.onReady?.call();
   }
@@ -573,6 +581,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
           _readyDrive[name] = (yaw: yaw, knick: knick, pitch: pitch, night: (night * 8).round());
           _keepSprite(name);
         }
+        _afterSpriteReady();
       });
     }
     return name;
@@ -713,6 +722,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       (yaw, pitchFrame) = _outroFrame(angleDiff(_cameraBearing, pose.tractorHeading), _cameraPitch, widget.outroTime!);
     }
     final name = _requestArticulated(yaw, _knickFrame, pitchFrame, night, lights);
+    _wantedFrame = name;
     if (_framesReady.contains(name)) {
       _shownFrame = name;
       _shownFramePx = spritePx;
@@ -745,6 +755,72 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     return {'icon': shown, 'rot': residual, 'flat': false, 'size': size};
   }
 
+  /// Videoexport: das für dieses Bild berechnete Fahrzeugbild (Lkw/Fähre).
+  String? _wantedFrame;
+  String? _wantedShip;
+  int _exportRefreshes = 0;
+
+  /// Zeigt dieses Bild genau die berechneten Fahrzeugbilder?
+  bool get _exportFrameExact =>
+      (_wantedFrame == null || _shownFrame == _wantedFrame) && (_wantedShip == null || _shownShip == _wantedShip);
+
+  /// Videoexport: Ist ein Fahrzeugbild fertig und zeigt das aktuelle Bild
+  /// noch einen Ersatz, das Fahrzeug für DASSELBE Bild neu setzen – Kamera
+  /// und Zeit bleiben stehen. Erst dann meldet pending() 0; das Setzen der
+  /// Kartendaten lässt MapLibre sofort „nicht geladen“ melden, bis es
+  /// gezeichnet ist (darauf wartet die Aufnahme ebenfalls).
+  void _afterSpriteReady() {
+    if (widget.frameDt == null || !_ready || !mounted || _exportFrameExact) return;
+    final map = _map;
+    if (map == null) return;
+    _exportRefreshes++;
+    _updateVehicle(map, widget.position);
+  }
+
+  /// Fahrzeug (Lkw/Licht/Fähre) für die aktuelle Stelle setzen. Hängt nur
+  /// von Position und Kamera ab – ein erneuter Aufruf für dasselbe Bild
+  /// bewegt nichts weiter (Videoexport, siehe [_exportFrameExact]).
+  void _updateVehicle(ml.MapLibreMapController map, TourPosition pos) {
+    _wantedFrame = null;
+    _wantedShip = null;
+    if (widget.truckView == TruckView.articulated && !_endOverview) {
+      // Fähre: LKW hält am Hafen und blendet aus, die Fähre übernimmt – und
+      // am Zielhafen umgekehrt. Ohne Fähre ist mix null und alles wie bisher.
+      final mix = _mix = _crossings.isEmpty ? null : vehicleAt(widget.path, _crossings, pos.meters);
+      final truckPos = mix == null || mix.truckMeters == pos.meters ? pos : widget.path.at(mix.truckMeters);
+      // Mit freigestelltem Hero-Bild: Modell gleichzeitig ausblenden.
+      final cutFade = widget.heroCutout != null && _inOutro ? widget.outroTimeline!.photo(widget.outroTime!) : 0.0;
+      final truckOp = (mix?.truck ?? 1.0) * (1 - cutFade);
+      final props = _articulatedProps(truckPos);
+      final pose = _pose!;
+      map.setGeoJsonSource('truck', _collection([
+        if (truckOp > 0.001)
+          props == null
+              ? _point(truckPos.point, {
+                  'icon': 'truck-top', 'rot': pose.tractorHeading, 'flat': true, 'size': 0.3,
+                  if (mix != null) 'op': truckOp,
+                })
+              : _point(pose.kingpin, {...props, if (mix != null || cutFade > 0) 'op': truckOp}),
+      ]));
+      if (_shownCone > 0.01) {
+        // Abblendlicht ab der Kabinenfront, headlightConeMeters Fahrzeugmeter
+        // lang, gedreht mit der Zugmaschine; wächst wie der LKW mit dem
+        // Kamerazoom.
+        final unit = _unitAt(truckPos.point);
+        final light = headlightPlacement(pose, metersPerUnit: unit);
+        final scale = math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
+        final coneSize = headlightConeMeters * _pointsPerMeter * scale / headlightConeSize.height;
+        map.setGeoJsonSource('lights', _collection([
+          if (truckOp > 0.001)
+            _point(light.apex, {'rot': light.heading, 'size': coneSize, if (mix != null) 'op': truckOp}),
+        ]));
+      }
+      _updateShip(map, mix);
+    } else {
+      map.setGeoJsonSource('truck', _collection([_point(pos.point, _truckProps(_localHeading(pos.meters)))]));
+    }
+  }
+
   /// Fähre an ihrer Stelle: Bild nach Kurs zur Blickrichtung, Neigung und
   /// Nachtstufe (bei Bedarf erzeugt und behalten), Größe wie der LKW über
   /// den Kamerazoom.
@@ -768,8 +844,10 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         _framesPending.remove(name);
         _framesReady.add(name);
         _keepSprite(name);
+        _afterSpriteReady();
       });
     }
+    _wantedShip = name;
     if (_framesReady.contains(name)) _shownShip = name;
     final shown = _shownShip;
     if (shown == null) return;
@@ -1011,42 +1089,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       map.setLayerProperties('headlight-cone', _coneProps(cone));
     }
 
-    if (widget.truckView == TruckView.articulated && !_endOverview) {
-      // Fähre: LKW hält am Hafen und blendet aus, die Fähre übernimmt – und
-      // am Zielhafen umgekehrt. Ohne Fähre ist mix null und alles wie bisher.
-      final mix = _mix = _crossings.isEmpty ? null : vehicleAt(widget.path, _crossings, pos.meters);
-      final truckPos = mix == null || mix.truckMeters == pos.meters ? pos : widget.path.at(mix.truckMeters);
-      // Mit freigestelltem Hero-Bild: Modell gleichzeitig ausblenden.
-      final cutFade = widget.heroCutout != null && _inOutro ? widget.outroTimeline!.photo(widget.outroTime!) : 0.0;
-      final truckOp = (mix?.truck ?? 1.0) * (1 - cutFade);
-      final props = _articulatedProps(truckPos);
-      final pose = _pose!;
-      map.setGeoJsonSource('truck', _collection([
-        if (truckOp > 0.001)
-          props == null
-              ? _point(truckPos.point, {
-                  'icon': 'truck-top', 'rot': pose.tractorHeading, 'flat': true, 'size': 0.3,
-                  if (mix != null) 'op': truckOp,
-                })
-              : _point(pose.kingpin, {...props, if (mix != null || cutFade > 0) 'op': truckOp}),
-      ]));
-      if (_shownCone > 0.01) {
-        // Abblendlicht ab der Kabinenfront, headlightConeMeters Fahrzeugmeter
-        // lang, gedreht mit der Zugmaschine; wächst wie der LKW mit dem
-        // Kamerazoom.
-        final unit = _unitAt(truckPos.point);
-        final light = headlightPlacement(pose, metersPerUnit: unit);
-        final scale = math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
-        final coneSize = headlightConeMeters * _pointsPerMeter * scale / headlightConeSize.height;
-        map.setGeoJsonSource('lights', _collection([
-          if (truckOp > 0.001)
-            _point(light.apex, {'rot': light.heading, 'size': coneSize, if (mix != null) 'op': truckOp}),
-        ]));
-      }
-      _updateShip(map, mix);
-    } else {
-      map.setGeoJsonSource('truck', _collection([_point(pos.point, _truckProps(_localHeading(pos.meters)))]));
-    }
+    _updateVehicle(map, pos);
 
     // Gefahrene Spur: höchstens etwa 12-mal pro Sekunde neu.
     if (force || widget.finished || fixed != null || now.difference(_lastTrail).inMilliseconds > 80) {

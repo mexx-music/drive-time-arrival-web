@@ -312,6 +312,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
         },
         total: () => _playback.duration.inMicroseconds / 1e6,
         pending: () => _exportPending?.call() ?? 0,
+        state: () => _exportState?.call() ?? '{}',
       );
       return;
     }
@@ -363,6 +364,7 @@ class _TourAnimationViewState extends State<TourAnimationView>
 
   /// Vom Szenenbild gemeldet: noch entstehende Fahrzeugbilder.
   int Function()? _exportPending;
+  String Function()? _exportState;
 
   @override
   void dispose() {
@@ -474,7 +476,10 @@ class _TourAnimationViewState extends State<TourAnimationView>
                 cinematicDemo: widget.cinematicDemo,
                 cameraDebug: widget.cameraDebug && !widget.videoExport,
                 frameDt: widget.videoExport ? _exportDt : null,
-                onPendingProbe: (f) => _exportPending = f,
+                onPendingProbe: (pending, state) {
+                  _exportPending = pending;
+                  _exportState = state;
+                },
                 heroPhoto: widget.videoExport ? widget.heroPhoto : null,
                 heroCutout: widget.videoExport ? widget.heroCutout : null,
                 quality: _quality,
