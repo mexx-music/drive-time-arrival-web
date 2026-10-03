@@ -11,3 +11,6 @@ bool addRawMapImage(String name, int width, int height, Uint8List rgba, {require
 
 /// Ohne Web: nichts zu tun.
 void capMapPixelRatio(double max, {required String sameMapAs}) {}
+
+/// Ohne Web: nichts gezeichnet.
+String? renderedIcon(String layer, {required String sameMapAs}) => null;

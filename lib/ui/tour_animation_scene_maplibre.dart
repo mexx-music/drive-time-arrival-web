@@ -365,6 +365,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       () => jsonEncode({
         'wanted': _wantedFrame, 'shown': _shownFrame, 'wantedShip': _wantedShip, 'shownShip': _shownShip,
         'refreshes': _exportRefreshes,
+        'drawn': _drawTruck == null ? null : renderedIcon('truck-upright', sameMapAs: 'truck-top'),
       }),
     );
     _update(force: true);
@@ -760,9 +761,21 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   String? _wantedShip;
   int _exportRefreshes = 0;
 
-  /// Zeigt dieses Bild genau die berechneten Fahrzeugbilder?
+  /// Fahrzeugbilder, die gerade als Kartendaten gesetzt sind (null: keins
+  /// sichtbar, z. B. ausgeblendet).
+  String? _drawTruck;
+  String? _drawShip;
+
+  /// Zeigt dieses Bild genau die berechneten Fahrzeugbilder – gesetzt UND
+  /// von MapLibre gezeichnet? Das Setzen der Kartendaten läuft über das
+  /// Plugin asynchron; gemessen zeigte sonst fast jedes dritte Exportbild
+  /// noch das Fahrzeugbild des Vorbilds. Deshalb wird das gezeichnete
+  /// Symbol selbst abgefragt.
   bool get _exportFrameExact =>
-      (_wantedFrame == null || _shownFrame == _wantedFrame) && (_wantedShip == null || _shownShip == _wantedShip);
+      (_wantedFrame == null || _shownFrame == _wantedFrame) &&
+      (_wantedShip == null || _shownShip == _wantedShip) &&
+      (!kIsWeb || _drawTruck == null || renderedIcon('truck-upright', sameMapAs: 'truck-top') == _drawTruck) &&
+      (!kIsWeb || _drawShip == null || renderedIcon('ship-upright', sameMapAs: 'truck-top') == _drawShip);
 
   /// Videoexport: Ist ein Fahrzeugbild fertig und zeigt das aktuelle Bild
   /// noch einen Ersatz, das Fahrzeug für DASSELBE Bild neu setzen – Kamera
@@ -783,6 +796,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   void _updateVehicle(ml.MapLibreMapController map, TourPosition pos) {
     _wantedFrame = null;
     _wantedShip = null;
+    _drawTruck = null;
+    _drawShip = null;
     if (widget.truckView == TruckView.articulated && !_endOverview) {
       // Fähre: LKW hält am Hafen und blendet aus, die Fähre übernimmt – und
       // am Zielhafen umgekehrt. Ohne Fähre ist mix null und alles wie bisher.
@@ -802,6 +817,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
                 })
               : _point(pose.kingpin, {...props, if (mix != null || cutFade > 0) 'op': truckOp}),
       ]));
+      if (truckOp > 0.001 && props != null) _drawTruck = props['icon'] as String;
       if (_shownCone > 0.01) {
         // Abblendlicht ab der Kabinenfront, headlightConeMeters Fahrzeugmeter
         // lang, gedreht mit der Zugmaschine; wächst wie der LKW mit dem
@@ -856,6 +872,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         shipSpritePx *
         math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
     _shipVisible = true;
+    _drawShip = shown;
     map.setGeoJsonSource('ship', _collection([
       _point(widget.path.at(mix.shipMeters).point, {'icon': shown, 'size': size, 'op': mix.ship}),
     ]));

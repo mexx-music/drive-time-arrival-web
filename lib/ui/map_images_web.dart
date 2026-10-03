@@ -95,3 +95,20 @@ void capMapPixelRatio(double max, {required String sameMapAs}) {
     if (current > max) m.callMethod<JSAny?>('setPixelRatio'.toJS, max.toJS);
   } catch (_) {}
 }
+
+/// Icon des ersten gezeichneten Symbols der Ebene [layer] (Videoexport:
+/// Nachweis, dass das gewünschte Fahrzeugbild wirklich gezeichnet ist).
+String? renderedIcon(String layer, {required String sameMapAs}) {
+  final m = _mapWith(sameMapAs);
+  if (m == null) return null;
+  try {
+    final options = JSObject()..['layers'] = [layer.toJS].toJS;
+    final list = m.callMethod<JSArray<JSObject>>('queryRenderedFeatures'.toJS, options).toDart;
+    if (list.isEmpty) return null;
+    final props = list.first['properties'] as JSObject?;
+    final icon = props?['icon'];
+    return icon == null ? null : (icon as JSString).toDart;
+  } catch (_) {
+    return null;
+  }
+}
