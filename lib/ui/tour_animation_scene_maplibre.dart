@@ -18,6 +18,7 @@ import '../animation/tour_path.dart';
 import '../animation/tour_motion.dart';
 import '../animation/tour_outro.dart';
 import '../animation/tour_story.dart';
+import 'map_images.dart';
 import 'map_label_style.dart';
 import 'tour_animation_view.dart' show tourKmLabel;
 import 'ship_sprites.dart';
@@ -251,6 +252,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final map = _map;
     if (map == null) return;
     final path = widget.path;
+    trackMapImages();
     await map.addImage('truck-top', await truckTopPng());
     await map.addImage('truck-rear', await truckRearPng());
     await map.addImage('truck', await truckSidePng(mirrored: false));
@@ -436,10 +438,52 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       await _map?.addImage(name, png);
       _framesPending.remove(name);
       _framesReady.add(name);
+      _keepSprite(name);
     });
   }
 
   static const _frameStep = 4.0;
+
+  // --------------------------------------------- Bildspeicher begrenzen
+
+  /// Fahrzeugbilder der Fahrt (Lkw, Fähre), zuletzt benutzte zuletzt. Jede
+  /// neue Winkel-/Knick-/Lichtstufe ist ein eigenes Bild; ohne Grenze
+  /// wuchsen sie in einer Tour auf Hunderte (157 MB nach 50 s) und Safari
+  /// auf dem iPad beendete die Seite. Ältere Bilder werden deshalb wieder
+  /// entfernt und bei Bedarf neu erzeugt. Outro-Bilder mit Lichtzustand
+  /// zählen nicht mit (wenige, und sie müssen bereitliegen).
+  final Set<String> _spriteUse = <String>{}; // LinkedHashSet: Reihenfolge = Nutzung
+
+  /// Höchstzahl in der Fahrt; ab dem Zielanflug mehr, weil die Bilder des
+  /// Outro-Schwenks vorab entstehen und nicht vor ihrem Einsatz verschwinden
+  /// dürfen.
+  static const maxDriveSprites = 48;
+  static const maxDriveSpritesOutro = 160;
+
+  /// [name] als gerade benutzt vermerken und den Speicher begrenzen.
+  void _keepSprite(String name) {
+    _spriteUse
+      ..remove(name)
+      ..add(name);
+    final cap = _outroPrewarmed ? maxDriveSpritesOutro : maxDriveSprites;
+    if (_spriteUse.length <= cap) return;
+    for (final old in _spriteUse.toList()) {
+      if (_spriteUse.length <= cap) break;
+      if (old == _shownFrame || old == _shownShip || old == name) continue;
+      _spriteUse.remove(old);
+      _framesReady.remove(old);
+      for (final m in _readyYaws.values) {
+        m.removeWhere((_, v) => v == old);
+      }
+      removeMapImage(old);
+    }
+  }
+
+  /// Gezeigtes Bild als benutzt vermerken (ohne erneut zu begrenzen).
+  void _touchSprite(String? name) {
+    if (name == null || !_spriteUse.remove(name)) return;
+    _spriteUse.add(name);
+  }
 
   // --------------------------------------------- gekoppelter Sattelzug
 
@@ -502,6 +546,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         _framesPending.remove(name);
         _framesReady.add(name);
         (_readyYaws[_poseKey(knick, pitch, night, lights)] ??= {})[yaw] = name;
+        if (lights == null) _keepSprite(name);
       });
     }
     return name;
@@ -626,6 +671,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     }
     final shown = _shownFrame;
     if (shown == null) return null;
+    _touchSprite(shown);
     // Größe skaliert mit dem Kamerazoom – der LKW gehört zur Karte.
     final size = _pointsPerMeter / _shownFramePx * math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
     // Zwischen zwei Bildstufen (4°) dreht die Karte weich weiter, das Bild
@@ -659,11 +705,13 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         await _map?.addImage(name, png);
         _framesPending.remove(name);
         _framesReady.add(name);
+        _keepSprite(name);
       });
     }
     if (_framesReady.contains(name)) _shownShip = name;
     final shown = _shownShip;
     if (shown == null) return;
+    _touchSprite(shown);
     final size = shipPointsPerMeter(_pointsPerMeter, FerryShipModel.length) /
         shipSpritePx *
         math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
