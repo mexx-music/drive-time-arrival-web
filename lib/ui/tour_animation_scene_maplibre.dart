@@ -294,8 +294,14 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
 
     // Die ganze Route mit ALLEN Punkten der Berechnung (Etappen-Geometrie),
     // nicht ausgedünnt – MapLibre vereinfacht je Zoomstufe selbst passend.
+    // Cinematic: die Linie ist unsichtbar (Deckkraft 0, siehe unten) – dann
+    // bekommt die Karte sie gar nicht erst. Sonst kachelt MapLibre alle
+    // Punkte (Tuzla–Odense: 98 778) auf jeder Zoomstufe, in der Übersicht
+    // über ganz Europa; gemessen 50–75 MB weniger lebender JS-Speicher.
+    // Bewegung, Kamera und Berechnung nutzen weiter widget.path.
     await map.addGeoJsonSource('route', _collection([
-      for (final leg in path.legs) _line(leg.points, {'ferry': leg.kind != TourLegKind.road}),
+      if (widget.cinematicHeading == null)
+        for (final leg in path.legs) _line(leg.points, {'ferry': leg.kind != TourLegKind.road}),
     ]));
     // Cinematic: keine Vorschau der Strecke – nur die Spur, die der Lkw
     // hinter sich herzieht (wie ein Roadmovie, die Reise entsteht).
