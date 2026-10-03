@@ -484,6 +484,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       for (final m in _readyYaws.values) {
         m.removeWhere((_, v) => v == old);
       }
+      _readyDrive.remove(old);
       removeMapImage(old);
     }
   }
@@ -568,7 +569,10 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         _framesPending.remove(name);
         _framesReady.add(name);
         (_readyYaws[_poseKey(knick, pitch, night, lights)] ??= {})[yaw] = name;
-        if (lights == null) _keepSprite(name);
+        if (lights == null) {
+          _readyDrive[name] = (yaw: yaw, knick: knick, pitch: pitch, night: (night * 8).round());
+          _keepSprite(name);
+        }
       });
     }
     return name;
@@ -589,6 +593,35 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       if (dist(k) < dist(best)) best = k;
     }
     return m[best];
+  }
+
+  /// Fertige Fahrbilder (ohne Outro-Licht) mit ihrer Pose.
+  final Map<String, ({int yaw, int knick, int pitch, int night})> _readyDrive = {};
+
+  /// Fahrt: das fertige Bild, das der gewünschten Pose am nächsten kommt –
+  /// statt des zuletzt gezeigten. Auf langsamen Geräten entsteht das Bild
+  /// für die aktuelle Pose erst einige Bilder später; das alte Bild zeigte
+  /// den Auflieger so lange im falschen Knickwinkel (gemessen bis über 90°
+  /// daneben, bei 6-fach gedrosselter CPU in einem Viertel der Bilder ≥ 6°):
+  /// der Auflieger schien zu schleudern. Der Knick zählt am meisten (er
+  /// lässt sich nicht ausgleichen), die Richtung gleicht die Bilddrehung
+  /// aus, die Neigung fällt am wenigsten auf. Nur gleiche Nachtstufe.
+  String? _closestDrive(int yaw, int knick, int pitch, double night) {
+    final n = (night * 8).round();
+    String? best;
+    var bestCost = double.infinity;
+    for (final e in _readyDrive.entries) {
+      final r = e.value;
+      if (r.night != n) continue;
+      final dy = ((r.yaw - yaw) % 90 + 90) % 90;
+      final yawErr = math.min(dy, 90 - dy) * 4.0;
+      final cost = 2.0 * (r.knick - knick).abs() * 3 + 0.5 * yawErr + 0.5 * (r.pitch - pitch).abs();
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = e.key;
+      }
+    }
+    return best;
   }
 
   /// Zu Beginn des Outros die Bilder des Licht-Reveals (Endperspektive)
@@ -690,6 +723,12 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         _shownFrame = near;
         _shownFramePx = spritePx;
       }
+    } else if (lights == null) {
+      final near = _closestDrive(yaw, _knickFrame, pitchFrame, night);
+      if (near != null) {
+        _shownFrame = near;
+        _shownFramePx = spritePx;
+      }
     }
     final shown = _shownFrame;
     if (shown == null) return null;
@@ -698,10 +737,11 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     final size = _pointsPerMeter / _shownFramePx * math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
     // Zwischen zwei Bildstufen (4°) dreht die Karte weich weiter, das Bild
     // nicht – bei großem Lkw wirkte das wie Zittern. Den Rest zur echten
-    // Richtung als Bilddrehung ausgleichen.
+    // Richtung als Bilddrehung ausgleichen; auch, wenn ein Ersatzbild mit
+    // anderer Richtung einspringt (daher bis 15°).
     final m = RegExp(r'-y(-?\d+)-').firstMatch(shown);
     final shownYaw = m == null ? 0.0 : int.parse(m.group(1)!) * 4.0;
-    final residual = angleDiff(shownYaw, angleDiff(_cameraBearing, pose.tractorHeading)).clamp(-6.0, 6.0);
+    final residual = angleDiff(shownYaw, angleDiff(_cameraBearing, pose.tractorHeading)).clamp(-15.0, 15.0);
     return {'icon': shown, 'rot': residual, 'flat': false, 'size': size};
   }
 
