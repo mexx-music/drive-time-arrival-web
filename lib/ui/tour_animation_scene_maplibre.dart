@@ -21,6 +21,7 @@ import '../animation/tour_path.dart';
 import '../animation/tour_motion.dart';
 import '../animation/tour_outro.dart';
 import '../animation/tour_story.dart';
+import '../services/cinematic_session.dart';
 import 'map_images.dart';
 import 'map_label_style.dart';
 import 'tour_animation_view.dart' show tourKmLabel;
@@ -774,6 +775,39 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     return {'icon': shown, 'rot': residual, 'flat': false, 'size': size};
   }
 
+  // --------------------------------------------- Diagnose-Ringpuffer
+
+  DateTime _lastDiag = DateTime.fromMillisecondsSinceEpoch(0);
+  int _diagFrames = 0;
+
+  /// Alle 2 s technische Werte in den Ringpuffer (letzte ≈ 60 s), damit
+  /// nach einem Abbruch der Seite sichtbar ist, was zuletzt geschah. Nur in
+  /// der Vorschau, nie im Export; keine Orte oder Adressen.
+  void _diagnose(TourPosition pos, DateTime now) {
+    if (widget.frameDt != null) return;
+    _diagFrames++;
+    final dt = now.difference(_lastDiag).inMilliseconds;
+    if (dt < 2000) return;
+    final fps = _lastDiag.millisecondsSinceEpoch == 0 ? null : _diagFrames * 1000 / dt;
+    _lastDiag = now;
+    _diagFrames = 0;
+    final total = widget.path.totalMeters;
+    CinematicSession.sample({
+      'progress': total > 0 ? double.parse((pos.meters / total).toStringAsFixed(4)) : null,
+      if (widget.outroTime != null) 'outroS': double.parse(widget.outroTime!.toStringAsFixed(1)),
+      'shot': _camState?.shot,
+      'zoom': double.parse(_cameraZoom.toStringAsFixed(2)),
+      'pitch': _cameraPitch.round(),
+      'bearing': _cameraBearing.round(),
+      if (fps != null) 'fps': double.parse(fps.toStringAsFixed(1)),
+      'quality': widget.quality.id,
+      'sprites': _spriteUse.length,
+      'spritesReady': _framesReady.length,
+      'spritesPending': _framesPending.length,
+      ...mapRuntimeStats(sameMapAs: 'truck-top'),
+    });
+  }
+
   /// Videoexport: das für dieses Bild berechnete Fahrzeugbild (Lkw/Fähre).
   String? _wantedFrame;
   String? _wantedShip;
@@ -1202,6 +1236,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       map.setLayerProperties('country-fill', _countryFillProps(0.16 * glow));
       map.setLayerProperties('country-line', _countryLineProps(0.75 * glow));
     }
+    _diagnose(pos, now);
     // Videoexport: dieses Bild ist übernommen (Kamera, Fahrzeug, Spur).
     final frameNo = widget.exportFrame;
     if (frameNo != null) widget.onExportFrameApplied?.call(frameNo);

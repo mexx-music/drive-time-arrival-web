@@ -17,3 +17,6 @@ String? renderedIcon(String layer, {required String sameMapAs}) => null;
 
 /// Ohne Web: als sichtbar annehmen.
 bool isOnScreen(double lat, double lng, {required String sameMapAs}) => true;
+
+/// Ohne Web: keine Kennzahlen.
+Map<String, num> mapRuntimeStats({required String sameMapAs}) => const {};

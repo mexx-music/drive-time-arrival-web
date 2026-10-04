@@ -9,6 +9,8 @@ import 'package:driverroute_eta/animation/tour_path.dart';
 import 'package:driverroute_eta/animation/tour_story.dart';
 import 'package:driverroute_eta/logic/eta_calculator.dart';
 import 'package:driverroute_eta/main.dart';
+import 'package:driverroute_eta/models/tour_draft.dart';
+import 'package:driverroute_eta/services/cinematic_session.dart';
 import 'package:driverroute_eta/services/maps_proxy.dart';
 import 'package:driverroute_eta/tour/tour_scope.dart';
 import 'package:driverroute_eta/ui/map_osm_view.dart';
@@ -681,6 +683,56 @@ void main() {
       await tester.tap(b);
       await tester.pumpAndSettle();
     }
+
+    testWidgets('Absicherung: erfolgreiche Berechnung sichert die Tour lokal', (tester) async {
+      await pumpApp(tester);
+      await calculate(tester);
+      final prefs = await SharedPreferences.getInstance();
+      final draft = TourDraft.decode(prefs.getString(CinematicSession.draftKey));
+      expect(draft, isNotNull);
+      expect(draft!.start, contains('Lambach'));
+      expect(draft.dest, contains('Hamburg'));
+    });
+
+    testWidgets('nach unerwartetem Neuladen: Tour wiederherstellen ohne Provider-Aufruf', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        CinematicSession.draftKey: TourDraft(
+          start: 'Tuzla/Istanbul, Türkei',
+          dest: 'Odense, Dänemark',
+          startLat: 40.82,
+          startLng: 29.30,
+          destLat: 55.40,
+          destLng: 10.40,
+          stops: const ['Sofia, Bulgarien'],
+          stopCoords: const [
+            [42.70, 23.32]
+          ],
+          settings: const {'remainingDrivingMin': 480},
+          savedAt: DateTime(2026, 10, 4),
+        ).encode(),
+        CinematicSession.sessionKey: jsonEncode({'km': 3175}),
+      });
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1280, 1800);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      await tester.pumpWidget(const DriverRouteApp());
+      await tester.pumpAndSettle();
+      expect(find.textContaining('unerwartet neu geladen'), findsOneWidget);
+      final before = proxy.providerCalls;
+      await tester.tap(find.text('Wiederherstellen'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(field('Start eingeben')).controller!.text, 'Tuzla/Istanbul, Türkei');
+      expect(tester.widget<TextField>(field('Ziel eingeben')).controller!.text, 'Odense, Dänemark');
+      await tester.ensureVisible(find.text('ZWISCHENSTOPPS'));
+      await tester.tap(find.text('ZWISCHENSTOPPS'));
+      await tester.pumpAndSettle();
+      expect(find.text('1. Sofia, Bulgarien'), findsOneWidget);
+      expect(proxy.providerCalls, before); // kein Google-Aufruf
+      expect(find.textContaining('unerwartet neu geladen'), findsNothing);
+      // Nur einmal angeboten.
+      expect((await SharedPreferences.getInstance()).getString(CinematicSession.sessionKey), isNull);
+    });
 
     testWidgets('vor der Berechnung: „Tour animieren“ ist aus', (tester) async {
       await pumpApp(tester);

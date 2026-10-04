@@ -128,3 +128,46 @@ bool isOnScreen(double lat, double lng, {required String sameMapAs}) {
     return true;
   }
 }
+
+/// Technische Kennzahlen der Tourkarte für den Diagnosepuffer: Bilder,
+/// Kacheln (sichtbar/zwischengespeichert), Zeichenfläche, Pixeldichte und –
+/// wo der Browser es meldet – JS-Speicher. Nichts davon enthält Orte.
+Map<String, num> mapRuntimeStats({required String sameMapAs}) {
+  final out = <String, num>{};
+  final m = _mapWith(sameMapAs);
+  try {
+    final perf = globalContext['performance'] as JSObject?;
+    final mem = perf?['memory'] as JSObject?;
+    final used = mem?['usedJSHeapSize'];
+    if (used != null) out['jsHeapMB'] = ((used as JSNumber).toDartDouble / 1e6).round();
+  } catch (_) {}
+  if (m == null) return out;
+  try {
+    out['images'] = m.callMethod<JSArray<JSAny?>>('listImages'.toJS).length;
+    final canvas = m.callMethod<JSObject>('getCanvas'.toJS);
+    out['canvasW'] = (canvas['width'] as JSNumber).toDartInt;
+    out['canvasH'] = (canvas['height'] as JSNumber).toDartInt;
+    out['pixelRatio'] = (m.callMethod<JSNumber>('getPixelRatio'.toJS)).toDartDouble;
+    final style = m['style'] as JSObject;
+    final managers = style['tileManagers'] as JSObject?;
+    if (managers != null) {
+      var inView = 0, cached = 0;
+      final keys = (globalContext['Object'] as JSObject).callMethod<JSArray<JSString>>('keys'.toJS, managers).toDart;
+      int count(JSAny? v) {
+        if (v == null) return 0;
+        final o = v as JSObject;
+        if (o['size'] != null) return (o['size'] as JSNumber).toDartInt;
+        if (o['order'] != null) return (o['order'] as JSArray<JSAny?>).length;
+        return (globalContext['Object'] as JSObject).callMethod<JSArray<JSAny?>>('keys'.toJS, o).length;
+      }
+      for (final k in keys) {
+        final mgr = managers[k.toDart] as JSObject;
+        inView += count(mgr['_inViewTiles']);
+        cached += count(mgr['_outOfViewCache']);
+      }
+      out['tilesInView'] = inView;
+      out['tilesCached'] = cached;
+    }
+  } catch (_) {}
+  return out;
+}

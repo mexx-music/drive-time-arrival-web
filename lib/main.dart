@@ -1,6 +1,7 @@
 // lib/main.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter/foundation.dart';
 import 'services/maps_proxy.dart';
 import 'services/catlab_trace.dart';
@@ -43,6 +44,8 @@ import 'ui/tour_animation_view.dart';
 import 'ui/truck_sprites.dart' show TruckBranding, TruckModel, TruckView;
 import 'ui/map_point_picker.dart';
 import 'models/map_waypoint.dart';
+import 'models/tour_draft.dart';
+import 'services/cinematic_session.dart';
 import 'animation/country_borders.dart';
 import 'animation/tour_path.dart';
 import 'utils/open_in_tab.dart';
@@ -316,11 +319,133 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadFerries();
     _loadPresets();
+    _checkInterruptedTour();
     // Adresseingabe angemeldet: Token und Tagesbudget; sonst öffentlich.
     if (widget.auth.enabled) {
       InputAuth.configure(widget.auth, widget.account);
       InputAuth.lastFailure.addListener(_showInputFailure);
     }
+  }
+
+  // --------------------------------------------- Absicherung der Tour
+
+  /// Eingaben der aktuellen Tour (für die Wiederherstellung nach einem
+  /// unerwarteten Neuladen) – nur Formularwerte, keine Ergebnisse.
+  TourDraft _currentDraft() => TourDraft(
+        start: _startCtl.text.trim(),
+        dest: _destCtl.text.trim(),
+        startLat: _startLat,
+        startLng: _startLng,
+        destLat: _destLat,
+        destLng: _destLng,
+        stops: List.of(_stops),
+        stopCoords: [for (final c in _stopCoords) c == null ? null : [c.latitude, c.longitude]],
+        settings: {
+          'avgKmh': _avgKmh,
+          'speedProfile': _speedProfile.name,
+          'heavyLoad': _heavyLoad,
+          'remainingDrivingMin': _remainingDrivingMin,
+          'continuousDrivenMin': _continuousDrivenMin,
+          'remainingDutyMin': _remainingDutyMin,
+          'ten1': _ten1, 'ten2': _ten2,
+          'nine1': _nine1, 'nine2': _nine2, 'nine3': _nine3,
+          'tankpause': _tankpause, 'splitBreak': _splitBreak, 'weeklyRestDue': _weeklyRestDue,
+          'autoFerry': _autoFerry,
+          'viaDenmarkFerries': _viaDenmarkFerries,
+          'manualFerryId': _manualFerry?.id,
+          'manualFerryDeparture': _manualFerryDeparture?.toIso8601String(),
+          'manualDepartureActive': _manualDepartureActive,
+          'manualDepartureDate': _manualDepartureDate.toIso8601String(),
+          'manualDepartureHour': _manualDepartureHour,
+          'manualDepartureMinute': _manualDepartureMinute,
+        },
+        savedAt: DateTime.now(),
+      );
+
+  /// Endete die letzte 2.5D-Tour nicht normal (Safari hat die Seite
+  /// beendet)? Dann die gesicherte Tour zum Wiederherstellen anbieten.
+  Future<void> _checkInterruptedTour() async {
+    final report = await CinematicSession.takeInterrupted();
+    if (report == null) return;
+    final draft = await CinematicSession.loadDraft();
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showMaterialBanner(MaterialBanner(
+      content: const Text('DriveTime wurde während der Tour-Animation unerwartet neu geladen. '
+          'Letzte Tour wiederherstellen?'),
+      leading: const Icon(Icons.restore),
+      actions: [
+        TextButton(
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: jsonEncode(report)));
+            messenger.showSnackBar(const SnackBar(content: Text('Technische Details kopiert.')));
+          },
+          child: const Text('Technische Details kopieren'),
+        ),
+        TextButton(
+          onPressed: messenger.hideCurrentMaterialBanner,
+          child: const Text('Verwerfen'),
+        ),
+        if (draft != null && draft.usable)
+          FilledButton(
+            onPressed: () {
+              messenger.hideCurrentMaterialBanner();
+              _restoreDraft(draft);
+            },
+            child: const Text('Wiederherstellen'),
+          ),
+      ],
+    ));
+  }
+
+  /// Formular aus der gesicherten Tour füllen. Kein neuer Aufruf bei
+  /// Google: die Koordinaten kommen mit; berechnet wird erst auf Knopfdruck.
+  void _restoreDraft(TourDraft d) {
+    final s = d.settings;
+    T v<T>(String k, T fallback) => s[k] is T ? s[k] as T : fallback;
+    setState(() {
+      _startCtl.text = d.start;
+      _destCtl.text = d.dest;
+      _startLat = d.startLat;
+      _startLng = d.startLng;
+      _destLat = d.destLat;
+      _destLng = d.destLng;
+      _resolvedStart = d.startLat != null ? d.start : null;
+      _resolvedDestination = d.destLat != null ? d.dest : null;
+      _stops
+        ..clear()
+        ..addAll(d.stops);
+      _stopCoords
+        ..clear()
+        ..addAll([for (final c in d.stopCoords) c == null ? null : LatLng(c[0], c[1])]);
+      _avgKmh = (s['avgKmh'] as num?)?.toDouble() ?? _avgKmh;
+      _speedProfile = SpeedProfile.values.firstWhere((p) => p.name == s['speedProfile'], orElse: () => _speedProfile);
+      _heavyLoad = v('heavyLoad', _heavyLoad);
+      _remainingDrivingMin = v('remainingDrivingMin', _remainingDrivingMin);
+      _continuousDrivenMin = v('continuousDrivenMin', _continuousDrivenMin);
+      _remainingDutyMin = v('remainingDutyMin', _remainingDutyMin);
+      _ten1 = v('ten1', _ten1);
+      _ten2 = v('ten2', _ten2);
+      _nine1 = v('nine1', _nine1);
+      _nine2 = v('nine2', _nine2);
+      _nine3 = v('nine3', _nine3);
+      _tankpause = v('tankpause', _tankpause);
+      _splitBreak = v('splitBreak', _splitBreak);
+      _weeklyRestDue = v('weeklyRestDue', _weeklyRestDue);
+      _autoFerry = v('autoFerry', _autoFerry);
+      _viaDenmarkFerries = v('viaDenmarkFerries', _viaDenmarkFerries);
+      final ferryId = s['manualFerryId'];
+      _manualFerry = ferryId == null ? null : _routes.where((r) => r.id == ferryId).firstOrNull;
+      _manualFerryDeparture = DateTime.tryParse(s['manualFerryDeparture'] as String? ?? '');
+      _manualDepartureActive = v('manualDepartureActive', _manualDepartureActive);
+      _manualDepartureDate = DateTime.tryParse(s['manualDepartureDate'] as String? ?? '') ?? _manualDepartureDate;
+      _manualDepartureHour = v('manualDepartureHour', _manualDepartureHour);
+      _manualDepartureMinute = v('manualDepartureMinute', _manualDepartureMinute);
+      _etaResult = null;
+      _ferryLegPlan = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Tour wiederhergestellt. „Route berechnen“ berechnet sie neu.')));
   }
 
   void _showInputFailure() {
@@ -1452,6 +1577,8 @@ class _HomeScreenState extends State<HomeScreen> {
       // auch wenn einzelne Aufrufe den Fehler still übergangen haben.
       TourScope.throwIfFailed();
       if (!mounted) return;
+      // Tour sichern, bevor sie animiert wird (übersteht ein Neuladen).
+      CinematicSession.saveDraft(_currentDraft());
       setState(() {
         _etaResult = res;
         _resultOrigin = s;
@@ -2020,6 +2147,18 @@ class _HomeScreenState extends State<HomeScreen> {
     String short(String text) => text.split(',').first.trim();
     final from = short(_startCtl.text);
     final to = short(_destCtl.text);
+    // Markierung „2.5D-Tour läuft“: endet die Seite unterwegs, bietet der
+    // nächste Start die Tour zum Wiederherstellen an. Nur technische Werte.
+    final filmExport = _filmBuild && Uri.base.queryParameters['export'] == '1';
+    if (!filmExport) {
+      await CinematicSession.begin({
+      'km': (path.totalMeters / 1000).round(),
+      'legs': path.legs.length,
+      'ferryLegs': path.legs.where((l) => l.kind != TourLegKind.road).length,
+        'stops': plan.stops.length,
+      });
+    }
+    if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => TourAnimationView(
         path: path,
@@ -2050,6 +2189,7 @@ class _HomeScreenState extends State<HomeScreen> {
         heroCutout: _filmBuild ? Uri.base.queryParameters['heroCutout'] : null,
       ),
     ));
+    if (!filmExport) await CinematicSession.end();
   }
 
   @override
