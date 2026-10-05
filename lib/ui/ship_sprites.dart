@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../animation/ship_model.dart';
 import '../animation/truck_projection.dart';
+import 'sprite_canvas.dart';
 import 'truck_sprites.dart' show renderSpriteBytes;
 
 /// EXPERIMENT – Bild der neutralen Fähre v1, deterministisch erzeugt wie der
@@ -24,7 +25,7 @@ const _litWindow = Color(0xFFFFE08A);
 /// Nachts: Farben gedämpft und leicht bläulich (nie schwarz).
 Color _night(Color c, double n) => Color.lerp(c, Color.lerp(c, const Color(0xFF3A4A66), 0.35)!, n)!;
 
-Future<Uint8List> _png(Size size, void Function(Canvas c) paint) => renderSpriteBytes(size, paint);
+Future<Uint8List> _png(Size size, void Function(SpriteCanvas c) paint) => renderSpriteBytes(size, paint);
 
 /// Bildpunkte je Schiffsmeter im Sprite.
 const double shipSpritePx = 2.4;
@@ -44,7 +45,7 @@ Future<Uint8List> ferryShipPng({required double yawDeg, required double pitchDeg
 
   return _png(Size(half * 2, half * 2), (c) {
     // Kielwasser: schmaler, weicher heller Streifen hinter dem Heck (keine Wellen).
-    final wake = Path()
+    final wake = SpritePath()
       ..moveTo(at(FerryShipModel.sternF, -11, 0).dx, at(FerryShipModel.sternF, -11, 0).dy)
       ..lineTo(at(FerryShipModel.sternF - shipWakeLength, -20, 0).dx, at(FerryShipModel.sternF - shipWakeLength, -20, 0).dy)
       ..lineTo(at(FerryShipModel.sternF - shipWakeLength, 20, 0).dx, at(FerryShipModel.sternF - shipWakeLength, 20, 0).dy)
@@ -53,26 +54,26 @@ Future<Uint8List> ferryShipPng({required double yawDeg, required double pitchDeg
     c.drawPath(
         wake,
         Paint()
-          ..shader = ui.Gradient.linear(
+          ..shader = spriteLinearGradient(
             at(FerryShipModel.sternF, 0, 0),
             at(FerryShipModel.sternF - shipWakeLength, 0, 0),
             [Colors.white.withValues(alpha: 0.45 * (1 - 0.5 * n)), Colors.white.withValues(alpha: 0)],
           )
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+          ..maskFilter = spriteBlur(3));
 
     // Schatten im Wasser: Grundriss leicht versetzt.
     final outline = FerryShipModel.hullOutline();
-    final foot = Path()..addPolygon([for (final (f, r) in outline) at(f, r, 0)], true);
+    final foot = SpritePath()..addPolygon([for (final (f, r) in outline) at(f, r, 0)], true);
     c.drawPath(
         foot.shift(const Offset(2, 3)),
         Paint()
           ..color = const Color(0x44000000)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+          ..maskFilter = spriteBlur(4));
 
     // Rumpf.
     for (final h in visibleHullFaces(proj)) {
       final base = _night(h.upper ? _hullWhite : _hullDark, n);
-      final poly = Path()..addPolygon([for (final p in h.corners) px(p)], true);
+      final poly = SpritePath()..addPolygon([for (final p in h.corners) px(p)], true);
       c.drawPath(poly, Paint()..color = Color.lerp(Colors.black, base, h.shade * (1 - 0.1 * n))!);
       if (h.stern && h.upper) {
         // Heckklappe (Fahrzeugdeck): dunkles Rechteck im Heckspiegel.
@@ -83,10 +84,10 @@ Future<Uint8List> ferryShipPng({required double yawDeg, required double pitchDeg
     }
     // Deck.
     c.drawPath(
-        Path()..addPolygon([for (final (f, r) in outline) at(f, r, FerryShipModel.freeboard)], true),
+        SpritePath()..addPolygon([for (final (f, r) in outline) at(f, r, FerryShipModel.freeboard)], true),
         Paint()..color = _night(_deck, n));
     c.drawPath(
-        Path()..addPolygon([for (final (f, r) in outline) at(f, r, FerryShipModel.freeboard)], true),
+        SpritePath()..addPolygon([for (final (f, r) in outline) at(f, r, FerryShipModel.freeboard)], true),
         Paint()
           ..color = const Color(0x33000000)
           ..style = PaintingStyle.stroke
@@ -99,7 +100,7 @@ Future<Uint8List> ferryShipPng({required double yawDeg, required double pitchDeg
         'mast' => const Color(0xFF90A4AE),
         _ => _house,
       };
-      final poly = Path()..addPolygon([for (final p in f.corners) px(p)], true);
+      final poly = SpritePath()..addPolygon([for (final p in f.corners) px(p)], true);
       c.drawPath(poly, Paint()..color = Color.lerp(Colors.black, _night(base, n), f.shade * (1 - 0.1 * n))!);
       c.drawPath(
           poly,
@@ -135,7 +136,7 @@ Future<Uint8List> ferryShipPng({required double yawDeg, required double pitchDeg
         final o = at(w.f, w.r, w.z);
         c.drawCircle(o, radius * 2.4, Paint()
           ..color = color.withValues(alpha: 0.35 * n)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5));
+          ..maskFilter = spriteBlur(2.5));
         c.drawCircle(o, radius, Paint()..color = color.withValues(alpha: n));
       }
 
@@ -151,7 +152,7 @@ Future<Uint8List> ferryShipPng({required double yawDeg, required double pitchDeg
 
 /// Zeichnet im Flächen-Koordinatensystem (u nach rechts, v nach unten, je
 /// 0..1) – perspektivisch richtig, Ecken in Leserichtung von außen.
-void _inQuad(Canvas c, List<ScreenPoint> corners, Offset Function(ScreenPoint) px, void Function(Canvas c) draw) {
+void _inQuad(SpriteCanvas c, List<ScreenPoint> corners, Offset Function(ScreenPoint) px, void Function(SpriteCanvas c) draw) {
   final o = px(corners[0]);
   final u = px(corners[1]) - o;
   final v = px(corners[3]) - o;
@@ -169,7 +170,7 @@ void _inQuad(Canvas c, List<ScreenPoint> corners, Offset Function(ScreenPoint) p
 /// Ob Fenster Nummer [i] nachts beleuchtet ist – fest, nicht zufällig.
 bool shipWindowLit(int i, int seed) => ((i * 7 + seed * 13) % 11) < 4;
 
-void _windows(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double n,
+void _windows(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double n,
     {required int rows, required int cols, required int seed}) {
   _inQuad(c, f.corners, px, (c) {
     final dark = Paint()..color = _glass;

@@ -6,6 +6,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../animation/truck_projection.dart';
+import 'sprite_canvas.dart';
+import 'sprite_canvas_browser.dart';
 
 /// Wie das Fahrzeug in der geneigten (2.5D) Karte gezeigt wird.
 enum TruckView {
@@ -39,14 +41,32 @@ const _trailer = Color(0xFFF5F7FA);
 const _trailerEdge = Color(0xFF90A4AE);
 const _shadow = Color(0x55000000);
 
-Future<Uint8List> _png(Size size, void Function(Canvas c) paint) => renderSpriteBytes(size, paint);
+Future<Uint8List> _png(Size size, void Function(SpriteCanvas c) paint) => renderSpriteBytes(size, paint);
+
+/// Statische Symbole (einmal je Tour): immer über den Flutter-Canvas.
+Future<Uint8List> _pngFlutter(Size size, void Function(Canvas c) paint) =>
+    _renderFlutter(size, (c) => paint((c as FlutterSpriteCanvas).c), Zone.current[_rawSpriteKey] as _RawSprite?);
 
 /// Zeichnet ein Sprite und liefert es als PNG – oder, innerhalb von
 /// [asSpriteBitmap], als rohe RGBA-Pixel (gleiche Pixel, ohne PNG-Umweg).
-Future<Uint8List> renderSpriteBytes(Size size, void Function(Canvas c) paint) async {
+/// Mit `browser: true` zeichnet im Web der Browser-Canvas statt Flutter
+/// (kein `Picture.toImage()`, das je Bild eine WebGL-Textur zurücklässt).
+Future<Uint8List> renderSpriteBytes(Size size, void Function(SpriteCanvas c) paint) async {
   final raw = Zone.current[_rawSpriteKey] as _RawSprite?;
+  if (raw != null && raw.browser) {
+    final b = renderSpriteBrowser(size, paint);
+    if (b != null) {
+      raw.width = b.width;
+      raw.height = b.height;
+      return b.rgba;
+    }
+  }
+  return _renderFlutter(size, paint, raw);
+}
+
+Future<Uint8List> _renderFlutter(Size size, void Function(SpriteCanvas c) paint, _RawSprite? raw) async {
   final recorder = ui.PictureRecorder();
-  paint(Canvas(recorder));
+  paint(FlutterSpriteCanvas(Canvas(recorder)));
   final image =
       await recorder.endRecording().toImage(size.width.toInt(), size.height.toInt());
   final bytes = await image.toByteData(
@@ -68,6 +88,8 @@ class SpriteBitmap {
 }
 
 class _RawSprite {
+  _RawSprite({this.browser = false});
+  final bool browser;
   int width = 0;
   int height = 0;
 }
@@ -78,15 +100,17 @@ const _rawSpriteKey = #drivetimeRawSprite;
 /// liefert dieselben Pixel roh statt als PNG. Spart das PNG-Kodieren hier
 /// und das Dekodieren im Kartenplugin – gemessen über die Hälfte der
 /// Rechenzeit während der Tour.
-Future<SpriteBitmap> asSpriteBitmap(Future<Uint8List> Function() draw) async {
-  final raw = _RawSprite();
+///
+/// [browser]: im Web über den Browser-Canvas zeichnen (Live-Vorschau).
+Future<SpriteBitmap> asSpriteBitmap(Future<Uint8List> Function() draw, {bool browser = false}) async {
+  final raw = _RawSprite(browser: browser);
   final bytes = await runZoned(draw, zoneValues: {_rawSpriteKey: raw});
   return SpriteBitmap(raw.width, raw.height, bytes);
 }
 
 /// Sattelzug von oben, Fahrtrichtung nach oben (Norden des Bildes).
 /// 72 × 200 Pixel; in der Karte etwa 20 × 56 Punkte groß.
-Future<Uint8List> truckTopPng() => _png(const Size(72, 200), (c) {
+Future<Uint8List> truckTopPng() => _pngFlutter(const Size(72, 200), (c) {
       // weicher Schatten
       c.drawRRect(
         RRect.fromRectAndRadius(const Rect.fromLTWH(10, 14, 54, 180), const Radius.circular(10)),
@@ -126,7 +150,7 @@ Future<Uint8List> truckTopPng() => _png(const Size(72, 200), (c) {
 
 /// Sattelzug schräg von hinten: Heck des Aufliegers mit Rückleuchten,
 /// darüber die Kabine. 120 × 112 Pixel.
-Future<Uint8List> truckRearPng() => _png(const Size(120, 112), (c) {
+Future<Uint8List> truckRearPng() => _pngFlutter(const Size(120, 112), (c) {
       c.drawOval(
         const Rect.fromLTWH(10, 92, 100, 16),
         Paint()
@@ -173,7 +197,7 @@ Future<Uint8List> truckRearPng() => _png(const Size(120, 112), (c) {
     });
 
 /// Seitlich wie in 2D: Lieferwagen-Symbol auf weißem Kreis.
-Future<Uint8List> truckSidePng({required bool mirrored}) => _png(const Size(96, 96), (canvas) {
+Future<Uint8List> truckSidePng({required bool mirrored}) => _pngFlutter(const Size(96, 96), (canvas) {
       const size = 96.0;
       const c = Offset(size / 2, size / 2);
       canvas.drawCircle(
@@ -318,7 +342,7 @@ Future<Uint8List> truckThreeQuarterPng(
 
   return _png(size, (c) {
     // Schatten auf der Straße: Grundriss bei z = 0, weich.
-    final shadow = Path();
+    final shadow = SpritePath();
     for (final b in boxes.where((b) => b.name != 'reefer-unit')) {
       final pts = [
         proj.world(b.toF, -b.halfWidth, 0),
@@ -332,7 +356,7 @@ Future<Uint8List> truckThreeQuarterPng(
         shadow.shift(const Offset(1.5, 2)),
         Paint()
           ..color = const Color(0x55000000)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+          ..maskFilter = spriteBlur(3));
 
     for (final f in faces) {
       final base = switch (f.box.name) {
@@ -342,7 +366,7 @@ Future<Uint8List> truckThreeQuarterPng(
         _ => const Color(0xFF263238), // Fahrwerk
       };
       final color = Color.lerp(Colors.black, base, f.shade)!;
-      final poly = Path()..addPolygon([for (final p in f.corners) px(p)], true);
+      final poly = SpritePath()..addPolygon([for (final p in f.corners) px(p)], true);
       c.drawPath(poly, Paint()..color = color);
       c.drawPath(
           poly,
@@ -363,7 +387,7 @@ Future<Uint8List> truckThreeQuarterPng(
 /// Zeichnet auf eine Seitenfläche im Flächen-Koordinatensystem (u nach
 /// rechts, v nach unten, je 0..1) – dadurch perspektivisch richtig und nie
 /// gespiegelt (Ecken kommen in Leserichtung von außen).
-void _inFace(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, void Function(Canvas c) draw) {
+void _inFace(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px, void Function(SpriteCanvas c) draw) {
   final o = px(f.corners[0]);
   final u = px(f.corners[1]) - o;
   final v = px(f.corners[3]) - o;
@@ -378,7 +402,7 @@ void _inFace(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, void Fu
   c.restore();
 }
 
-void _decorateSide(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, TruckModel model) {
+void _decorateSide(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px, TruckModel model) {
   _inFace(c, f, px, (c) {
     if (model.trailer == TrailerKind.curtain) {
       final strap = Paint()
@@ -414,7 +438,7 @@ void _decorateSide(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, T
     final sy = math.min(600 / tp.height, sx * 3.2);
     c.translate(80, 500 - tp.height * sy / 2);
     c.scale(sx, sy);
-    tp.paint(c, Offset.zero);
+    c.drawText(tp, Offset.zero);
   });
 }
 
@@ -422,7 +446,7 @@ void _decorateSide(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, T
 /// Leserichtung von außen): Schriftzug in der hinteren Hälfte, darunter der
 /// Claim, vorn der zweite Schriftzug – wie auf den Referenzfotos. Die linke
 /// Seite liest von vorn nach hinten (hinten = rechts), die rechte umgekehrt.
-void _liverySide(Canvas c, ProjectedFace f, TruckBranding b) {
+void _liverySide(SpriteCanvas c, ProjectedFace f, TruckBranding b) {
   final rearRight = f.side == FaceSide.left;
   TextPainter text(String s, Color color, FontWeight weight) => TextPainter(
         text: TextSpan(text: s, style: TextStyle(fontSize: 400, fontWeight: weight, color: color, height: 1)),
@@ -435,7 +459,7 @@ void _liverySide(Canvas c, ProjectedFace f, TruckBranding b) {
     c.save();
     c.translate(left, top);
     c.scale(sx, sy);
-    tp.paint(c, Offset.zero);
+    c.drawText(tp, Offset.zero);
     c.restore();
   }
 
@@ -460,7 +484,7 @@ double nightStep(double night) => (night.clamp(0.0, 1.0) * 8).round() / 8;
 Color windshieldColor(double night) =>
     Color.lerp(const Color(0xFF90CAF9), const Color(0xFF1F2B3B), night.clamp(0.0, 1.0))!;
 
-void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px,
+void _windshield(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px,
     {double night = 0, double reflex = 0}) {
   _inFace(c, f, px, (c) {
     const glass = Rect.fromLTWH(0.1, 0.12, 0.8, 0.32);
@@ -476,7 +500,7 @@ void _windshield(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px,
       c.drawRect(
           glass,
           Paint()
-            ..shader = ui.Gradient.linear(const Offset(0.15, 0.12), const Offset(0.75, 0.44), [
+            ..shader = spriteLinearGradient(const Offset(0.15, 0.12), const Offset(0.75, 0.44), [
               Colors.white.withValues(alpha: 0),
               Colors.white.withValues(alpha: 0.22 * reflex),
               Colors.white.withValues(alpha: 0),
@@ -534,7 +558,7 @@ Future<Uint8List> truckArticulatedPng(
 
   return _png(Size(half * 2, half * 2), (c) {
     // Schatten beider Körper auf der Straße.
-    final shadow = Path();
+    final shadow = SpritePath();
     void footprint(TruckProjection pr, List<TruckBox> boxes) {
       for (final b in boxes) {
         shadow.addPolygon([
@@ -555,7 +579,7 @@ Future<Uint8List> truckArticulatedPng(
         shadow.shift(const Offset(1.5, 2)),
         Paint()
           ..color = Color.lerp(const Color(0x55000000), const Color(0x33000000), n)!
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+          ..maskFilter = spriteBlur(3));
 
     final b = model.branding;
     for (final f in faces) {
@@ -568,7 +592,7 @@ Future<Uint8List> truckArticulatedPng(
         _ => const Color(0xFF263238),
       };
       final shade = f.shade * (1 - 0.28 * n); // nachts gedämpft
-      final poly = Path()..addPolygon([for (final p in f.corners) px(p)], true);
+      final poly = SpritePath()..addPolygon([for (final p in f.corners) px(p)], true);
       c.drawPath(poly, Paint()..color = Color.lerp(Colors.black, base, shade)!);
       c.drawPath(
           poly,
@@ -603,11 +627,11 @@ Future<Uint8List> truckArticulatedPng(
 }
 
 /// Seitliche Begrenzungsleuchten (amber) unten am Auflieger.
-void _markerLights(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double v) {
+void _markerLights(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double v) {
   _inFace(c, f, px, (c) {
     final glow = Paint()
       ..color = const Color(0xFFFFB300).withValues(alpha: 0.45 * v)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.012);
+      ..maskFilter = spriteBlur(0.012);
     final lamp = Paint()..color = const Color(0xFFFFC107).withValues(alpha: v);
     for (var i = 0; i < 6; i++) {
       final x = 0.06 + i * 0.176;
@@ -620,7 +644,7 @@ void _markerLights(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, d
 /// Weicher Lichtlauf über die Seiten: ein heller, schräger Streifen bei
 /// Weltposition [s] (0 = Front der Kabine, 1 = Heck des Aufliegers), so dass
 /// er über Kabine und Auflieger durchgehend wandert.
-void _lightSweep(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double s) {
+void _lightSweep(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double s) {
   const front = 4.4, rear = -12.4; // Sattelpunkt-Koordinaten (Kabine bzw. Heck)
   final fBand = front + (rear - front) * s;
   // Kabine und Auflieger haben eigene Koordinaten; der Auflieger beginnt
@@ -635,7 +659,7 @@ void _lightSweep(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, dou
   _inFace(c, f, px, (c) {
     c.clipRect(const Rect.fromLTWH(0, 0, 1, 1));
     final band = Paint()
-      ..shader = ui.Gradient.linear(
+      ..shader = spriteLinearGradient(
         Offset(u - w, 0),
         Offset(u + w, 0),
         [Colors.white.withValues(alpha: 0), Colors.white.withValues(alpha: a), Colors.white.withValues(alpha: 0)],
@@ -647,7 +671,7 @@ void _lightSweep(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, dou
 
 /// Kabine: gelber oberer Rand (Dachbereich) ringsum, Zierstreifen schräg
 /// über die Seiten, gelbe Blende über der Frontscheibe.
-void _cabLivery(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, TruckBranding b, double n) {
+void _cabLivery(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px, TruckBranding b, double n) {
   final roof = Color.lerp(Colors.black, b.roof!, f.shade * (1 - 0.28 * n))!;
   final accent = Color.lerp(Colors.black, b.accent ?? b.roof!, f.shade * (1 - 0.28 * n))!;
   _inFace(c, f, px, (c) {
@@ -663,7 +687,7 @@ void _cabLivery(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, Truc
         )..layout();
         c.translate(220, 15);
         c.scale(560 / tp.width, 80 / tp.height);
-        tp.paint(c, Offset.zero);
+        c.drawText(tp, Offset.zero);
         c.restore();
       }
       return;
@@ -688,7 +712,7 @@ void _cabLivery(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, Truc
 }
 
 /// Kleiner Schriftzug oben an der Hecktür.
-void _rearText(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, TruckBranding b) {
+void _rearText(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px, TruckBranding b) {
   _inFace(c, f, px, (c) {
     c.scale(1 / 1000, 1 / 1000);
     final tp = TextPainter(
@@ -699,16 +723,16 @@ void _rearText(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, Truck
     final sy = math.min(120 / tp.height, sx * 2);
     c.translate(180, 60);
     c.scale(sx, sy);
-    tp.paint(c, Offset.zero);
+    c.drawText(tp, Offset.zero);
   });
 }
 
 /// Rücklichter: zwei dezente rote Leuchten unten am Heck.
-void _taillights(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double n) {
+void _taillights(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double n) {
   _inFace(c, f, px, (c) {
     final glow = Paint()
       ..color = const Color(0xFFFF1744).withValues(alpha: 0.6 * n)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.04);
+      ..maskFilter = spriteBlur(0.04);
     final lamp = Paint()..color = const Color(0xFFFF5252).withValues(alpha: n);
     for (final x in [0.04, 0.82]) {
       c.drawRect(Rect.fromLTWH(x - 0.03, 0.78, 0.2, 0.14), glow);
@@ -718,7 +742,7 @@ void _taillights(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, dou
 }
 
 /// Scheinwerfer an der Front der Zugmaschine.
-void _headlamps(Canvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double n) {
+void _headlamps(SpriteCanvas c, ProjectedFace f, Offset Function(ScreenPoint) px, double n) {
   _inFace(c, f, px, (c) {
     final lamp = Paint()..color = const Color(0xFFFFF8E1).withValues(alpha: n);
     for (final x in [0.06, 0.78]) {

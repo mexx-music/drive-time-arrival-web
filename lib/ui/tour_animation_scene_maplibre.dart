@@ -523,7 +523,9 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   /// Pixel, nur ohne den Umweg; sonst wie bisher als PNG.
   Future<void> _addSprite(String name, Future<Uint8List> Function() draw) async {
     if (kIsWeb) {
-      final bmp = await asSpriteBitmap(draw);
+      // Live-Vorschau: Browser-Canvas statt Flutter-toImage (das je Bild eine
+      // WebGL-Textur zurücklässt). Export (frameDt) bleibt beim Flutter-Weg.
+      final bmp = await asSpriteBitmap(draw, browser: widget.frameDt == null);
       if (addRawMapImage(name, bmp.width, bmp.height, bmp.rgba, sameMapAs: 'truck-top')) return;
     }
     await _map?.addImage(name, await draw());
