@@ -148,6 +148,9 @@ Map<String, num> mapRuntimeStats({required String sameMapAs}) {
     out['canvasW'] = (canvas['width'] as JSNumber).toDartInt;
     out['canvasH'] = (canvas['height'] as JSNumber).toDartInt;
     out['pixelRatio'] = (m.callMethod<JSNumber>('getPixelRatio'.toJS)).toDartDouble;
+    // Hinkt die Karte hinterher? 1 = Szene vollständig geladen/gezeichnet.
+    out['mapLoaded'] = (m.callMethod<JSBoolean>('loaded'.toJS)).toDart ? 1 : 0;
+    out['tilesLoaded'] = (m.callMethod<JSBoolean>('areTilesLoaded'.toJS)).toDart ? 1 : 0;
     final style = m['style'] as JSObject;
     final managers = style['tileManagers'] as JSObject?;
     if (managers != null) {
@@ -162,7 +165,12 @@ Map<String, num> mapRuntimeStats({required String sameMapAs}) {
       }
       for (final k in keys) {
         final mgr = managers[k.toDart] as JSObject;
-        inView += count(mgr['_inViewTiles']);
+        // Sichtbare Kacheln über MapLibres eigene Abfrage (gezeichnete IDs).
+        if (mgr['getRenderableIds'] != null) {
+          inView += mgr.callMethod<JSArray<JSAny?>>('getRenderableIds'.toJS).length;
+        } else if (mgr['getIds'] != null) {
+          inView += mgr.callMethod<JSArray<JSAny?>>('getIds'.toJS).length;
+        }
         cached += count(mgr['_outOfViewCache']);
       }
       out['tilesInView'] = inView;
