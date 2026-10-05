@@ -179,3 +179,59 @@ Map<String, num> mapRuntimeStats({required String sameMapAs}) {
   } catch (_) {}
   return out;
 }
+
+// ------------------------------------------------ Fahrzeug-Overlay
+
+JSObject? get _overlay {
+  final o = globalContext['dtVehicleOverlay'];
+  return o == null ? null : o as JSObject;
+}
+
+/// Fahrzeug-Overlay (web/vehicle_overlay.js) an die Tourkarte hängen.
+bool vehicleOverlayAttach({required String sameMapAs}) {
+  final o = _overlay, m = _mapWith(sameMapAs);
+  if (o == null || m == null) return false;
+  try {
+    return (o.callMethod<JSBoolean>('attach'.toJS, m)).toDart;
+  } catch (_) {
+    return false;
+  }
+}
+
+void vehicleOverlayDetach() {
+  try {
+    _overlay?.callMethod<JSAny?>('detach'.toJS);
+  } catch (_) {}
+}
+
+/// Zustand für das nächste Kartenbild: Lkw (Bildname, Ort, Größe, Drehung,
+/// Deckkraft) und Licht (Ort, Kurs, Größe, Deckkraft); null = nicht zeigen.
+void vehicleOverlaySet({
+  ({String img, double lat, double lng, double size, double rot, double op})? truck,
+  ({String img, double lat, double lng, double heading, double size, double op})? cone,
+}) {
+  final o = _overlay;
+  if (o == null) return;
+  final st = JSObject();
+  if (truck != null) {
+    st['truck'] = JSObject()
+      ..['img'] = truck.img.toJS
+      ..['lat'] = truck.lat.toJS
+      ..['lng'] = truck.lng.toJS
+      ..['size'] = truck.size.toJS
+      ..['rot'] = truck.rot.toJS
+      ..['op'] = truck.op.toJS;
+  }
+  if (cone != null) {
+    st['cone'] = JSObject()
+      ..['img'] = cone.img.toJS
+      ..['lat'] = cone.lat.toJS
+      ..['lng'] = cone.lng.toJS
+      ..['heading'] = cone.heading.toJS
+      ..['size'] = cone.size.toJS
+      ..['op'] = cone.op.toJS;
+  }
+  try {
+    o.callMethod<JSAny?>('set'.toJS, st);
+  } catch (_) {}
+}

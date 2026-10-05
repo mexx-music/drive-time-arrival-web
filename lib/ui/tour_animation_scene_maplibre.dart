@@ -375,6 +375,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     // der Kamera) – unter dem Fahrzeug.
     await map.addGeoJsonSource('lights', _collection(const []));
     await map.addSymbolLayer('lights', 'headlight-cone', _coneProps(0), belowLayerId: 'truck-flat');
+    _overlayOn = kIsWeb && widget.frameDt == null && vehicleOverlayAttach(sameMapAs: 'truck-top');
     _ready = true;
     widget.onPendingProbe?.call(
       () => _framesPending.length + (_exportFrameExact ? 0 : 1),
@@ -843,6 +844,11 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     });
   }
 
+  /// Fahrzeug-Overlay aktiv (Vorschau im Browser; der Export zeichnet weiter
+  /// über die Karte).
+  bool _overlayOn = false;
+  bool _truckInMap = true;
+
   /// Videoexport: das für dieses Bild berechnete Fahrzeugbild (Lkw/Fähre).
   String? _wantedFrame;
   String? _wantedShip;
@@ -906,15 +912,37 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       final truckOp = (mix?.truck ?? 1.0) * (1 - cutFade);
       final props = _articulatedProps(truckPos);
       final pose = _pose!;
-      map.setGeoJsonSource('truck', _collection([
-        if (truckOp > 0.001)
-          props == null
-              ? _point(truckPos.point, {
-                  'icon': 'truck-top', 'rot': pose.tractorHeading, 'flat': true, 'size': 0.3,
-                  if (mix != null) 'op': truckOp,
-                })
-              : _point(pose.kingpin, {...props, if (mix != null || cutFade > 0) 'op': truckOp}),
-      ]));
+      // Vorschau im Browser: aufrechter Lkw im Fahrzeug-Overlay statt als
+      // Kartensymbol (jede Positionsänderung baute sonst die Kacheln samt
+      // Bildatlas neu – gemessen > 99 % der neu angelegten WebGL-Texturen).
+      final overlayTruck = _overlayOn && props != null;
+      if (!overlayTruck) {
+        map.setGeoJsonSource('truck', _collection([
+          if (truckOp > 0.001)
+            props == null
+                ? _point(truckPos.point, {
+                    'icon': 'truck-top', 'rot': pose.tractorHeading, 'flat': true, 'size': 0.3,
+                    if (mix != null) 'op': truckOp,
+                  })
+                : _point(pose.kingpin, {...props, if (mix != null || cutFade > 0) 'op': truckOp}),
+        ]));
+        _truckInMap = true;
+      } else if (_truckInMap) {
+        map.setGeoJsonSource('truck', _collection(const []));
+        _truckInMap = false;
+      }
+      ({String img, double lat, double lng, double size, double rot, double op})? overlayTruckState;
+      ({String img, double lat, double lng, double heading, double size, double op})? overlayCone;
+      if (overlayTruck && truckOp > 0.001) {
+        overlayTruckState = (
+          img: props['icon'] as String,
+          lat: pose.kingpin.latitude,
+          lng: pose.kingpin.longitude,
+          size: (props['size'] as num).toDouble(),
+          rot: (props['rot'] as num).toDouble(),
+          op: truckOp,
+        );
+      }
       if (truckOp > 0.001 && props != null) {
         _drawTruck = props['icon'] as String;
         _drawTruckAt = pose.kingpin;
@@ -927,14 +955,30 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
         final light = headlightPlacement(pose, metersPerUnit: unit);
         final scale = math.pow(2, _cameraZoom - (_cam?.followZoom ?? _rig.zoom));
         final coneSize = headlightConeMeters * _pointsPerMeter * scale / headlightConeSize.height;
-        map.setGeoJsonSource('lights', _collection([
-          if (truckOp > 0.001)
-            _point(light.apex, {'rot': light.heading, 'size': coneSize, if (mix != null) 'op': truckOp}),
-        ]));
+        if (_overlayOn) {
+          // Deckkraft wie die Kartenebene: Nachtstufe × Überblendung.
+          if (truckOp > 0.001) {
+            overlayCone = (
+              img: 'headlights',
+              lat: light.apex.latitude,
+              lng: light.apex.longitude,
+              heading: light.heading,
+              size: coneSize.toDouble(),
+              op: _shownCone * (mix != null ? truckOp : 1.0),
+            );
+          }
+        } else {
+          map.setGeoJsonSource('lights', _collection([
+            if (truckOp > 0.001)
+              _point(light.apex, {'rot': light.heading, 'size': coneSize, if (mix != null) 'op': truckOp}),
+          ]));
+        }
       }
+      if (_overlayOn) vehicleOverlaySet(truck: overlayTruckState, cone: overlayCone);
       _updateShip(map, mix);
     } else {
       map.setGeoJsonSource('truck', _collection([_point(pos.point, _truckProps(_localHeading(pos.meters)))]));
+      if (_overlayOn) vehicleOverlaySet();
     }
   }
 
@@ -1278,6 +1322,12 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     // Videoexport: dieses Bild ist übernommen (Kamera, Fahrzeug, Spur).
     final frameNo = widget.exportFrame;
     if (frameNo != null) widget.onExportFrameApplied?.call(frameNo);
+  }
+
+  @override
+  void dispose() {
+    if (_overlayOn) vehicleOverlayDetach();
+    super.dispose();
   }
 
   @override
