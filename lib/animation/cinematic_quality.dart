@@ -22,6 +22,8 @@ class CinematicQuality {
     this.outroPitchStep = 5,
     this.outroSweepSteps = 8,
     this.releaseDriveSpritesAtOutro = false,
+    this.outroPrewarmPerSecond,
+    this.approachDriveSprites,
   });
 
   final String id;
@@ -56,6 +58,16 @@ class CinematicQuality {
   /// braucht (es zeigt den stehenden Lkw in seiner Endpose).
   final bool releaseDriveSpritesAtOutro;
 
+  /// Höchstens so viele Outro-Bilder je Sekunde vorab erzeugen (null: so
+  /// schnell wie möglich, eines je Bild). Dieselben Bilder, nur über den
+  /// Zielanflug verteilt statt als Spitze.
+  final double? outroPrewarmPerSecond;
+
+  /// Ab dem Zielanflug: so viele zuletzt benutzte Fahrbilder halten, die
+  /// vorab geplanten Outro-Bilder zusätzlich (null: wie bisher bis
+  /// [maxDriveSpritesOutro] zusammen).
+  final int? approachDriveSprites;
+
   static const previewPerformance = CinematicQuality._(
     'previewPerformance',
     spritePx: 8,
@@ -71,6 +83,12 @@ class CinematicQuality {
     outroPitchStep: 5,
     outroSweepSteps: 4,
     releaseDriveSpritesAtOutro: true,
+    // Gemessen (Peking→Phuket nachts, iPhone-mini-Ansicht): ab dem
+    // Zielanflug entstanden ~130 Bilder in 3 s (~35/s), JS-Speicher
+    // +130 MB in 2–3 s. Verteilt und mit früher freigegebenen Fahrbildern
+    // bleibt der Bedarf derselbe, nur ohne Spitze.
+    outroPrewarmPerSecond: 8,
+    approachDriveSprites: 16,
   );
 
   /// Bisheriger Live-Stand.

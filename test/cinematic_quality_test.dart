@@ -55,6 +55,15 @@ void main() {
     expect(p.outroYawStep % 4, 0); // Bildnamen in 4°-Einheiten
   });
 
+  test('Zielanflug: nur die Performance-Vorschau verteilt und gibt früher frei', () {
+    for (final q in [CinematicQuality.exportFullHD, CinematicQuality.previewHigh]) {
+      expect((q.outroPrewarmPerSecond, q.approachDriveSprites), (null, null));
+    }
+    const p = CinematicQuality.previewPerformance;
+    expect(p.outroPrewarmPerSecond, 8);
+    expect(p.approachDriveSprites, lessThanOrEqualTo(p.maxDriveSprites));
+  });
+
   group('Rohe Sprites (ohne PNG-Umweg)', () {
     test('Lkw: dieselben Pixel wie das PNG', () async {
       Future<Uint8List> draw() => truckArticulatedPng(const TruckModel(),

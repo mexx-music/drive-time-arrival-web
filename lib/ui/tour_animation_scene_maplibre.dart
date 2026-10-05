@@ -502,20 +502,35 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     _spriteUse
       ..remove(name)
       ..add(name);
+    _trimSprites(keep: name);
+  }
+
+  /// Speicher auf die Höchstzahl begrenzen (älteste zuerst). Profil mit
+  /// [CinematicQuality.approachDriveSprites]: ab dem Zielanflug zählen die
+  /// vorab geplanten Outro-Bilder nicht mit und bleiben.
+  void _trimSprites({String? keep}) {
     final q = widget.quality;
-    final cap = _outroPrewarmed ? q.maxDriveSpritesOutro : q.maxDriveSprites;
-    if (_spriteUse.length <= cap) return;
+    final approach = _outroPrewarmed && q.approachDriveSprites != null;
+    final cap = approach ? q.approachDriveSprites! : (_outroPrewarmed ? q.maxDriveSpritesOutro : q.maxDriveSprites);
+    bool pinned(String n) => approach && _outroPlanned.contains(n);
+    var count = approach ? _spriteUse.where((n) => !pinned(n)).length : _spriteUse.length;
+    if (count <= cap) return;
     for (final old in _spriteUse.toList()) {
-      if (_spriteUse.length <= cap) break;
-      if (old == _shownFrame || old == _shownShip || old == name) continue;
-      _spriteUse.remove(old);
-      _framesReady.remove(old);
-      for (final m in _readyYaws.values) {
-        m.removeWhere((_, v) => v == old);
-      }
-      _readyDrive.remove(old);
-      removeMapImage(old);
+      if (count <= cap) break;
+      if (old == _shownFrame || old == _shownShip || old == keep || pinned(old)) continue;
+      _dropSprite(old);
+      count--;
     }
+  }
+
+  void _dropSprite(String old) {
+    _spriteUse.remove(old);
+    _framesReady.remove(old);
+    for (final m in _readyYaws.values) {
+      m.removeWhere((_, v) => v == old);
+    }
+    _readyDrive.remove(old);
+    removeMapImage(old);
   }
 
   /// Fahrzeugbild der Karte geben. Im Browser als rohe Pixel direkt an
@@ -537,6 +552,11 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   final Set<String> _outroPlanned = {};
   bool _driveReleased = false;
 
+  /// Diagnose: Outro-Bilder, in denen das gewünschte Fahrzeugbild noch nicht
+  /// fertig war; verschiedene solche Bilder; davon nicht vorab geplante.
+  int _outroMissFrames = 0, _outroUnplanned = 0;
+  final Set<String> _outroLate = {};
+
   /// Profil: beim Übergang ins Outro alle Fahrbilder freigeben, die das
   /// Outro nicht braucht – einmal je Durchlauf.
   void _releaseDriveSprites() {
@@ -544,13 +564,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     _driveReleased = true;
     for (final old in _spriteUse.toList()) {
       if (_outroPlanned.contains(old) || old == _shownFrame) continue;
-      _spriteUse.remove(old);
-      _framesReady.remove(old);
-      for (final m in _readyYaws.values) {
-        m.removeWhere((_, v) => v == old);
-      }
-      _readyDrive.remove(old);
-      removeMapImage(old);
+      _dropSprite(old);
     }
   }
 
@@ -759,6 +773,7 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
   /// Vorbereitete Outro-Bilder: höchstens eines je Bild anstoßen – alle auf
   /// einmal blockierten die Seite gemessen mehrere Sekunden.
   final List<(int, int, int, double, OutroLights?)> _prewarmQueue = [];
+  DateTime _lastPrewarm = DateTime.fromMillisecondsSinceEpoch(0);
 
   Map<String, dynamic>? _articulatedProps(TourPosition pos) {
     final pose = _pose = _poseAt(pos.meters);
@@ -779,6 +794,11 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     }
     final name = _requestArticulated(yaw, _knickFrame, pitchFrame, night, lights);
     _wantedFrame = name;
+    if (_inOutro && !_framesReady.contains(name)) {
+      // Diagnose: Outro-Bild nicht rechtzeitig fertig (Ersatzbild gezeigt).
+      _outroMissFrames++;
+      if (_outroLate.add(name) && !_outroPlanned.contains(name)) _outroUnplanned++;
+    }
     if (_framesReady.contains(name)) {
       _shownFrame = name;
       _shownFramePx = spritePx;
@@ -840,6 +860,10 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       'sprites': _spriteUse.length,
       'spritesReady': _framesReady.length,
       'spritesPending': _framesPending.length,
+      if (_outroPrewarmed) 'prewarmLeft': _prewarmQueue.length,
+      if (_outroPrewarmed) 'outroMiss': _outroMissFrames,
+      if (_outroPrewarmed) 'outroLate': _outroLate.length,
+      if (_outroPrewarmed) 'outroUnplanned': _outroUnplanned,
       ...mapRuntimeStats(sameMapAs: 'truck-top'),
     });
   }
@@ -1132,6 +1156,9 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       _prewarmQueue.clear();
       _outroPlanned.clear();
       _driveReleased = false;
+      _outroMissFrames = 0;
+      _outroUnplanned = 0;
+      _outroLate.clear();
     }
     _update();
   }
@@ -1153,7 +1180,12 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     if (!_inOutro) _outroCam = null;
     // Outro-Bilder vorbereiten: schon beim Heranfahren ans Ziel (letzte
     // ≈ 5 % der Strecke), je Bild höchstens eines.
-    if (_prewarmQueue.isNotEmpty && _framesPending.isEmpty) {
+    // Profil: höchstens so viele je Sekunde (über den Zielanflug verteilt).
+    final prewarmRate = widget.quality.outroPrewarmPerSecond;
+    if (_prewarmQueue.isNotEmpty &&
+        _framesPending.isEmpty &&
+        (prewarmRate == null || now.difference(_lastPrewarm).inMicroseconds >= 1e6 / prewarmRate)) {
+      _lastPrewarm = now;
       final (y, k, p, n, l) = _prewarmQueue.removeAt(0);
       _requestArticulated(y, k, p, n, l);
     }
@@ -1164,6 +1196,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       final end = widget.path.totalMeters;
       _prewarmOutro(_makeOutroCamera(outroTl), outroTl,
           _poseAt(end));
+      // Profil: nicht mehr benötigte Fahrbilder schon jetzt freigeben.
+      _trimSprites();
     }
     if (_inOutro) {
       final tl = widget.outroTimeline!;
