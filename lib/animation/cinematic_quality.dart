@@ -18,6 +18,10 @@ class CinematicQuality {
     required this.maxDriveSprites,
     required this.maxDriveSpritesOutro,
     this.maxMapPixelRatio,
+    this.outroYawStep = 4,
+    this.outroPitchStep = 5,
+    this.outroSweepSteps = 8,
+    this.releaseDriveSpritesAtOutro = false,
   });
 
   final String id;
@@ -39,6 +43,19 @@ class CinematicQuality {
   /// Texte (Flutter) bleiben unberührt scharf.
   final double? maxMapPixelRatio;
 
+  /// Bildstufen des Lkw im Outro-Schwenk (Grad; Gier ein Vielfaches von 4).
+  /// Der Rest zur echten Richtung wird wie in der Fahrt über die Bilddrehung
+  /// ausgeglichen. Gröbere Stufen = weniger vorab erzeugte Bilder.
+  final int outroYawStep;
+  final int outroPitchStep;
+
+  /// Stufen des Lichtkegel-Schwenks (Licht-Reveal im Hero).
+  final int outroSweepSteps;
+
+  /// Beim Übergang ins Outro alle Fahrbilder freigeben, die das Outro nicht
+  /// braucht (es zeigt den stehenden Lkw in seiner Endpose).
+  final bool releaseDriveSpritesAtOutro;
+
   static const previewPerformance = CinematicQuality._(
     'previewPerformance',
     spritePx: 8,
@@ -46,6 +63,14 @@ class CinematicQuality {
     maxDriveSprites: 48,
     maxDriveSpritesOutro: 160,
     maxMapPixelRatio: 1.5,
+    // Gemessen (iPhone mini): am Ende des Hero 469 Bilder / 42 MB Lkw-Bilder
+    // (160 Schwenk-/Fahrbilder + 40 große Lichtbilder). Gier 8° fällt dank
+    // Bilddrehung nicht auf; die Neigung bleibt bei 5° – 10° war im Hero
+    // deutlich sichtbar (Lkw wirkte steiler, A/B-Vergleich).
+    outroYawStep: 8,
+    outroPitchStep: 5,
+    outroSweepSteps: 4,
+    releaseDriveSpritesAtOutro: true,
   );
 
   /// Bisheriger Live-Stand.

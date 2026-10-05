@@ -233,6 +233,12 @@ void main() {
       // Wenige Zustände: das Reveal braucht nur wenige große Bilder.
       final keys = {for (var t = 0.0; t <= tl.end; t += 1 / 60) OutroLights.at(tl, t).key};
       expect(keys.length, lessThan(20)); // wenige große Bilder
+      // Performance-Vorschau: Lichtkegel in 4 statt 8 Stufen – weniger Bilder,
+      // gleiche Ein-/Ausschaltpunkte.
+      final coarse = {for (var t = 0.0; t <= tl.end; t += 1 / 60) OutroLights.at(tl, t, sweepSteps: 4).key};
+      expect(coarse.length, lessThan(keys.length));
+      expect(OutroLights.at(tl, tl.lightsOn - 0.1, sweepSteps: 4).tail, 0);
+      expect(OutroLights.at(tl, tl.end, sweepSteps: 4).key, OutroLights.at(tl, tl.end).key);
     });
 
     test('Outro-Truck = derselbe Truck wie während der Fahrt (nur Licht dazu)', () async {

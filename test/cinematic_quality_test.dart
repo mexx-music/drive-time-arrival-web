@@ -46,6 +46,15 @@ void main() {
     });
   });
 
+  test('Outro: nur die Performance-Vorschau gröber, Film und hohe Vorschau wie bisher', () {
+    for (final q in [CinematicQuality.exportFullHD, CinematicQuality.previewHigh]) {
+      expect((q.outroYawStep, q.outroPitchStep, q.outroSweepSteps, q.releaseDriveSpritesAtOutro), (4, 5, 8, false));
+    }
+    const p = CinematicQuality.previewPerformance;
+    expect((p.outroYawStep, p.outroPitchStep, p.outroSweepSteps, p.releaseDriveSpritesAtOutro), (8, 5, 4, true));
+    expect(p.outroYawStep % 4, 0); // Bildnamen in 4°-Einheiten
+  });
+
   group('Rohe Sprites (ohne PNG-Umweg)', () {
     test('Lkw: dieselben Pixel wie das PNG', () async {
       Future<Uint8List> draw() => truckArticulatedPng(const TruckModel(),

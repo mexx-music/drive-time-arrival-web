@@ -172,13 +172,14 @@ class OutroLights {
   final double head;
   final double? sweep;
 
-  factory OutroLights.at(OutroTimeline tl, double t) {
+  /// [sweepSteps]: Stufen des Lichtkegel-Schwenks (Qualitätsprofil).
+  factory OutroLights.at(OutroTimeline tl, double t, {int sweepSteps = 8}) {
     double q4(double v) => (v.clamp(0.0, 1.0) * 4).round() / 4;
     final s = tl.sweep(t);
     return OutroLights(
       tail: q4(tl.tailLights(t)),
       head: q4(tl.headLights(t)),
-      sweep: s == null ? null : (s * 8).round() / 8,
+      sweep: s == null ? null : (s * sweepSteps).round() / sweepSteps,
     );
   }
 

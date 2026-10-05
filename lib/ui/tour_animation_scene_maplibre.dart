@@ -529,6 +529,28 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     await _map?.addImage(name, await draw());
   }
 
+  /// Bilder, die das Outro laut Vorplanung braucht (stehender Lkw in der
+  /// Endpose, Kameraschwenk, Licht).
+  final Set<String> _outroPlanned = {};
+  bool _driveReleased = false;
+
+  /// Profil: beim Übergang ins Outro alle Fahrbilder freigeben, die das
+  /// Outro nicht braucht – einmal je Durchlauf.
+  void _releaseDriveSprites() {
+    if (_driveReleased || !widget.quality.releaseDriveSpritesAtOutro || _outroPlanned.isEmpty) return;
+    _driveReleased = true;
+    for (final old in _spriteUse.toList()) {
+      if (_outroPlanned.contains(old) || old == _shownFrame) continue;
+      _spriteUse.remove(old);
+      _framesReady.remove(old);
+      for (final m in _readyYaws.values) {
+        m.removeWhere((_, v) => v == old);
+      }
+      _readyDrive.remove(old);
+      removeMapImage(old);
+    }
+  }
+
   /// Gezeigtes Bild als benutzt vermerken (ohne erneut zu begrenzen).
   void _touchSprite(String? name) {
     if (name == null || !_spriteUse.remove(name)) return;
@@ -663,16 +685,27 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     for (final t in [tl.lightsOn - 0.25, tl.lightsOn, ...[for (var t = 0.0; t <= tl.end; t += 1 / 30) t]]) {
       final st = oc.at(t);
       final (yaw, pitch) = _outroFrame(angleDiff(st.bearing, pose.tractorHeading), st.pitch, t);
-      final lights = t >= tl.lightsOn - 0.2 ? OutroLights.at(tl, t) : null;
+      final lights =
+          t >= tl.lightsOn - 0.2 ? OutroLights.at(tl, t, sweepSteps: widget.quality.outroSweepSteps) : null;
       final key = '$yaw-$pitch-${lights?.key}';
-      if (seen.add(key)) _prewarmQueue.add((yaw, (pose.knick / 3).round(), pitch, night, lights));
+      if (seen.add(key)) {
+        final knick = (pose.knick / 3).round();
+        _prewarmQueue.add((yaw, knick, pitch, night, lights));
+        _outroPlanned.add(_articulatedName(yaw, knick, pitch, night) + (lights == null ? '' : '-o${lights.key}'));
+      }
     }
   }
 
-  /// Bildstufen im Outro: während des Schwenks gröber (8° Gier, 10°
-  /// Neigung) – die Bewegung verdeckt es, und es braucht halb so viele Bilder.
+  /// Bildstufen im Outro nach Qualitätsprofil: in der Performance-Vorschau
+  /// Gier gröber (8° – der Rest zur echten Richtung wird gedreht), sonst und
+  /// im Film wie in der Fahrt (4°); Neigung in 5°-Stufen.
   (int, int) _outroFrame(double yawDeg, double pitchDeg, double t) {
-    return ((yawDeg / 4).round(), ((pitchDeg / 5).round() * 5).clamp(30, 60));
+    // Stufen aus dem Profil; der Gier-Index bleibt in 4°-Einheiten (Bildname).
+    final q = widget.quality;
+    final yawUnits = q.outroYawStep ~/ 4;
+    final yaw = (yawDeg / q.outroYawStep).round() * yawUnits;
+    final pitch = ((pitchDeg / q.outroPitchStep).round() * q.outroPitchStep).clamp(30, 60);
+    return (yaw, pitch);
   }
 
   OutroCamera _makeOutroCamera(OutroTimeline tl) {
@@ -1051,6 +1084,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
       _outroCam = null;
       _outroPrewarmed = false;
       _prewarmQueue.clear();
+      _outroPlanned.clear();
+      _driveReleased = false;
     }
     _update();
   }
@@ -1087,7 +1122,8 @@ class _TourAnimationSceneMapLibreState extends State<TourAnimationSceneMapLibre>
     if (_inOutro) {
       final tl = widget.outroTimeline!;
       final t = widget.outroTime!;
-      _outroLights = OutroLights.at(tl, t);
+      _outroLights = OutroLights.at(tl, t, sweepSteps: widget.quality.outroSweepSteps);
+      _releaseDriveSprites();
       final oc = _outroCam ??= _makeOutroCamera(tl);
       final glow = 0.7 * tl.routeGlow(t);
       if ((glow - _shownGlowRoute).abs() > 0.01 || (glow == 0 && _shownGlowRoute != 0)) {
