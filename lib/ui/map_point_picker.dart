@@ -35,6 +35,8 @@ class MapPointPicker extends StatefulWidget {
     this.stops = const [],
     this.countries,
     this.showTiles = true,
+    this.request = 0,
+    this.onDone,
   });
 
   final LatLng initialCenter;
@@ -50,6 +52,14 @@ class MapPointPicker extends StatefulWidget {
 
   /// Nur für Tests abschaltbar.
   final bool showTiles;
+
+  /// Wiederverwendeter Picker ([MapPickerHost]): Nummer der aktuellen
+  /// Anfrage – ändert sie sich, beginnt die Auswahl neu (Punkt leer, Kamera
+  /// und Tourpunkte der neuen Anfrage), die Karte bleibt dieselbe.
+  final int request;
+
+  /// Ergebnis an den Aufrufer statt über den Navigator (null = abgebrochen).
+  final void Function(PickedMapPoint? result)? onDone;
 
   @override
   State<MapPointPicker> createState() => _MapPointPickerState();
@@ -96,7 +106,33 @@ class _MapPointPickerState extends State<MapPointPicker> {
       }
     }
     if (!mounted) return;
-    Navigator.of(context).pop(PickedMapPoint(p, country: country));
+    _finish(PickedMapPoint(p, country: country));
+  }
+
+  void _finish(PickedMapPoint? result) {
+    final done = widget.onDone;
+    if (done != null) {
+      done(result);
+    } else if (result == null) {
+      Navigator.of(context).maybePop();
+    } else {
+      Navigator.of(context).pop(result);
+    }
+  }
+
+  @override
+  void didUpdateWidget(MapPointPicker old) {
+    super.didUpdateWidget(old);
+    if (widget.request == old.request) return;
+    // Neue Anfrage an denselben Picker: Auswahl zurücksetzen, Karte behalten.
+    _lookup++;
+    _point = null;
+    _country = null;
+    _showPicked();
+    _showContext();
+    _ml?.moveCamera(ml.CameraUpdate.newCameraPosition(
+        ml.CameraPosition(target: _mlLatLng(widget.initialCenter), zoom: widget.initialZoom)));
+    if (!_useMapLibre) _map.move(widget.initialCenter, widget.initialZoom);
   }
 
   void _zoomBy(double d) {
@@ -124,14 +160,22 @@ class _MapPointPickerState extends State<MapPointPicker> {
         ],
       };
 
+  Map<String, dynamic> _contextFeatures() => _features([
+        if (widget.start != null) (widget.start!, 'start'),
+        for (final s in widget.stops) (s, 'stop'),
+        if (widget.dest != null) (widget.dest!, 'dest'),
+      ]);
+
+  void _showContext() {
+    final map = _ml;
+    if (!_useMapLibre || !_mlReady || map == null) return;
+    map.setGeoJsonSource('context', _contextFeatures());
+  }
+
   Future<void> _onStyleLoaded() async {
     final map = _ml;
     if (map == null) return;
-    await map.addGeoJsonSource('context', _features([
-      if (widget.start != null) (widget.start!, 'start'),
-      for (final s in widget.stops) (s, 'stop'),
-      if (widget.dest != null) (widget.dest!, 'dest'),
-    ]));
+    await map.addGeoJsonSource('context', _contextFeatures());
     await map.addCircleLayer('context', 'context-points', const ml.CircleLayerProperties(
       circleRadius: ['match', ['get', 'kind'], 'stop', 5, 7],
       circleColor: ['match', ['get', 'kind'], 'start', '#2E7D32', 'dest', '#C62828', '#3949AB'],
@@ -262,7 +306,7 @@ class _MapPointPickerState extends State<MapPointPicker> {
         leading: IconButton(
           tooltip: 'Abbrechen',
           icon: const Icon(Icons.close),
-          onPressed: () => Navigator.of(context).maybePop(),
+          onPressed: () => _finish(null),
         ),
       ),
       body: Stack(
@@ -358,6 +402,152 @@ class _MapPointPickerState extends State<MapPointPicker> {
             ),
           ]),
         ),
+      ),
+    );
+  }
+}
+
+/// Wiederverwendeter Kartenpicker (Web, Vektorkarte).
+///
+/// Jedes Öffnen von [MapPointPicker] als eigene Seite legte eine neue
+/// MapLibre-Karte samt WebGL-Kontext und Plattformansicht an. Geschlossene
+/// Karten gibt die Seite nie frei: Flutter behält die View-Fabrik jeder
+/// Plattformansicht (gemessen je Öffnen +8 MB JS-Speicher, dazu je Öffnen
+/// eine neue Kachelaufbereitung mit kurzzeitig +200 MB Prozessspeicher).
+/// Der Host hält deshalb EINEN Picker mit EINER Karte über der App: beim
+/// ersten Öffnen erzeugt, danach nur ausgeblendet und mit neuer Anfrage
+/// wieder gezeigt. Eine unsichtbare Seite im Navigator hält die gewohnte
+/// Zurück-Navigation (Browser/Android) bei.
+class MapPickerHost extends StatefulWidget {
+  const MapPickerHost({super.key});
+
+  static final ValueNotifier<_PickerRequest?> _request = ValueNotifier(null);
+  static int _seq = 0;
+  static bool _mounted = false;
+
+  /// Ist ein Host eingebaut (Web) und die Vektorkarte vorgesehen?
+  static bool get available => _mounted && debugMapPickerUseMapLibre;
+
+  /// Picker zeigen; liefert den Punkt oder null (abgebrochen).
+  static Future<PickedMapPoint?> pick(
+    BuildContext context, {
+    required LatLng initialCenter,
+    double initialZoom = 5,
+    LatLng? start,
+    LatLng? dest,
+    List<LatLng> stops = const [],
+    Future<CountryIndex>? countries,
+  }) async {
+    final nav = Navigator.of(context);
+    final route = PageRouteBuilder<PickedMapPoint>(
+      opaque: false,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+      pageBuilder: (_, __, ___) => const SizedBox.shrink(),
+    );
+    final req = _PickerRequest(
+      id: ++_seq,
+      initialCenter: initialCenter,
+      initialZoom: initialZoom,
+      start: start,
+      dest: dest,
+      stops: stops,
+      countries: countries,
+      finish: (result) {
+        if (route.isCurrent) {
+          nav.pop(result);
+        } else if (route.isActive) {
+          nav.removeRoute(route);
+        }
+      },
+    );
+    _request.value = req;
+    try {
+      return await nav.push(route);
+    } finally {
+      if (_request.value == req) _request.value = null;
+    }
+  }
+
+  @override
+  State<MapPickerHost> createState() => _MapPickerHostState();
+}
+
+class _PickerRequest {
+  _PickerRequest({
+    required this.id,
+    required this.initialCenter,
+    required this.initialZoom,
+    required this.start,
+    required this.dest,
+    required this.stops,
+    required this.countries,
+    required this.finish,
+  });
+
+  final int id;
+  final LatLng initialCenter;
+  final double initialZoom;
+  final LatLng? start;
+  final LatLng? dest;
+  final List<LatLng> stops;
+  final Future<CountryIndex>? countries;
+  final void Function(PickedMapPoint? result) finish;
+}
+
+class _MapPickerHostState extends State<MapPickerHost> {
+  _PickerRequest? _last;
+  late final OverlayEntry _entry = OverlayEntry(maintainState: true, builder: (_) => _picker());
+  final _pickerKey = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    MapPickerHost._mounted = true;
+    MapPickerHost._request.addListener(_changed);
+  }
+
+  @override
+  void dispose() {
+    MapPickerHost._request.removeListener(_changed);
+    MapPickerHost._mounted = false;
+    super.dispose();
+  }
+
+  void _changed() {
+    final req = MapPickerHost._request.value;
+    setState(() {
+      if (req != null) _last = req;
+    });
+    if (_last != null) _entry.markNeedsBuild();
+  }
+
+  Widget _picker() {
+    final r = _last!;
+    return MapPointPicker(
+      key: _pickerKey,
+      request: r.id,
+      initialCenter: r.initialCenter,
+      initialZoom: r.initialZoom,
+      start: r.start,
+      dest: r.dest,
+      stops: r.stops,
+      countries: r.countries,
+      onDone: r.finish,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Vor dem ersten Öffnen: keine Karte.
+    if (_last == null) return const SizedBox.shrink();
+    final open = MapPickerHost._request.value != null;
+    return Offstage(
+      offstage: !open,
+      child: TickerMode(
+        enabled: open,
+        // Eigenes Overlay: Tooltips & Co. liegen über dem App-Navigator.
+        child: Overlay(initialEntries: [_entry]),
       ),
     );
   }

@@ -190,6 +190,10 @@ class DriverRouteApp extends StatelessWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
       home: HomeScreen(auth: auth, account: account, tours: tours),
+      // Web: wiederverwendeter Kartenpicker über der App (siehe MapPickerHost).
+      builder: kIsWeb
+          ? (context, child) => Stack(children: [child!, const Positioned.fill(child: MapPickerHost())])
+          : null,
     );
   }
 }
@@ -526,16 +530,20 @@ class _HomeScreenState extends State<HomeScreen> {
     final center = start != null && dest != null
         ? LatLng((start.latitude + dest.latitude) / 2, (start.longitude + dest.longitude) / 2)
         : (dest ?? start ?? const LatLng(48.5, 12.0));
-    final picked = await Navigator.of(context).push<PickedMapPoint>(MaterialPageRoute(
-      builder: (_) => MapPointPicker(
-        initialCenter: center,
-        initialZoom: start != null || dest != null ? 6 : 5,
-        start: start,
-        dest: dest,
-        stops: known,
-        countries: CountryIndex.load(),
-      ),
-    ));
+    final zoom = start != null || dest != null ? 6.0 : 5.0;
+    final picked = MapPickerHost.available
+        ? await MapPickerHost.pick(context,
+            initialCenter: center, initialZoom: zoom, start: start, dest: dest, stops: known, countries: CountryIndex.load())
+        : await Navigator.of(context).push<PickedMapPoint>(MaterialPageRoute(
+            builder: (_) => MapPointPicker(
+              initialCenter: center,
+              initialZoom: zoom,
+              start: start,
+              dest: dest,
+              stops: known,
+              countries: CountryIndex.load(),
+            ),
+          ));
     if (picked == null || !mounted) return;
     setState(() {
       _stops.add(MapWaypoint.label(picked.point, country: picked.country));
