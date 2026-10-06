@@ -424,6 +424,18 @@ class MapPickerHost extends StatefulWidget {
   static final ValueNotifier<_PickerRequest?> _request = ValueNotifier(null);
   static int _seq = 0;
   static bool _mounted = false;
+  static _MapPickerHostState? _state;
+
+  /// Picker-Karte vollständig freigeben (ausgeblendet, nicht offen) – vor
+  /// einer zweiten großen Karte wie der Tour-Animation, damit nie zwei
+  /// WebGL-Karten gleichzeitig Speicher halten. Kehrt erst zurück, wenn die
+  /// Karte entfernt ist (MapLibre `remove()`, Kontext verloren); das nächste
+  /// Öffnen legt sie neu an.
+  static Future<void> release() async {
+    final s = _state;
+    if (s == null || _request.value != null || !s._drop()) return;
+    await WidgetsBinding.instance.endOfFrame;
+  }
 
   /// Ist ein Host eingebaut (Web) und die Vektorkarte vorgesehen?
   static bool get available => _mounted && debugMapPickerUseMapLibre;
@@ -506,13 +518,17 @@ class _PickerRequest {
 
 class _MapPickerHostState extends State<MapPickerHost> {
   _PickerRequest? _last;
-  late final OverlayEntry _entry = OverlayEntry(maintainState: true, builder: (_) => _picker());
-  final _pickerKey = GlobalKey();
+
+  /// Picker samt Karte; nach [MapPickerHost.release] neu (eigenes Overlay).
+  OverlayEntry? _entry;
+  int _generation = 0;
+  GlobalKey _pickerKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
     MapPickerHost._mounted = true;
+    MapPickerHost._state = this;
     MapPickerHost._request.addListener(_changed);
   }
 
@@ -520,15 +536,32 @@ class _MapPickerHostState extends State<MapPickerHost> {
   void dispose() {
     MapPickerHost._request.removeListener(_changed);
     MapPickerHost._mounted = false;
+    if (MapPickerHost._state == this) MapPickerHost._state = null;
     super.dispose();
   }
 
   void _changed() {
     final req = MapPickerHost._request.value;
     setState(() {
-      if (req != null) _last = req;
+      if (req != null) {
+        _last = req;
+        _entry ??= OverlayEntry(maintainState: true, builder: (_) => _picker());
+      }
     });
-    if (_last != null) _entry.markNeedsBuild();
+    _entry?.markNeedsBuild();
+  }
+
+  /// Picker (und damit die Karte) aus dem Baum nehmen; true, wenn es einen
+  /// gab.
+  bool _drop() {
+    if (_entry == null) return false;
+    setState(() {
+      _entry = null;
+      _last = null;
+      _generation++;
+      _pickerKey = GlobalKey();
+    });
+    return true;
   }
 
   Widget _picker() {
@@ -548,15 +581,16 @@ class _MapPickerHostState extends State<MapPickerHost> {
 
   @override
   Widget build(BuildContext context) {
-    // Vor dem ersten Öffnen: keine Karte.
-    if (_last == null) return const SizedBox.shrink();
+    // Vor dem ersten Öffnen bzw. nach dem Freigeben: keine Karte.
+    final entry = _entry;
+    if (_last == null || entry == null) return const SizedBox.shrink();
     final open = MapPickerHost._request.value != null;
     return Offstage(
       offstage: !open,
       child: TickerMode(
         enabled: open,
         // Eigenes Overlay: Tooltips & Co. liegen über dem App-Navigator.
-        child: Overlay(initialEntries: [_entry]),
+        child: Overlay(key: ValueKey(_generation), initialEntries: [entry]),
       ),
     );
   }

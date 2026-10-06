@@ -2152,6 +2152,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   'die Tour lässt sich nicht animieren.')));
       return;
     }
+    // Ausgeblendete Picker-Karte freigeben, BEVOR die Tourkarte entsteht:
+    // sonst halten in den ersten Sekunden zwei WebGL-Karten Speicher
+    // (gemessen) – genau in diesem Fenster endete die Seite auf dem iPhone.
+    await MapPickerHost.release();
+    if (!mounted) return;
     String short(String text) => text.split(',').first.trim();
     final from = short(_startCtl.text);
     final to = short(_destCtl.text);
