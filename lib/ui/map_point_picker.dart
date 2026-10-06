@@ -428,6 +428,15 @@ class MapPickerHost extends StatefulWidget {
   /// Ist ein Host eingebaut (Web) und die Vektorkarte vorgesehen?
   static bool get available => _mounted && debugMapPickerUseMapLibre;
 
+  /// App unter dem Host: solange der Picker offen ist, für Bedienungshilfen
+  /// ausgeblendet – sonst liegen ihre Semantik-Elemente im Browser über der
+  /// Karte und fangen Tippen und Ziehen ab.
+  static Widget behind(Widget app) => ValueListenableBuilder<_PickerRequest?>(
+        valueListenable: _request,
+        builder: (_, req, child) => ExcludeSemantics(excluding: req != null, child: child),
+        child: app,
+      );
+
   /// Picker zeigen; liefert den Punkt oder null (abgebrochen).
   static Future<PickedMapPoint?> pick(
     BuildContext context, {

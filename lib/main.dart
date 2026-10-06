@@ -192,7 +192,7 @@ class DriverRouteApp extends StatelessWidget {
       home: HomeScreen(auth: auth, account: account, tours: tours),
       // Web: wiederverwendeter Kartenpicker über der App (siehe MapPickerHost).
       builder: kIsWeb
-          ? (context, child) => Stack(children: [child!, const Positioned.fill(child: MapPickerHost())])
+          ? (context, child) => Stack(children: [MapPickerHost.behind(child!), const Positioned.fill(child: MapPickerHost())])
           : null,
     );
   }
