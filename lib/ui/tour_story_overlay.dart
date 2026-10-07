@@ -184,22 +184,39 @@ class TourStoryHud extends StatelessWidget {
     );
   }
 
+  /// Eine Flagge der Leiste. Deckkraft direkt im Zeichnen (Bild- und
+  /// Rahmenfarbe mit Alpha), runde Ecken im selben Zeichenschritt – bewusst
+  /// KEIN Opacity- oder ClipRRect-Widget je Flagge: Jedes davon wird über
+  /// der Karte zur eigenen Compositing-Ebene mit Offscreen-Fläche (gemessen
+  /// in Chrome ≈ 30–35 MB GPU-Speicher je Flagge, bei 9 Ländern ≈ 370 MB
+  /// über die ganze Tour; zusammen mit der Dauerlast beendete das die Seite
+  /// auf dem iPhone). Gleiche Optik: Rahmen 1,5 + Abstand 1,5, Flagge 13 hoch.
   Widget _stripFlag(BuildContext context, int i, String iso, int current, double emphasis) {
     final passed = i < current;
     final base = passed ? 0.5 : 0.28; // durchfahren dezent, kommend zurückhaltend
-    return Opacity(
+    final opacity = base + (1 - base) * emphasis;
+    const height = 13.0;
+    return Container(
       key: Key('strip-$i-$iso'),
-      opacity: base + (1 - base) * emphasis,
+      padding: const EdgeInsets.all(1.5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(
+          width: 1.5,
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: emphasis * opacity),
+        ),
+      ),
       child: Container(
-        padding: const EdgeInsets.all(1.5),
+        width: height * 1.5,
+        height: height,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(3),
-          border: Border.all(
-            width: 1.5,
-            color: Theme.of(context).colorScheme.primary.withValues(alpha: emphasis),
+          image: DecorationImage(
+            image: AssetImage('assets/flags/${iso.toLowerCase()}.png'),
+            fit: BoxFit.cover,
+            opacity: opacity,
           ),
         ),
-        child: CountryFlag(iso, height: 13),
       ),
     );
   }

@@ -430,8 +430,13 @@ void main() {
     int kmAt(WidgetTester tester) =>
         int.parse(kmOf(tester).replaceAll('🚛 ', '').split(' / ').first.replaceAll('.', ''));
 
-    double stripOpacity(WidgetTester tester, String key) =>
-        tester.widget<Opacity>(find.byKey(Key(key))).opacity;
+    /// Deckkraft einer Flagge der Leiste – steckt im Bild (DecorationImage),
+    /// nicht in einem Opacity-Widget (siehe Regressionstest unten).
+    double stripOpacity(WidgetTester tester, String key) {
+      final inner = tester.widget<Container>(
+          find.descendant(of: find.byKey(Key(key)), matching: find.byType(Container)).last);
+      return (inner.decoration! as BoxDecoration).image!.opacity;
+    }
 
     /// Alle Texte, die gerade sichtbar sind (außer Bedienleiste unten).
     Set<String> texts(WidgetTester tester) => {
